@@ -537,6 +537,12 @@ fun GridHomeContent(
             if (liveTvRowAbove == true) item(key = "live_tv_home_above", span = { GridItemSpan(maxLineSpan) }, contentType = "live_tv_home") {
                 com.nuvio.tv.livetv.home.LiveTvHomeRow(above = true, startPadding = 0.dp, titleStyle = MaterialTheme.typography.headlineMedium)
             }
+            item(key = "youtube_home", span = { GridItemSpan(maxLineSpan) }, contentType = "youtube_home") {
+                com.nuvio.tv.ui.screens.youtube.YouTubeHomeRow(
+                    startPadding = 0.dp,
+                    titleStyle = MaterialTheme.typography.headlineMedium,
+                )
+            }
             if (continueWatchingItems.isNotEmpty()) {
                 item(
                     key = "continue_watching",

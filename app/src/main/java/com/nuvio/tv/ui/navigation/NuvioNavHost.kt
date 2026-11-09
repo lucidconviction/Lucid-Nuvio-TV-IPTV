@@ -209,6 +209,12 @@ private fun PlaybackNavHost(
         }
 
         composable(Screen.Home.route) {
+            androidx.compose.runtime.DisposableEffect(navController) {
+                com.nuvio.tv.ui.screens.youtube.YouTubeOpen.open = { videoId, title ->
+                    navController.navigate(Screen.YouTubeVideo.createRoute(videoId, title))
+                }
+                onDispose { com.nuvio.tv.ui.screens.youtube.YouTubeOpen.open = null }
+            }
             // Live TV fork: back from On Demand, Home starts from its own hero backdrop.
             com.nuvio.tv.livetv.ondemand.OnDemandBackdropGuard.restoreForHome()
             // Live TV fork: keep Home's latest layout settings for the On Demand page.

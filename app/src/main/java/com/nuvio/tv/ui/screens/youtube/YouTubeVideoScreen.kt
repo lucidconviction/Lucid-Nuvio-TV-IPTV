@@ -58,6 +58,7 @@ import javax.inject.Inject
 @HiltViewModel
 class YouTubeVideoViewModel @Inject constructor(
     val youtube: YouTubeMusicService,
+    val history: YouTubeHistoryRepository,
 ) : ViewModel()
 
 /** A full-screen YouTube video: used by Sports replays and the YouTube Continue Watching entry. */
@@ -94,17 +95,27 @@ fun YouTubeVideoScreen(
 
     LaunchedEffect(player) {
         val current = player ?: return@LaunchedEffect
+        var saveTick = 0
         while (true) {
             isPlaying = current.isPlaying
             positionMs = current.currentPosition.coerceAtLeast(0L)
             durationMs = current.duration.coerceAtLeast(0L)
+            if (++saveTick >= 12 && durationMs > 0L) {
+                saveTick = 0
+                viewModel.history.record(videoId, title, positionMs, durationMs)
+            }
             delay(400L)
         }
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(player) {
         onDispose {
-            player?.release()
+            player?.let { current ->
+                val duration = current.duration.coerceAtLeast(0L)
+                val position = current.currentPosition.coerceAtLeast(0L)
+                if (duration > 0L) viewModel.history.record(videoId, title, position, duration)
+                current.release()
+            }
             player = null
         }
     }

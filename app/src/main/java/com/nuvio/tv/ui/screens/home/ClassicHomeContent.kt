@@ -630,6 +630,12 @@ fun ClassicHomeContent(
         if (liveTvRowAbove == true) item(key = "live_tv_home_above", contentType = "live_tv_home") {
             com.nuvio.tv.livetv.home.LiveTvHomeRow(above = true, startPadding = NuvioTheme.spacing.xxxl, titleStyle = MaterialTheme.typography.headlineMedium)
         }
+        item(key = "youtube_home", contentType = "youtube_home") {
+            com.nuvio.tv.ui.screens.youtube.YouTubeHomeRow(
+                startPadding = NuvioTheme.spacing.xxxl,
+                titleStyle = MaterialTheme.typography.headlineMedium,
+            )
+        }
         if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) {
             item(key = "continue_watching", contentType = "continue_watching") {
             androidx.compose.runtime.CompositionLocalProvider(com.nuvio.tv.livetv.home.LocalLiveTvHintHere provides (liveTvRowAbove == true)) {

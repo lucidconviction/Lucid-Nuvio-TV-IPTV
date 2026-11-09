@@ -435,6 +435,14 @@ internal fun ModernHomeRowsList(
                     }
                 }
                 androidx.compose.foundation.layout.Column {
+                if (row.key == MODERN_CONTINUE_WATCHING_ROW_KEY || (!hasContinueWatching && rowIndex == 0)) {
+                    com.nuvio.tv.ui.screens.youtube.YouTubeHomeRow(
+                        startPadding = 52.dp,
+                        titleStyle = androidx.tv.material3.MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        ),
+                    )
+                }
                 if (liveTvHere && (liveTvRowAbove == true || !hasContinueWatching)) {
                     com.nuvio.tv.livetv.home.LiveTvHomeRow(hideUnlessFocused = true, above = liveTvRowAbove == true, startPadding = 52.dp, titleStyle = androidx.tv.material3.MaterialTheme.typography.titleMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold))
                 }
