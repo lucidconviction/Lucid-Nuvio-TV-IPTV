@@ -8,6 +8,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
@@ -210,6 +211,42 @@ internal fun GuideGearButton(modifier: Modifier = Modifier, onOpen: () -> Unit, 
         androidx.tv.material3.Icon(
             androidx.compose.material.icons.Icons.Default.Settings,
             contentDescription = "Guide display",
+            tint = focusedTextColor(focused),
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/** The multi-view grid, beside the guide's ⚙. */
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+internal fun GuideMultiViewButton(modifier: Modifier = Modifier, onOpen: () -> Unit, onDown: () -> Unit) {
+    var focused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val cell = liveCellColors(focused, Color.White.copy(alpha = 0.10f))
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = modifier
+            .size(34.dp)
+            .clip(shape)
+            .background(cell.background)
+            .border(if (focused) 2.dp else 1.dp, if (focused) cell.border else GuideGlassEdge, shape)
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { e ->
+                if (e.key == Key.DirectionDown) {
+                    if (e.type == KeyEventType.KeyDown) onDown()
+                    true
+                } else false
+            }
+            .combinedClickable(
+                interactionSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = onOpen
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.tv.material3.Icon(
+            androidx.compose.material.icons.Icons.Default.GridView,
+            contentDescription = "Multi-view",
             tint = focusedTextColor(focused),
             modifier = Modifier.size(18.dp)
         )

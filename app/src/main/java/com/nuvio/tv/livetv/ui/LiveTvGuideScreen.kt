@@ -1026,6 +1026,7 @@ private fun LiveTvGuideScreenBody(
                     if (!toSearch) runCatching { gridFocus.requestFocus() }
                 },
                 onRecordings = onOpenRecordings,
+                onMultiView = onOpenMultiView,
                 playlistName = if (settings.showPlaylistInInfo) headerChannel?.sourceId?.let { playlistNames[it] } else null,
                 settings = settings,
                 now = now,
@@ -2341,7 +2342,9 @@ private fun GuideHeader(
     onGear: () -> Unit = {},
     onGearDown: () -> Unit = {},
     /** Opens Recordings (the ● beside the ⚙). */
-    onRecordings: () -> Unit = {}
+    onRecordings: () -> Unit = {},
+    /** Opens the six-channel Multi-view grid. */
+    onMultiView: () -> Unit = {}
 ) {
     if (!settings.showProgramDetails && !showPreview) {
         Row(
@@ -2352,6 +2355,8 @@ private fun GuideHeader(
             LiveText("Live TV", size = 16.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
             status?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 13.sp) }
             Spacer(Modifier.width(16.dp))
+            GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
+            Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
             Spacer(Modifier.width(6.dp))
             GuideGearButton(Modifier.focusRequester(gearFocus), onOpen = onGear, onDown = onGearDown)
@@ -2501,8 +2506,10 @@ private fun GuideHeader(
                 LiveText(status, color = NuvioTheme.colors.TextSecondary)
             }
         }
-        // Recordings (●) and the ⚙ for the guide's display settings, in the corner of the panel.
+        // Multi-view, Recordings (●) and the ⚙ for the guide's display settings, in the corner.
         Row {
+            GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
+            Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
             Spacer(Modifier.width(6.dp))
             GuideGearButton(Modifier.focusRequester(gearFocus), onOpen = onGear, onDown = onGearDown)
