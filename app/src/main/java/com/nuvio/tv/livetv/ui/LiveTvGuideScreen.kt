@@ -166,6 +166,7 @@ fun LiveTvGuideScreen(
     onReturnToSports: () -> Unit = {},
     /** A recording played here from Recordings or the Calendar: Back goes back to that screen (its route). */
     onReturnTo: (String) -> Unit = {},
+    onOpenMultiView: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     // Hold the first draw until the saved settings and menu look are read. Before that the guide
@@ -184,6 +185,7 @@ fun LiveTvGuideScreen(
         onOpenNuvioSearch = onOpenNuvioSearch,
         onReturnToSports = onReturnToSports,
         onReturnTo = onReturnTo,
+        onOpenMultiView = onOpenMultiView,
         viewModel = viewModel
     )
 }
@@ -199,6 +201,7 @@ private fun LiveTvGuideScreenBody(
     /** Full screen was opened from the Sports page: Back goes back there. */
     onReturnToSports: () -> Unit = {},
     onReturnTo: (String) -> Unit = {},
+    onOpenMultiView: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     // Full screen happens right here, TiviMate style: the same video view grows from the
@@ -2290,6 +2293,7 @@ private fun LiveTvGuideScreenBody(
                 onBackToGroups = { com.nuvio.tv.livetv.record.RecordingLaunch.clearReturn(); com.nuvio.tv.livetv.sports.SportsLaunch.clearReturn(); fullscreenComing = false; stopIfNoPreview(); fullscreen = false; savedSpot = null; exitFullscreenTick++; focusGroups() },
                 embedded = true,
                 onOpenSettings = onOpenSettings,
+                onOpenMultiView = onOpenMultiView,
                 viewModel = viewModel
             )
         }

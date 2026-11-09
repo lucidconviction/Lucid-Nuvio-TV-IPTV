@@ -163,6 +163,8 @@ fun SportsScreen(
     onOpenLive: () -> Unit,
     /** Back on a game opened from another page (the Calendar): that page's route. */
     onReturnTo: (route: String) -> Unit = {},
+    /** The YouTube replays and highlights page. */
+    onOpenReplays: () -> Unit = {},
     viewModel: SportsViewModel = hiltViewModel()
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -416,7 +418,8 @@ fun SportsScreen(
                 onOpen = { ev -> fromRoute = null; fromLabel = null; openId = ev.id },
                 onQuickWatch = ::quickWatch,
                 onPick = { picker = true },
-                onWatchChannel = { ch -> viewModel.watchChannel(ch); onOpenLive() }
+                onWatchChannel = { ch -> viewModel.watchChannel(ch); onOpenLive() },
+                onOpenReplays = onOpenReplays
             )
         }
         // The picture, on top of the page where its slot is (one view for every page, so it
@@ -523,7 +526,8 @@ private fun SportsHub(
     onOpen: (SportsEvent) -> Unit,
     onQuickWatch: (SportsEvent) -> Unit,
     onPick: () -> Unit,
-    onWatchChannel: (LiveChannel) -> Unit
+    onWatchChannel: (LiveChannel) -> Unit,
+    onOpenReplays: () -> Unit
 ) {
     // Back opens the side menu first, like the guide and On Demand (it used to go straight to
     // Home). With the menu open, Back is left to the app. A game page, Pick Your Teams and the
@@ -714,6 +718,7 @@ private fun SportsHub(
             }
             // Your leagues' tables.
             item(key = CHIP_TABLES) { FilterIcon("🏆", "Tables", effectiveChip == CHIP_TABLES, upTo, withLabel = true) { pickChip(CHIP_TABLES) } }
+            item(key = "replays") { FilterIcon("▶", "Replays", false, upTo, withLabel = true) { onOpenReplays() } }
             // Each league's own channel (NFL Network, NBA TV…).
             item(key = CHIP_NETWORKS) { FilterIcon("📡", "League Networks", effectiveChip == CHIP_NETWORKS, upTo, withLabel = true) { pickChip(CHIP_NETWORKS) } }
             // Sports you follow: My Teams for that sport only.

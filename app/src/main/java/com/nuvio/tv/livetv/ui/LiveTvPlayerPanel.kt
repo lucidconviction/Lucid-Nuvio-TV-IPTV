@@ -72,7 +72,7 @@ internal enum class PanelMode { LIVE, CATCHUP, SHIFT }
  * the timeline, back 30, play/pause, forward 30 and the gear; the rest are kept for the keys
  * that still name them, and live in the gear panel.
  */
-internal enum class PanelControl { TIMELINE, BACK, PLAY, FORWARD, LIVE, CC, AUDIO, SIZE, SLEEP, PIN, BELL, BACKUPS, MORE }
+internal enum class PanelControl { TIMELINE, BACK, PLAY, FORWARD, LIVE, CC, AUDIO, SIZE, SLEEP, PIN, BELL, BACKUPS, MULTIVIEW, MORE }
 
 /** Timeline: everything in wall-clock milliseconds. */
 internal data class PanelTimeline(
@@ -132,6 +132,8 @@ internal fun panelControls(mode: PanelMode, paused: Boolean, canSkip: Boolean, b
     if (bell) add(PanelControl.BELL)
     // Other copies of this channel (same name, any quality or playlist), right before the gear.
     if (backups) add(PanelControl.BACKUPS)
+    // Up to six channels at once, right before the gear.
+    add(PanelControl.MULTIVIEW)
     add(PanelControl.MORE)
 }
 
@@ -369,6 +371,10 @@ internal fun LiveTvPlayerPanel(
                                     Box(Modifier.onGloballyPositioned { onBackupsBounds(it.boundsInWindow()) }) {
                                         RoundButton(Icons.Default.FilterNone, focused = focused == PanelControl.BACKUPS && !inRow, big = false)
                                     }
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                if (PanelControl.MULTIVIEW in controls) {
+                                    RoundButton(Icons.Default.GridView, focused = focused == PanelControl.MULTIVIEW && !inRow, big = false)
                                     Spacer(Modifier.width(8.dp))
                                 }
                                 RoundButton(Icons.Default.Settings, focused = focused == PanelControl.MORE && !inRow, big = false)

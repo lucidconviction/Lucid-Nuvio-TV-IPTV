@@ -1380,6 +1380,20 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.Music.route) {
+            com.nuvio.tv.ui.screens.music.MusicScreen(
+                onOpenPlayer = {
+                    navController.navigate(Screen.MusicPlayer.route) { launchSingleTop = true }
+                },
+            )
+        }
+
+        composable(Screen.MusicPlayer.route) {
+            com.nuvio.tv.ui.screens.music.MusicPlayerScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
         composable(Screen.Library.route) {
             LibraryScreen(
                 showBuiltInHeader = !hideBuiltInHeaders,
@@ -1437,7 +1451,16 @@ private fun PlaybackNavHost(
                     if (!navController.popBackStack(route, inclusive = false)) {
                         navController.navigate(route) { launchSingleTop = true }
                     }
-                }
+                },
+                onOpenMultiView = {
+                    navController.navigate(Screen.MultiView.route) { launchSingleTop = true }
+                },
+            )
+        }
+
+        composable(Screen.MultiView.route) {
+            com.nuvio.tv.livetv.multiview.LiveTvMultiViewScreen(
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -1538,7 +1561,31 @@ private fun PlaybackNavHost(
                             restoreState = true
                         }
                     }
-                }
+                },
+                onOpenReplays = { navController.navigate(Screen.SportsReplays.route) { launchSingleTop = true } },
+            )
+        }
+
+        composable(Screen.SportsReplays.route) {
+            com.nuvio.tv.ui.screens.sports.SportsReplaysScreen(
+                onBack = { navController.popBackStack() },
+                onPlay = { videoId, title ->
+                    navController.navigate(Screen.YouTubeVideo.createRoute(videoId, title))
+                },
+            )
+        }
+
+        composable(
+            route = Screen.YouTubeVideo.route,
+            arguments = listOf(
+                navArgument("videoId") { type = NavType.StringType },
+                navArgument("title") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { entry ->
+            com.nuvio.tv.ui.screens.youtube.YouTubeVideoScreen(
+                videoId = entry.arguments?.getString("videoId").orEmpty(),
+                title = entry.arguments?.getString("title").orEmpty(),
+                onBack = { navController.popBackStack() },
             )
         }
 

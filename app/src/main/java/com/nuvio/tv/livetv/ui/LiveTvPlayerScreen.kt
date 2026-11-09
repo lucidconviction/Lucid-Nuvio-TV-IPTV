@@ -97,6 +97,8 @@ fun LiveTvPlayerScreen(
     embedded: Boolean = false,
     /** The gear panel's "Settings" link (All Live TV settings). */
     onOpenSettings: () -> Unit = {},
+    /** The quick Multi-view button in the player bar. */
+    onOpenMultiView: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -638,6 +640,12 @@ fun LiveTvPlayerScreen(
                                     com.nuvio.tv.livetv.record.LiveTvNotice.show(if (pinned) "Score pinned to the corner" else "Score unpinned")
                                 }
                                 PanelControl.BACKUPS -> dialog = PlayerDialog.BACKUPS
+                                PanelControl.MULTIVIEW -> {
+                                    current?.let { com.nuvio.tv.livetv.multiview.MultiViewRepository.add(it) }
+                                    // The grid opens its own player; don't leave this one playing behind it.
+                                    if (!playback.userPaused) viewModel.playback.togglePause()
+                                    onOpenMultiView()
+                                }
                                 PanelControl.MORE -> openGear()
                                 PanelControl.TIMELINE, null -> Unit
                             }
