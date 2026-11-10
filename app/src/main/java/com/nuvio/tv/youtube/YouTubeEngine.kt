@@ -35,6 +35,7 @@ class YouTubeEngine @Inject constructor(
                 audioUrl = playable.audioUrl,
                 title = playable.title,
                 thumbnail = playable.poster,
+                headers = playable.headers,
             )
         }
 }

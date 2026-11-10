@@ -488,6 +488,9 @@ fun PlayerScreen(
     // Handle lifecycle events
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            if (com.nuvio.tv.ui.util.PipState.active &&
+                (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP)
+            ) return@LifecycleEventObserver
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
                     viewModel.pauseForLifecycle()

@@ -143,7 +143,7 @@ fun MusicScreen(
         modifier = modifier
             .fillMaxSize()
             .background(NuvioTheme.colors.Background)
-            .padding(horizontal = 48.dp, vertical = 28.dp),
+            .padding(start = 48.dp, end = 48.dp, top = 18.dp, bottom = 28.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f)) {

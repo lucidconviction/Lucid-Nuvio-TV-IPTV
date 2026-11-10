@@ -252,14 +252,21 @@ class SportsRepository @Inject constructor(
         return copy
     }
 
+    /** BKFC's own calendar, kept apart from the page's days so its next event is always visible. */
+    val bkfcEvents: StateFlow<List<SportsEvent>> = fixtureData
+        .map { it["guide/bkfc"]?.events.orEmpty().sortedBy { ev -> ev.startMs } }
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
     /**
      * Everything we know, for My Teams: the page's days plus your teams' whole seasons and the
      * non-league seasons. A game in both counts once (the fresher copy, from the page's days).
      */
-    val known: StateFlow<List<SportsEvent>> = combine(events, scheduleData, tsdbData, aheadData, lookedUp) { ev, s, t, a, lu ->
+    private val eventsWithBkfc = combine(events, bkfcEvents) { ev, bk -> ev to bk }
+
+    val known: StateFlow<List<SportsEvent>> = combine(eventsWithBkfc, scheduleData, tsdbData, aheadData, lookedUp) { (ev, bk), s, t, a, lu ->
         val seen = HashSet<String>(ev.size * 2)
         ev.forEach { seen += dedupeKey(it) }
-        val extra = (a.values.flatMap { it.events } + s.values.flatMap { it.events } + t.values.flatMap { it.events } + lu.values.flatMap { it.events })
+        val extra = (a.values.flatMap { it.events } + s.values.flatMap { it.events } + t.values.flatMap { it.events } + lu.values.flatMap { it.events } + bk)
             .filter { seen.add(dedupeKey(it)) }
         ev + extra
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -1272,6 +1279,18 @@ class SportsRepository @Inject constructor(
                 }
             }
         }
+        // BKFC's own calendar: its events don't come from ESPN or the guide.
+        updateBkfc()
+    }
+
+    /** BKFC's upcoming events from its own API, kept on disk like the other schedules. */
+    private suspend fun updateBkfc() {
+        val league = SportsCatalog.league("guide/bkfc") ?: return
+        val file = File(dir, "fx_bkfc.json")
+        val raw = runCatching { feeds.bkfcEventsRaw() }.onSuccess { runCatching { file.writeText(it) } }.getOrNull()
+            ?: runCatching { file.readText() }.getOrNull() ?: return
+        val events = runCatching { feeds.parseBkfc(raw, league) }.getOrDefault(emptyList())
+        fixtureData.update { it + (league.id to LeagueData(events, System.currentTimeMillis(), null)) }
     }
 
     /** The saved scores of [ids] (leagues read from their files; too old ones are left out). */
@@ -1321,6 +1340,11 @@ class SportsRepository @Inject constructor(
         runCatching {
             val file = File(dir, "fx_wrestling.json")
             if (file.exists()) SportsFeeds.parseWrestling(file.readText()).forEach { (id, list) -> fx[id] = LeagueData(list, 0L, null) }
+        }
+        runCatching {
+            val file = File(dir, "fx_bkfc.json")
+            val league = SportsCatalog.league("guide/bkfc")
+            if (file.exists() && league != null) fx[league.id] = LeagueData(feeds.parseBkfc(file.readText(), league), 0L, null)
         }
         // Added to the page's own leagues, read first (see start).
         leagueData.update { it + m }

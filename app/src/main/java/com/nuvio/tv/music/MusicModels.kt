@@ -135,4 +135,6 @@ data class MusicStream(
     val audioUrl: String? = null,
     val title: String,
     val thumbnail: String? = null,
+    /** Headers YouTube's stream URLs need (notably the client User-Agent). */
+    val headers: Map<String, String> = emptyMap(),
 )

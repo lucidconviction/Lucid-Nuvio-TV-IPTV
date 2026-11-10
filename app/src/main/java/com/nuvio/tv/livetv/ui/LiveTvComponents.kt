@@ -689,6 +689,9 @@ internal fun PauseLiveTvInBackground(playback: com.nuvio.tv.livetv.player.LiveTv
         while (c is android.content.ContextWrapper && c !is androidx.lifecycle.LifecycleOwner) c = c.baseContext
         val lifecycle = (c as? androidx.lifecycle.LifecycleOwner)?.lifecycle
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (com.nuvio.tv.ui.util.PipState.active &&
+                (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE || event == androidx.lifecycle.Lifecycle.Event.ON_STOP)
+            ) return@LifecycleEventObserver
             when (event) {
                 // Pause as soon as the app stops being the one in front (not only once it's fully
                 // hidden): some launchers, notably ones showing a live wallpaper, leave the app

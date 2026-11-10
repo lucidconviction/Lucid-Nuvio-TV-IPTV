@@ -451,6 +451,7 @@ open class MainActivity : ComponentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         pipMode.value = isInPictureInPictureMode
+        com.nuvio.tv.ui.util.PipState.active = isInPictureInPictureMode
     }
 
     @OptIn(ExperimentalFoundationApi::class)

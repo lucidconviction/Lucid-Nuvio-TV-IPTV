@@ -168,6 +168,7 @@ fun SportsScreen(
     viewModel: SportsViewModel = hiltViewModel()
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
+    val bkfcEvents by viewModel.bkfcEvents.collectAsStateWithLifecycle()
     val known by viewModel.known.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val follows by viewModel.follows.collectAsStateWithLifecycle()
@@ -387,6 +388,7 @@ fun SportsScreen(
             else -> SportsHub(
                 events = events,
                 known = known,
+                bkfc = bkfcEvents,
                 rowsState = rowsState,
                 rowState = { key, start -> rowStates.getOrPut(key) { androidx.compose.foundation.lazy.LazyListState(start) } },
                 lastRowFocus = rowFocus[0],
@@ -496,6 +498,7 @@ private fun VideoLayer(slot: Rect?, root: Rect?, player: androidx.media3.common.
 private fun SportsHub(
     events: List<SportsEvent>,
     known: List<SportsEvent>,
+    bkfc: List<SportsEvent>,
     rowsState: androidx.compose.foundation.lazy.LazyListState,
     rowState: (String, Int) -> androidx.compose.foundation.lazy.LazyListState,
     lastRowFocus: String?,
@@ -752,6 +755,7 @@ private fun SportsHub(
             onPick = onPick,
             onOpen = onOpen,
             onQuickWatch = onQuickWatch,
+            bkfc = bkfc,
             leaguesLine = if (effectiveChip == CHIP_ALL && leagueView == null) leaguesLine else null,
             leaguesBarReq = leaguesBarReq,
             onChooseLeagues = { leaguesOpen = true }
@@ -934,6 +938,8 @@ private fun GameList(
     onPick: () -> Unit,
     onOpen: (SportsEvent) -> Unit,
     onQuickWatch: (SportsEvent) -> Unit,
+    /** BKFC's own upcoming events (from its API), shown even when they're past the page's week. */
+    bkfc: List<SportsEvent> = emptyList(),
     /** All Events only: the "Choose Leagues" bar above the games (null: no bar). */
     leaguesLine: String? = null,
     leaguesBarReq: FocusRequester? = null,
@@ -957,6 +963,32 @@ private fun GameList(
                 "Add a playlist in Live TV settings to watch games from here. Scores and times still show.",
                 color = SportsLook.Dim, size = 12.sp, modifier = Modifier.padding(vertical = 4.dp)
             )
+        }
+        // BKFC's next events come from its own calendar and can be further out than the page's week.
+        val bkfcFar = if (leaguesLine != null && day == 0) {
+            bkfc.filter { it.startMs > now + 7L * 24 * 60 * 60 * 1000 }
+        } else emptyList()
+        if (bkfcFar.isNotEmpty()) item(key = "bkfc_up") {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SectionHeader("BKFC · UPCOMING", count = bkfcFar.size)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(bkfcFar, key = { it.id }) { ev ->
+                        Box(Modifier.width(460.dp)) {
+                            UpcomingRow(
+                                ev = ev,
+                                channel = ev.broadcasts.firstOrNull(),
+                                follows = follows,
+                                reminded = follows.reminders.any { it.eventId == ev.id },
+                                use24h = use24h,
+                                playing = false,
+                                modifier = Modifier.fillMaxWidth().focusRequester(requesterFor(ev.id)),
+                                onClick = { onOpen(ev) },
+                                onLongClick = {},
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (loading) {
             item(key = "ph_label") { SectionHeader("LIVE NOW", live = true) }

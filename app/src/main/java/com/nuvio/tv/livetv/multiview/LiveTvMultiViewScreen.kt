@@ -6,6 +6,7 @@ import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +49,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +105,32 @@ fun LiveTvMultiViewScreen(
     var paneMenuFor by remember { mutableStateOf<MultiViewStream?>(null) }
     val volumes = remember { mutableStateMapOf<String, Int>() }
     val controlsFocus = remember { FocusRequester() }
+    val rootFocus = remember { FocusRequester() }
+    var showControls by remember { mutableStateOf(true) }
+    var controlsTick by remember { mutableIntStateOf(0) }
+
+    // Windows fill the screen after five seconds without a key; any key brings the bars back.
+    LaunchedEffect(showControls, controlsTick, showPicker, showLayouts, paneMenuFor, swapMode) {
+        if (showControls && !showPicker && !showLayouts && paneMenuFor == null && !swapMode) {
+            delay(5_000)
+            showControls = false
+        }
+    }
+    LaunchedEffect(showControls) {
+        if (showControls) {
+            delay(80)
+            runCatching { controlsFocus.requestFocus() }
+        } else {
+            delay(30)
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(showPicker, showLayouts, paneMenuFor) {
+        if (showPicker || showLayouts || paneMenuFor != null) {
+            showControls = true
+            controlsTick++
+        }
+    }
 
     // After a sheet closes, put the remote back on the control bar (otherwise focus is lost).
     LaunchedEffect(showPicker, showLayouts, paneMenuFor, swapMode) {
@@ -122,7 +152,23 @@ fun LiveTvMultiViewScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.Black).padding(horizontal = 32.dp, vertical = 22.dp)) {
+    Column(
+        Modifier.fillMaxSize().background(Color.Black)
+            .focusRequester(rootFocus)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    controlsTick++
+                    if (!showControls) {
+                        showControls = true
+                        return@onPreviewKeyEvent true
+                    }
+                }
+                false
+            }
+            .padding(horizontal = 32.dp, vertical = 22.dp),
+    ) {
+        if (showControls) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -217,6 +263,7 @@ fun LiveTvMultiViewScreen(
             }
         }
         Spacer(Modifier.height(14.dp))
+        }
         val fullscreenStream = fullscreenId?.let { id -> streams.firstOrNull { it.id == id } }
         if (fullscreenStream != null) {
             Box(Modifier.fillMaxSize()) {
@@ -321,6 +368,7 @@ private fun PaneMenu(
     onClose: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
+    BackHandler { onClose() }
     LaunchedEffect(Unit) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
@@ -398,26 +446,29 @@ private fun MultiViewGrid(
             }
         }
         MultiViewLayout.FOCUS_CORNER -> {
-            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                streams.firstOrNull()?.let { pane(it, Modifier.weight(0.7f).fillMaxHeight()) }
-                Column(Modifier.weight(0.3f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    streams.drop(1).forEach { stream -> pane(stream, Modifier.weight(1f).fillMaxWidth()) }
+            val main = streams.firstOrNull()
+            val rest = streams.drop(1)
+            if (rest.isEmpty()) {
+                main?.let { pane(it, Modifier.fillMaxSize()) }
+            } else {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    main?.let { pane(it, Modifier.weight(0.68f).fillMaxHeight()) }
+                    Column(Modifier.weight(0.32f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rest.forEach { stream -> pane(stream, Modifier.weight(1f).fillMaxWidth()) }
+                    }
                 }
             }
         }
         MultiViewLayout.AUTO, MultiViewLayout.GRID -> {
-            val columns = if (streams.size <= 4) 2 else 3
-            val rows = ceil(streams.size.toFloat() / columns).toInt().coerceAtLeast(1)
+            val slots = slotsFor(effective, streams.size)
+            val rows = (slots.maxOfOrNull { it.row } ?: 0) + 1
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 repeat(rows) { rowIndex ->
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        repeat(columns) { columnIndex ->
-                            val index = rowIndex * columns + columnIndex
-                            val stream = streams.getOrNull(index)
+                        slots.filter { it.row == rowIndex }.sortedBy { it.col }.forEach { slot ->
+                            val stream = streams.getOrNull(slot.index)
                             if (stream != null) {
-                                pane(stream, Modifier.weight(1f).fillMaxHeight())
-                            } else {
-                                Box(Modifier.weight(1f).fillMaxHeight())
+                                pane(stream, Modifier.weight(slot.colSpan.toFloat()).fillMaxHeight())
                             }
                         }
                     }
@@ -427,16 +478,56 @@ private fun MultiViewGrid(
     }
 }
 
+/** One window's place in a grid: which row/column it starts in and how many columns it spans. */
+private data class MultiViewSlot(val index: Int, val row: Int, val col: Int, val colSpan: Int = 1)
+
+/**
+ * AUTO grows with the windows: 1 fills the screen, 2 share it side by side, 3 become one big
+ * top window and two below, then 2×2, then one big + four, then 3×2. No empty cells.
+ */
+private fun slotsFor(layout: MultiViewLayout, count: Int): List<MultiViewSlot> = when (layout) {
+    MultiViewLayout.AUTO -> when (count) {
+        0, 1 -> listOf(MultiViewSlot(0, 0, 0, 1))
+        2 -> listOf(MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1))
+        3 -> listOf(MultiViewSlot(0, 0, 0, 2), MultiViewSlot(1, 1, 0), MultiViewSlot(2, 1, 1))
+        4 -> listOf(MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 1, 0), MultiViewSlot(3, 1, 1))
+        5 -> listOf(
+            MultiViewSlot(0, 0, 0, 2),
+            MultiViewSlot(1, 1, 0), MultiViewSlot(2, 1, 1),
+            MultiViewSlot(3, 2, 0), MultiViewSlot(4, 2, 1),
+        )
+        else -> listOf(
+            MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 0, 2),
+            MultiViewSlot(3, 1, 0), MultiViewSlot(4, 1, 1), MultiViewSlot(5, 1, 2),
+        )
+    }
+    MultiViewLayout.GRID -> when (count) {
+        0, 1 -> listOf(MultiViewSlot(0, 0, 0))
+        2 -> listOf(MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1))
+        3 -> listOf(MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 0, 2))
+        4 -> listOf(MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 1, 0), MultiViewSlot(3, 1, 1))
+        5 -> listOf(
+            MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 0, 2),
+            MultiViewSlot(3, 1, 0, 1), MultiViewSlot(4, 1, 1, 2),
+        )
+        else -> listOf(
+            MultiViewSlot(0, 0, 0), MultiViewSlot(1, 0, 1), MultiViewSlot(2, 0, 2),
+            MultiViewSlot(3, 1, 0), MultiViewSlot(4, 1, 1), MultiViewSlot(5, 1, 2),
+        )
+    }
+    else -> streamsPlaceholder(count)
+}
+
+private fun streamsPlaceholder(count: Int): List<MultiViewSlot> =
+    (0 until count).map { MultiViewSlot(it, 0, it) }
+
 private fun effectiveLayout(layout: MultiViewLayout, count: Int): MultiViewLayout {
     if (layout != MultiViewLayout.AUTO) return layout
-    return when (count) {
-        2 -> MultiViewLayout.SIDE_BY_SIDE
-        else -> MultiViewLayout.GRID
-    }
+    return MultiViewLayout.AUTO
 }
 
 private fun layoutLabel(layout: MultiViewLayout): String = when (layout) {
-    MultiViewLayout.AUTO -> "Layouts"
+    MultiViewLayout.AUTO -> "Auto"
     MultiViewLayout.SIDE_BY_SIDE -> "Side by side"
     MultiViewLayout.GRID -> "Grid"
     MultiViewLayout.ROW -> "Row"

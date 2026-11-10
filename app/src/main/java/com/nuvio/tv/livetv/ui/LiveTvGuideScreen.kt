@@ -1981,6 +1981,12 @@ private fun LiveTvGuideScreenBody(
                 now = now,
                 onDismiss = { menuTarget = null },
                 onWatch = { menuTarget = null; viewModel.preview(target.channel); goFullscreen() },
+                onWatchInMultiView = {
+                    menuTarget = null
+                    if (!playback.userPaused) viewModel.playback.togglePause()
+                    com.nuvio.tv.livetv.multiview.MultiViewRepository.add(target.channel)
+                    onOpenMultiView()
+                },
                 onCatchup = { program ->
                     menuTarget = null
                     if (viewModel.playCatchup(target.channel, program)) goFullscreen()
@@ -3495,6 +3501,7 @@ private fun ChannelContextMenu(
     now: Long,
     onDismiss: () -> Unit,
     onWatch: () -> Unit,
+    onWatchInMultiView: () -> Unit,
     onCatchup: (EpgProgram) -> Unit,
     onToggleFavorite: () -> Unit,
     onMoveFavorite: (Int) -> Unit,
@@ -3551,6 +3558,7 @@ private fun ChannelContextMenu(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             item { MenuHeader("Watch", first = true) }
             item { MenuItem("Watch full screen", Modifier.focusRequester(first), onWatch) }
+            item { MenuItem("Watch in Multi-view", onClick = onWatchInMultiView) }
             // On now, with catch-up or a recording running: start it over (right under Watch).
             if (canRestart && (program == null || (now >= program.startMs && now < program.stopMs))) item {
                 MenuItem(restartLabel, onClick = onRestart)

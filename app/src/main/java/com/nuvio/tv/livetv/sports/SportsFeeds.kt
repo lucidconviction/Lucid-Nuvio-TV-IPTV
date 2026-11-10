@@ -85,6 +85,63 @@ internal class SportsFeeds {
         return get(url)
     }
 
+    // ------------------------------------------------------------------ BKFC
+
+    /** BKFC's own upcoming events (no key). */
+    fun bkfcEventsRaw(): String = get("https://api.bkfc.com/events")
+
+    /** BKFC's events in the same shape as the other scheduled fight cards. */
+    fun parseBkfc(raw: String, league: League): List<SportsEvent> {
+        val arr = runCatching { JSONArray(raw) }.getOrElse { return emptyList() }
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        fun text(e: JSONObject, key: String): String? =
+            e.optString(key).takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+
+        val out = ArrayList<SportsEvent>()
+        for (i in 0 until arr.length()) {
+            val e = arr.optJSONObject(i) ?: continue
+            val id = text(e, "id") ?: continue
+            val name = text(e, "name") ?: continue
+            var start = 0L
+            var hasTime = false
+            for (value in listOfNotNull(text(e, "main_card_start_time"), text(e, "event_date"))) {
+                val parsed = runCatching { fmt.parse(value) }.getOrNull() ?: continue
+                val cal = Calendar.getInstance().apply { time = parsed }
+                val midnight = cal.get(Calendar.HOUR_OF_DAY) == 0 && cal.get(Calendar.MINUTE) == 0
+                if (!midnight) {
+                    start = parsed.time
+                    hasTime = true
+                    break
+                }
+                if (start == 0L) start = parsed.time
+            }
+            if (start == 0L) continue
+            val venue = text(e, "venue_name")
+            val city = text(e, "city")
+            val location = text(e, "location")
+            val platform = text(e, "platform") ?: e.optJSONObject("platform")?.let { text(it, "name") }
+            out += SportsEvent(
+                id = "bkfc:$id",
+                leagueId = league.id,
+                startMs = start,
+                hasTime = hasTime,
+                state = GameState.PRE,
+                title = name,
+                subtitle = (location ?: listOfNotNull(venue, city).joinToString(", ")).ifBlank { null },
+                status = null,
+                away = null,
+                home = null,
+                source = EventSource.FIXTURES,
+                endMs = start + league.minutes * 60_000L,
+                note = listOfNotNull(
+                    platform?.takeIf { it.isNotBlank() }?.let { "Watch on $it" },
+                    if (!hasTime) "Time to be confirmed" else null,
+                ).joinToString(" · ").ifBlank { null },
+            )
+        }
+        return out
+    }
+
     // ------------------------------------------------------------------ sporting-events.org
 
     fun fixturesRaw(slug: String): String = get("https://sporting-events.org/data/$slug.json")

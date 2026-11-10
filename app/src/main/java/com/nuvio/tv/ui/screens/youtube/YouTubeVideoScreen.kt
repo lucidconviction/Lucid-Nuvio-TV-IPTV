@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.youtube
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,12 +24,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -81,6 +85,23 @@ fun YouTubeVideoScreen(
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showControls by remember { mutableStateOf(true) }
+    var controlsTick by remember { mutableIntStateOf(0) }
+    val rootFocus = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { rootFocus.requestFocus() }
+    }
+    LaunchedEffect(showControls, controlsTick) {
+        if (showControls) {
+            delay(5_000)
+            showControls = false
+        } else {
+            delay(30)
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
 
     LaunchedEffect(resolved) {
         val stream = resolved?.getOrNull() ?: return@LaunchedEffect
@@ -111,15 +132,16 @@ fun YouTubeVideoScreen(
         }
     }
 
-    DisposableEffect(player) {
+    val currentPlayer = player
+    DisposableEffect(currentPlayer) {
         onDispose {
-            player?.let { current ->
+            currentPlayer?.let { current ->
                 val duration = current.duration.coerceAtLeast(0L)
                 val position = current.currentPosition.coerceAtLeast(0L)
                 if (duration > 0L) viewModel.history.record(videoId, title, position, duration)
                 current.release()
             }
-            player = null
+            if (player === currentPlayer) player = null
         }
     }
 
@@ -129,8 +151,19 @@ fun YouTubeVideoScreen(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(rootFocus)
+            .focusable()
             .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    controlsTick++
+                    if (!showControls) {
+                        showControls = true
+                        return@onPreviewKeyEvent true
+                    }
+                    return@onPreviewKeyEvent false
+                }
                 if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                controlsTick++
                 when (event.key) {
                     Key.DirectionLeft -> {
                         player?.seekTo((player?.currentPosition ?: 0L) - 10_000L)
@@ -153,7 +186,7 @@ fun YouTubeVideoScreen(
             useSurfaceView = true,
             modifier = Modifier.fillMaxSize(),
         )
-        if (!pip.isInPip) {
+        if (!pip.isInPip && showControls) {
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(

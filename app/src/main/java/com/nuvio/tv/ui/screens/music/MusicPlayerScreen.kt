@@ -4,6 +4,10 @@ package com.nuvio.tv.ui.screens.music
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.focusable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
@@ -96,6 +101,7 @@ import com.nuvio.tv.music.MusicTrack
 import com.nuvio.tv.music.MusicViewModel
 import com.nuvio.tv.ui.components.glassSurface
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.util.LocalPictureInPicture
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -128,6 +134,7 @@ fun MusicPlayerScreen(
     val repeat by viewModel.player.repeat.collectAsStateWithLifecycle()
     val favorites by viewModel.library.favorites.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val pip = LocalPictureInPicture.current
     val scope = rememberCoroutineScope()
     val playbacks = remember { mutableStateListOf<MusicPlayback>() }
     val active = playbacks.lastOrNull()
@@ -139,8 +146,25 @@ fun MusicPlayerScreen(
     var showQueue by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
+    var controlsTick by remember { mutableIntStateOf(0) }
+    val rootFocus = remember { FocusRequester() }
     val lyricsState = rememberLazyListState()
     val scopeRef = rememberCoroutineScope()
+
+    // Controls and overlays disappear after five seconds; any remote key brings them back.
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { rootFocus.requestFocus() }
+    }
+    LaunchedEffect(showControls, controlsTick, showPlaylists, showLyrics, showQueue) {
+        if (showControls && !showPlaylists) {
+            delay(5_000)
+            if (!showPlaylists) showControls = false
+        } else if (!showControls) {
+            delay(30)
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
 
     val resolved by produceState<Pair<String, Result<MusicStream>>?>(null, current?.id) {
         value = null
@@ -250,8 +274,19 @@ fun MusicPlayerScreen(
         Modifier
             .fillMaxSize()
             .background(NuvioTheme.colors.Background)
+            .focusRequester(rootFocus)
+            .focusable()
             .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    controlsTick++
+                    if (!showControls) {
+                        showControls = true
+                        return@onPreviewKeyEvent true
+                    }
+                    return@onPreviewKeyEvent false
+                }
                 if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                controlsTick++
                 when (event.key) {
                     Key.MediaPlayPause -> {
                         active?.player?.let { if (it.isPlaying) it.pause() else it.play() }
@@ -312,12 +347,13 @@ fun MusicPlayerScreen(
                 .fillMaxSize()
                 .padding(horizontal = 56.dp, vertical = 30.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            ) {
+            if (showControls) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
                 Button(onClick = {
                     viewModel.player.close()
                     onBack()
@@ -346,6 +382,10 @@ fun MusicPlayerScreen(
                 Button(onClick = { viewModel.player.setAudioOnly(!audioOnly) }) {
                     Text(if (audioOnly) "Audio" else "Video")
                 }
+                Button(onClick = { pip.enter() }) {
+                    Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture in picture", modifier = Modifier.size(20.dp))
+                }
+                }
             }
             Spacer(Modifier.weight(1f))
             if (error != null) {
@@ -360,9 +400,9 @@ fun MusicPlayerScreen(
                 QueuePanel(queue, viewModel, onClose = { showQueue = false })
                 Spacer(Modifier.height(12.dp))
             }
-            ProgressBar(positionMs, durationMs)
-            Spacer(Modifier.height(12.dp))
             if (showControls) {
+                ProgressBar(positionMs, durationMs)
+                Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(horizontal = 20.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -394,10 +434,10 @@ fun MusicPlayerScreen(
                         if (liked) "Liked" else "Like",
                         active = liked,
                     ) { viewModel.library.toggleFavorite(track) }
-                    MusicPlayerButton(Icons.Default.Lyrics, "Lyrics", active = showLyrics) { showLyrics = !showLyrics }
-                    MusicPlayerButton(Icons.Default.QueueMusic, "Queue", active = showQueue) { showQueue = !showQueue }
+                    MusicPlayerButton(Icons.Default.Lyrics, "Lyrics", active = showLyrics) { showLyrics = !showLyrics; showControls = true; controlsTick++ }
+                    MusicPlayerButton(Icons.Default.QueueMusic, "Queue", active = showQueue) { showQueue = !showQueue; showControls = true; controlsTick++ }
                     MusicPlayerButton(Icons.Default.Download, "Download") { viewModel.downloads.download(track) }
-                    MusicPlayerButton(Icons.Default.LibraryAdd, "Playlist") { showPlaylists = true }
+                    MusicPlayerButton(Icons.Default.LibraryAdd, "Playlist") { showPlaylists = true; showControls = true; controlsTick++ }
                 }
             }
         }
@@ -557,6 +597,12 @@ private fun QueuePanel(queue: List<MusicTrack>, viewModel: MusicViewModel, onClo
 @Composable
 private fun AddToPlaylistPanel(viewModel: MusicViewModel, track: MusicTrack, onDismiss: () -> Unit) {
     val playlists by viewModel.library.playlists.collectAsStateWithLifecycle()
+    val first = remember { FocusRequester() }
+    BackHandler { onDismiss() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { first.requestFocus() }
+    }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Card(
             modifier = Modifier.fillMaxWidth(0.7f).fillMaxHeight(0.7f),
@@ -565,15 +611,18 @@ private fun AddToPlaylistPanel(viewModel: MusicViewModel, track: MusicTrack, onD
                 containerColor = NuvioTheme.colors.BackgroundElevated,
                 focusedContainerColor = NuvioTheme.colors.BackgroundElevated,
             ),
-            onClick = onDismiss,
+            onClick = {},
         ) {
             Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Add to playlist", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
-            Button(onClick = {
-                val playlist = viewModel.library.createPlaylist("My Playlist ${playlists.size + 1}")
-                viewModel.library.addToPlaylist(playlist.id, track)
-                onDismiss()
-            }) { Text("New playlist") }
+            Button(
+                onClick = {
+                    val playlist = viewModel.library.createPlaylist("My Playlist ${playlists.size + 1}")
+                    viewModel.library.addToPlaylist(playlist.id, track)
+                    onDismiss()
+                },
+                modifier = Modifier.focusRequester(first),
+            ) { Text("New playlist") }
             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 itemsIndexed(playlists, key = { _, playlist -> playlist.id }) { _, playlist ->
                     Button(

@@ -57,13 +57,13 @@ enum class YtTab(val title: String, val needsSignIn: Boolean = false, val grid: 
     SUBSCRIPTIONS("Subscriptions", needsSignIn = true, grid = true),
     HISTORY("History", needsSignIn = true, grid = true),
     PLAYLISTS("Playlists", needsSignIn = true, grid = true),
+    CHANNELS("Channels", needsSignIn = true, grid = true),
     LIVE("Live"),
     MUSIC("Music"),
     GAMING("Gaming"),
     NEWS("News"),
     SPORTS("Sports"),
-    SHORTS("Shorts", grid = true),
-    CHANNELS("Channels", needsSignIn = true, grid = true)
+    SHORTS("Shorts", grid = true)
 }
 
 data class YtUiState(
