@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ import com.nuvio.tv.music.MusicPlaybackFactory
 import com.nuvio.tv.music.MusicStream
 import com.nuvio.tv.music.YouTubeMusicService
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.util.LocalPictureInPicture
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import javax.inject.Inject
@@ -70,6 +72,7 @@ fun YouTubeVideoScreen(
     viewModel: YouTubeVideoViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    val pip = LocalPictureInPicture.current
     val resolved by produceState<Result<MusicStream>?>(null, videoId) {
         value = viewModel.youtube.resolve(videoId)
     }
@@ -150,6 +153,7 @@ fun YouTubeVideoScreen(
             useSurfaceView = true,
             modifier = Modifier.fillMaxSize(),
         )
+        if (!pip.isInPip) {
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
@@ -172,6 +176,19 @@ fun YouTubeVideoScreen(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                Button(
+                    onClick = { pip.enter() },
+                    colors = ButtonDefaults.colors(
+                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.85f),
+                        contentColor = NuvioTheme.colors.TextPrimary,
+                    ),
+                ) {
+                    Icon(
+                        Icons.Default.PictureInPictureAlt,
+                        contentDescription = "Picture in picture",
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
                 Button(
                     onClick = { player?.let { if (it.isPlaying) it.pause() else it.play() } },
                     colors = ButtonDefaults.colors(
@@ -217,6 +234,7 @@ fun YouTubeVideoScreen(
                     color = NuvioTheme.colors.TextSecondary,
                 )
             }
+        }
         }
     }
 }

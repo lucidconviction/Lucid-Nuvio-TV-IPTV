@@ -68,10 +68,11 @@ import com.nuvio.tv.livetv.model.matchFrameRate
 import com.nuvio.tv.livetv.player.LiveTrackOption
 import com.nuvio.tv.livetv.player.LiveFrameRateStabilizer
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.util.LocalPictureInPicture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class PlayerDialog { NONE, OPTIONS, AUDIO, SUBTITLES, SCREEN_SIZE, STREAM_INFO, SLEEP, BACKUPS, BACKUP_FLYOUT }
+private enum class PlayerDialog { NONE, OPTIONS, AUDIO, SUBTITLES, SCREEN_SIZE, STREAM_INFO, SLEEP, QUICK_CHANNELS, BACKUPS, BACKUP_FLYOUT }
 
 /** Right twice within this long, in full screen: the backup channels flyout. */
 /** Seconds before the next episode of a recording starts by itself. */
@@ -137,6 +138,7 @@ fun LiveTvPlayerScreen(
     // Which page the ⚙ panel opens on ("" = the main one; "audio", "subs", "sleep", "size", "info").
     var gearStart by remember { mutableStateOf("") }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val pip = LocalPictureInPicture.current
     var numberBuffer by remember { mutableStateOf("") }
     var longPressFired by remember { mutableStateOf(false) }
     var okHoldJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -187,6 +189,9 @@ fun LiveTvPlayerScreen(
     }
     LaunchedEffect(dialog) {
         if (dialog == PlayerDialog.NONE && gearShowedBar) { gearShowedBar = false; closeFull(); bannerVisible = false }
+    }
+    LaunchedEffect(pip.isInPip) {
+        if (pip.isInPip) { closeFull(); bannerVisible = false }
     }
 
     // ---- the Channel Row under the full bar: its lists (switched on and still there), the one
@@ -640,6 +645,8 @@ fun LiveTvPlayerScreen(
                                     com.nuvio.tv.livetv.record.LiveTvNotice.show(if (pinned) "Score pinned to the corner" else "Score unpinned")
                                 }
                                 PanelControl.BACKUPS -> dialog = PlayerDialog.BACKUPS
+                                PanelControl.PIP -> pip.enter()
+                                PanelControl.QUICK_CHANNELS -> dialog = PlayerDialog.QUICK_CHANNELS
                                 PanelControl.MULTIVIEW -> {
                                     current?.let { com.nuvio.tv.livetv.multiview.MultiViewRepository.add(it) }
                                     // The grid opens its own player; don't leave this one playing behind it.
@@ -1382,6 +1389,23 @@ fun LiveTvPlayerScreen(
                 scope.launch { delay(60); runCatching { rootFocus.requestFocus() } }
             },
             onDismiss = { dialog = PlayerDialog.NONE }
+        )
+        PlayerDialog.QUICK_CHANNELS -> QuickChannelsSheet(
+            viewModel = viewModel,
+            currentKey = playback.channelKey,
+            onPick = { ch ->
+                dialog = PlayerDialog.NONE
+                if (ch.key != playback.channelKey) {
+                    closeFull()
+                    viewModel.preview(ch)
+                    showBanner()
+                }
+                scope.launch { delay(60); runCatching { rootFocus.requestFocus() } }
+            },
+            onDismiss = {
+                dialog = PlayerDialog.NONE
+                scope.launch { delay(60); runCatching { rootFocus.requestFocus() } }
+            },
         )
         // Hidden while a copy's long-press menu is up; it comes back on that copy afterwards.
         PlayerDialog.BACKUPS -> if (backups.isEmpty()) dialog = PlayerDialog.NONE else if (backupMenuFor == null) BackupChannelsDialog(

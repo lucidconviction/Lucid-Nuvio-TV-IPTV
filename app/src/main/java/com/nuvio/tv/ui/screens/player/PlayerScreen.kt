@@ -13,6 +13,7 @@ import com.nuvio.tv.ui.theme.NuvioMotion
 import kotlinx.coroutines.delay
 
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.util.LocalPictureInPicture
 import com.nuvio.tv.ui.theme.accentBrush
 
 import android.util.Log
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
@@ -232,6 +234,11 @@ fun PlayerScreen(
     val effectiveAutoplayEnabled by viewModel.effectiveAutoplayEnabled.collectAsState(initial = false)
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
+    val pip = LocalPictureInPicture.current
+
+    LaunchedEffect(pip.isInPip) {
+        if (pip.isInPip) viewModel.hideControls()
+    }
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val containerFocusRequester = remember { FocusRequester() }
     val playPauseFocusRequester = remember { FocusRequester() }
@@ -1663,6 +1670,7 @@ fun PlayerScreen(
                         }
                     }
                 }.takeUnless { uiState.isServerStream },
+                onEnterPip = { pip.enter() },
                 onShowStreamInfo = {
                     restoreStreamInfoFocus = true
                     viewModel.onEvent(PlayerEvent.OnShowStreamInfo)
@@ -2780,6 +2788,7 @@ private fun PlayerControlsOverlay(
     onReportPlaybackIssue: () -> Unit,
     onToggleMoreActions: () -> Unit,
     onOpenInExternalPlayer: (() -> Unit)?,
+    onEnterPip: () -> Unit,
     onShowStreamInfo: () -> Unit,
     onResetHideTimer: () -> Unit,
     onHideControls: () -> Unit,
@@ -3082,6 +3091,15 @@ private fun PlayerControlsOverlay(
                             contentColor = if (partyActive) NuvioTheme.colors.Secondary else Color.White
                         )
                     }
+
+                    ControlButton(
+                        icon = Icons.Default.PictureInPictureAlt,
+                        contentDescription = "Picture in picture",
+                        onClick = onEnterPip,
+                        upFocusRequester = progressUpTarget,
+                        onDownKey = onHideControls,
+                        onFocused = onResetHideTimer
+                    )
 
                     AnimatedVisibility(
                         visible = uiState.showMoreDialog,

@@ -1,11 +1,14 @@
 package com.nuvio.tv
 
 import android.content.Context
+import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.util.Rational
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -63,6 +66,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -387,6 +391,9 @@ open class MainActivity : ComponentActivity() {
     private val pendingDeepLinkUrl = MutableStateFlow<String?>(null)
     private val pendingLaunchIntent = MutableStateFlow<Intent?>(null)
 
+    /** True while the Activity is the small picture-in-picture window. */
+    private val pipMode = mutableStateOf(false)
+
     private lateinit var jankStats: JankStats
 
     /** Activity-level launcher for external video players. Survives all navigation changes. */
@@ -418,9 +425,36 @@ open class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Opens the current video in Android's picture-in-picture window. */
+    private fun enterPip(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            Toast.makeText(this, "Picture-in-picture needs Android 8 or newer", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val entered = runCatching {
+            enterPictureInPictureMode(
+                PictureInPictureParams.Builder()
+                    // Every player in the app is widescreen; a fixed ratio keeps the window tidy.
+                    .setAspectRatio(Rational(16, 9))
+                    .build()
+            )
+        }.getOrDefault(false)
+        if (!entered) {
+            Toast.makeText(this, "Picture-in-picture isn't available on this device", Toast.LENGTH_SHORT).show()
+        }
+        return entered
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipMode.value = isInPictureInPictureMode
+    }
+
     @OptIn(ExperimentalFoundationApi::class)
-    override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+    override fun onCreate(savedInstanceState: Bundle?) {        installSplashScreen()
         super.onCreate(savedInstanceState)
         // Live TV fork: a fresh open of the app (not a rebuild of the same screen), so "Start in
         // Full Screen" runs again even if Android kept the app running in the background.
@@ -796,7 +830,11 @@ open class MainActivity : ComponentActivity() {
                     com.nuvio.tv.core.player.LocalTrailerPlayerPool provides trailerPlayerPool,
                     LocalSplashBackground provides splashBackground,
                     LocalStartupLoadingState provides startupLoadingState,
-                    LocalStartupSplashEnabled provides startupSplashEnabled
+                    LocalStartupSplashEnabled provides startupSplashEnabled,
+                    com.nuvio.tv.ui.util.LocalPictureInPicture provides com.nuvio.tv.ui.util.PictureInPictureController(
+                        enter = { enterPip() },
+                        isInPip = pipMode.value
+                    )
                 ) {
                 val transparentPlayerBackdrop = PlayerWindowBackdrop.isTransparentRequested
                 Surface(
@@ -1212,6 +1250,7 @@ open class MainActivity : ComponentActivity() {
                             add(Screen.Calendar.route)
                             add(Screen.Search.route)
                             add(Screen.Library.route)
+                            add(Screen.YouTube.route)
                             add(Screen.Music.route)
                             add(Screen.Settings.route)
                             if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
@@ -1225,6 +1264,7 @@ open class MainActivity : ComponentActivity() {
                     val strNavSearch = stringResource(R.string.nav_search)
                     val strNavLibrary = stringResource(R.string.nav_library)
                     val strNavMusic = stringResource(R.string.nav_music)
+                    val strNavYouTube = stringResource(R.string.nav_youtube)
                     val strNavSettings = stringResource(R.string.nav_settings)
                     // Live TV fork: Home first and Settings at the bottom; the pages between in the
                     // order set in Settings → Menu & Features, with a thin line above Live TV's own pages.
@@ -1234,6 +1274,7 @@ open class MainActivity : ComponentActivity() {
                         strNavSearch,
                         strNavLibrary,
                         strNavMusic,
+                        strNavYouTube,
                         strNavSettings,
                         discoverLocation,
                         liveTvInSidebar,
@@ -1257,6 +1298,7 @@ open class MainActivity : ComponentActivity() {
                             pages.SEARCH -> if (id !in hiddenPages) DrawerItem(route = Screen.Search.route, label = strNavSearch, iconRes = R.raw.sidebar_search) else null
                             pages.LIBRARY -> if (id !in hiddenPages) DrawerItem(route = Screen.Library.route, label = strNavLibrary, iconRes = R.raw.sidebar_library) else null
                             pages.MUSIC -> if (id !in hiddenPages) DrawerItem(route = Screen.Music.route, label = strNavMusic, icon = Icons.Default.LibraryMusic) else null
+                            pages.YOUTUBE -> if (id !in hiddenPages) DrawerItem(route = Screen.YouTube.route, label = strNavYouTube, icon = Icons.Default.SmartDisplay) else null
                             pages.CALENDAR -> if (calendarInSidebar && id !in hiddenPages) DrawerItem(route = Screen.Calendar.route, label = "Calendar", icon = Icons.Default.DateRange) else null
                             // Live TV's dot: something is recording (Recordings opens from the guide).
                             pages.LIVE_TV -> if (liveTvInSidebar) DrawerItem(route = Screen.LiveTv.route, label = "Live TV", icon = Icons.Default.LiveTv, badge = recordingNow && !recordingsInSidebar) else null
@@ -1760,7 +1802,14 @@ private fun LegacySidebarScaffold(
                     modifier = Modifier
                         .fillMaxHeight()
                         .width(drawerWidth)
-                        .background(NuvioTheme.colors.Background)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.90f),
+                                    NuvioTheme.colors.Background.copy(alpha = 0.84f),
+                                ),
+                            ),
+                        )
                         .padding(NuvioTheme.spacing.card.outer)
                         .selectableGroup()
                         .onPreviewKeyEvent { keyEvent ->

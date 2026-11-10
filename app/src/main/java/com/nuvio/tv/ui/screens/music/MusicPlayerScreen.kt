@@ -94,6 +94,7 @@ import com.nuvio.tv.music.MusicRepeatMode
 import com.nuvio.tv.music.MusicStream
 import com.nuvio.tv.music.MusicTrack
 import com.nuvio.tv.music.MusicViewModel
+import com.nuvio.tv.ui.components.glassSurface
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -141,9 +142,10 @@ fun MusicPlayerScreen(
     val lyricsState = rememberLazyListState()
     val scopeRef = rememberCoroutineScope()
 
-    val resolved by produceState<Result<MusicStream>?>(null, current?.id) {
+    val resolved by produceState<Pair<String, Result<MusicStream>>?>(null, current?.id) {
         value = null
-        value = current?.let { viewModel.repository.resolve(it) }
+        val track = current ?: return@produceState
+        value = track.id to viewModel.repository.resolve(track)
     }
 
     LaunchedEffect(current?.id) {
@@ -160,7 +162,9 @@ fun MusicPlayerScreen(
     // Add the new track's player, then crossfade once it is ready.
     LaunchedEffect(current?.id, resolved) {
         val track = current ?: return@LaunchedEffect
-        val stream = resolved?.getOrNull() ?: return@LaunchedEffect
+        val resolution = resolved ?: return@LaunchedEffect
+        if (resolution.first != track.id) return@LaunchedEffect
+        val stream = resolution.second.getOrNull() ?: return@LaunchedEffect
         if (playbacks.any { it.trackId == track.id }) return@LaunchedEffect
         val player = com.nuvio.tv.music.MusicPlaybackFactory.create(context, stream, audioOnly)
         val playback = MusicPlayback(track.id, stream, player)
@@ -249,14 +253,6 @@ fun MusicPlayerScreen(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionLeft -> {
-                        active?.player?.let { it.seekTo((it.currentPosition - 10_000L).coerceAtLeast(0L)) }
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        active?.player?.let { it.seekTo((it.currentPosition + 10_000L).coerceAtMost(durationMs)) }
-                        true
-                    }
                     Key.MediaPlayPause -> {
                         active?.player?.let { if (it.isPlaying) it.pause() else it.play() }
                         true
@@ -316,7 +312,12 @@ fun MusicPlayerScreen(
                 .fillMaxSize()
                 .padding(horizontal = 56.dp, vertical = 30.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
                 Button(onClick = {
                     viewModel.player.close()
                     onBack()
@@ -363,7 +364,7 @@ fun MusicPlayerScreen(
             Spacer(Modifier.height(12.dp))
             if (showControls) {
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(horizontal = 20.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -383,7 +384,7 @@ fun MusicPlayerScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(horizontal = 20.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

@@ -124,8 +124,8 @@ internal fun ModernSidebarBlurPanel(
         val baseColor = if (isAmoledBlack) Color.Black else Color(0xFF161618)
         val alpha = when {
             blurEnabled -> 0.65f
-            isAmoledBlack -> 1f
-            else -> 0.97f
+            isAmoledBlack -> 0.90f
+            else -> 0.86f
         }
         Brush.verticalGradient(listOf(
             baseColor.copy(alpha = alpha),
@@ -133,7 +133,7 @@ internal fun ModernSidebarBlurPanel(
         ))
     }
     val panelBorderColor = remember(isAmoledBlack, blurEnabled, borderBase) {
-        if (!blurEnabled && isAmoledBlack) borderBase.copy(alpha = 0.9f) else Color.Transparent
+        if (blurEnabled) Color.Transparent else Color.White.copy(alpha = 0.10f)
     }
 
     Column(

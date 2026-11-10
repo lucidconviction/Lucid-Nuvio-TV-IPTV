@@ -29,3 +29,10 @@ include(":baselineprofile")
 include(":ffmpeg-decoder-downmix")
 include(":vpn-core")
 include(":vpn-android")
+
+// SmartTube's YouTube engine (MediaServiceCore, MIT). See mediaservicecore/LICENSE-*.
+include(":mediaservicecore:mediaserviceinterfaces")
+include(":mediaservicecore:youtubeapi")
+include(":mediaservicecore:sharedutils")
+include(":mediaservicecore:commons-io")
+include(":mediaservicecore:j2v8")

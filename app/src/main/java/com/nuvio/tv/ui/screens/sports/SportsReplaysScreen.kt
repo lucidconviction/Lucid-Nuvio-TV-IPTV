@@ -41,6 +41,9 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.nuvio.tv.music.YouTubeMusicService
 import com.nuvio.tv.music.YouTubeMusicVideo
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import com.nuvio.tv.ui.components.glassSurface
 import com.nuvio.tv.ui.theme.NuvioTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
@@ -97,7 +100,7 @@ class SportsReplaysViewModel @Inject constructor(
 
     private companion object {
         val SPORTS = listOf(
-            "NFL", "NBA", "NHL", "MLB", "Premier League", "Formula 1", "UFC", "Tennis",
+            "NFL", "NBA", "NHL", "MLB", "Premier League", "Formula 1", "UFC", "BKFC", "Tennis",
         )
     }
 }
@@ -113,10 +116,23 @@ fun SportsReplaysScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.load() }
 
-    Column(
-        Modifier.fillMaxSize().background(NuvioTheme.colors.Background).padding(horizontal = 48.dp, vertical = 28.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    Box(Modifier.fillMaxSize().background(NuvioTheme.colors.Background)) {
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    listOf(NuvioTheme.colors.Secondary.copy(alpha = 0.10f), Color.Transparent),
+                ),
+            ),
+        )
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp),
+        ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
             Button(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
@@ -162,6 +178,7 @@ fun SportsReplaysScreen(
                 }
             }
         }
+        }
     }
 }
 
@@ -172,8 +189,8 @@ private fun ReplayCard(video: YouTubeMusicVideo, onClick: () -> Unit) {
         modifier = Modifier.width(300.dp),
         shape = CardDefaults.shape(RoundedCornerShape(NuvioTheme.radii.md)),
         colors = CardDefaults.colors(
-            containerColor = NuvioTheme.colors.BackgroundElevated,
-            focusedContainerColor = NuvioTheme.colors.BackgroundElevated,
+            containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.82f),
+            focusedContainerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.94f),
         ),
         scale = CardDefaults.scale(focusedScale = 1.05f),
     ) {

@@ -136,12 +136,3 @@ data class MusicStream(
     val title: String,
     val thumbnail: String? = null,
 )
-
-/** A YouTube search result, before it becomes a [MusicTrack]. */
-data class YouTubeMusicVideo(
-    val videoId: String,
-    val title: String,
-    val author: String?,
-    val thumbnail: String?,
-    val durationSeconds: Int = 0,
-)

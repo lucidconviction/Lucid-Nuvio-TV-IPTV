@@ -1386,6 +1386,17 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.YouTube.route) {
+            com.nuvio.tv.ui.screens.youtube.YouTubeScreen(
+                onBack = { navController.popBackStack() },
+                onPlay = { videoId, title, poster ->
+                    if (videoId.isNotBlank()) {
+                        navController.navigate(Screen.YouTubeVideo.createRoute(videoId, title))
+                    }
+                },
+            )
+        }
+
         composable(Screen.Music.route) {
             com.nuvio.tv.ui.screens.music.MusicScreen(
                 onOpenPlayer = {

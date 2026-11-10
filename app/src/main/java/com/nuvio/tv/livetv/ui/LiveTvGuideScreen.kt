@@ -382,7 +382,9 @@ private fun LiveTvGuideScreenBody(
     val groupsListState = rememberLazyListState()
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
     var guideGearOpen by remember { mutableStateOf(false) }
+    var quickChannelsOpen by remember { mutableStateOf(false) }
     val guideGearFocus = remember { FocusRequester() }
+    val quickChannelsFocus = remember { FocusRequester() }
     val groupSearchFocus = remember { FocusRequester() }
     /** Schedule a Recording (long-press menu): the channel it's for. */
     var manualRecordingFor by remember { mutableStateOf<LiveChannel?>(null) }
@@ -1027,6 +1029,8 @@ private fun LiveTvGuideScreenBody(
                 },
                 onRecordings = onOpenRecordings,
                 onMultiView = onOpenMultiView,
+                onQuickChannels = { quickChannelsOpen = true },
+                quickFocus = quickChannelsFocus,
                 playlistName = if (settings.showPlaylistInInfo) headerChannel?.sourceId?.let { playlistNames[it] } else null,
                 settings = settings,
                 now = now,
@@ -2080,6 +2084,21 @@ private fun LiveTvGuideScreenBody(
                 onDismiss = { guideGearOpen = false; scope.launch { delay(60); runCatching { gridFocus.requestFocus() } } }
             )
         }
+        if (quickChannelsOpen) {
+            QuickChannelsSheet(
+                viewModel = viewModel,
+                currentKey = playback.channelKey,
+                onPick = { ch ->
+                    quickChannelsOpen = false
+                    if (ch.key != playback.channelKey) viewModel.preview(ch)
+                    scope.launch { delay(60); runCatching { quickChannelsFocus.requestFocus() } }
+                },
+                onDismiss = {
+                    quickChannelsOpen = false
+                    scope.launch { delay(60); runCatching { quickChannelsFocus.requestFocus() } }
+                },
+            )
+        }
         infoTarget?.let { target ->
             ProgramInfoDialog(
                 target = target,
@@ -2344,7 +2363,10 @@ private fun GuideHeader(
     /** Opens Recordings (the ● beside the ⚙). */
     onRecordings: () -> Unit = {},
     /** Opens the six-channel Multi-view grid. */
-    onMultiView: () -> Unit = {}
+    onMultiView: () -> Unit = {},
+    /** Opens the quick channel list (under Multi-view). */
+    onQuickChannels: () -> Unit = {},
+    quickFocus: FocusRequester = FocusRequester()
 ) {
     if (!settings.showProgramDetails && !showPreview) {
         Row(
@@ -2355,7 +2377,11 @@ private fun GuideHeader(
             LiveText("Live TV", size = 16.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
             status?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 13.sp) }
             Spacer(Modifier.width(16.dp))
-            GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                GuideMultiViewButton(onOpen = onMultiView, onDown = { runCatching { quickFocus.requestFocus() } })
+                Spacer(Modifier.height(4.dp))
+                GuideQuickChannelsButton(Modifier.focusRequester(quickFocus), onOpen = onQuickChannels, onDown = onGearDown)
+            }
             Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
             Spacer(Modifier.width(6.dp))
@@ -2506,9 +2532,14 @@ private fun GuideHeader(
                 LiveText(status, color = NuvioTheme.colors.TextSecondary)
             }
         }
-        // Multi-view, Recordings (●) and the ⚙ for the guide's display settings, in the corner.
+        // Multi-view with Quick channels directly under it, Recordings (●) and the ⚙ for the
+        // guide's display settings, in the corner.
         Row {
-            GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                GuideMultiViewButton(onOpen = onMultiView, onDown = { runCatching { quickFocus.requestFocus() } })
+                Spacer(Modifier.height(4.dp))
+                GuideQuickChannelsButton(Modifier.focusRequester(quickFocus), onOpen = onQuickChannels, onDown = onGearDown)
+            }
             Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
             Spacer(Modifier.width(6.dp))

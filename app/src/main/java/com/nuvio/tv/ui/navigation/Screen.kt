@@ -153,6 +153,7 @@ sealed class Screen(val route: String) {
             "youtube/${encode(videoId)}?title=${encode(title)}"
     }
     data object Settings : Screen("settings")
+    data object YouTube : Screen("youtube")
     data object LiveTv : Screen("live_tv")
     data object LiveTvPlayer : Screen("live_tv_player")
     data object LiveTvSettings : Screen("live_tv_settings")

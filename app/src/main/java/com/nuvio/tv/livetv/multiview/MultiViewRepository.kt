@@ -15,6 +15,28 @@ data class MultiViewStream(
     val providerName: String = "",
 )
 
+/** How the open windows are arranged. Auto picks the best layout for the number of windows. */
+enum class MultiViewLayout {
+    AUTO,
+    SIDE_BY_SIDE,
+    GRID,
+    ROW,
+    COLUMN,
+    FOCUS_CORNER,
+}
+
+fun availableMultiViewLayouts(count: Int): List<MultiViewLayout> = when (count) {
+    0, 1 -> listOf(MultiViewLayout.AUTO)
+    2 -> listOf(MultiViewLayout.AUTO, MultiViewLayout.SIDE_BY_SIDE, MultiViewLayout.FOCUS_CORNER)
+    else -> listOf(
+        MultiViewLayout.AUTO,
+        MultiViewLayout.GRID,
+        MultiViewLayout.FOCUS_CORNER,
+        MultiViewLayout.ROW,
+        MultiViewLayout.COLUMN,
+    )
+}
+
 /**
  * The TV multi-view session: up to six channels at once. Kept above navigation so the quick
  * button in the player and the guide both feed the same grid.
@@ -33,6 +55,9 @@ object MultiViewRepository {
 
     private val _pauseAll = MutableStateFlow(false)
     val pauseAll: StateFlow<Boolean> = _pauseAll.asStateFlow()
+
+    private val _layout = MutableStateFlow(MultiViewLayout.AUTO)
+    val layout: StateFlow<MultiViewLayout> = _layout.asStateFlow()
 
     fun add(channel: LiveChannel): Boolean {
         if (channel.url.isBlank()) return false
@@ -66,6 +91,23 @@ object MultiViewRepository {
 
     fun setAudible(id: String) {
         if (_streams.value.any { it.id == id }) _audibleId.value = id
+    }
+
+    fun setLayout(layout: MultiViewLayout) {
+        _layout.value = layout
+    }
+
+    /** Exchanges two windows, keeping both streams playing. */
+    fun swap(firstId: String, secondId: String) {
+        if (firstId == secondId) return
+        val current = _streams.value
+        val first = current.indexOfFirst { it.id == firstId }
+        val second = current.indexOfFirst { it.id == secondId }
+        if (first < 0 || second < 0) return
+        _streams.value = current.toMutableList().also {
+            it[first] = current[second]
+            it[second] = current[first]
+        }
     }
 
     fun setSoundAll(value: Boolean) {

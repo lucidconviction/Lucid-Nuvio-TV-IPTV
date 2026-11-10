@@ -31,7 +31,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.filled.Replay30
@@ -72,7 +74,7 @@ internal enum class PanelMode { LIVE, CATCHUP, SHIFT }
  * the timeline, back 30, play/pause, forward 30 and the gear; the rest are kept for the keys
  * that still name them, and live in the gear panel.
  */
-internal enum class PanelControl { TIMELINE, BACK, PLAY, FORWARD, LIVE, CC, AUDIO, SIZE, SLEEP, PIN, BELL, BACKUPS, MULTIVIEW, MORE }
+internal enum class PanelControl { TIMELINE, BACK, PLAY, FORWARD, LIVE, CC, AUDIO, SIZE, SLEEP, PIN, BELL, PIP, QUICK_CHANNELS, BACKUPS, MULTIVIEW, MORE }
 
 /** Timeline: everything in wall-clock milliseconds. */
 internal data class PanelTimeline(
@@ -130,6 +132,10 @@ internal fun panelControls(mode: PanelMode, paused: Boolean, canSkip: Boolean, b
     if (pin) add(PanelControl.PIN)
     // The Calendar's bell, beside the gear.
     if (bell) add(PanelControl.BELL)
+    // A small picture-in-picture window, for watching something else in the app.
+    add(PanelControl.PIP)
+    // Favorites and recent channels, directly left of the backup copies.
+    add(PanelControl.QUICK_CHANNELS)
     // Other copies of this channel (same name, any quality or playlist), right before the gear.
     if (backups) add(PanelControl.BACKUPS)
     // Up to six channels at once, right before the gear.
@@ -365,6 +371,14 @@ internal fun LiveTvPlayerPanel(
                                         if (bellOn) Icons.Default.NotificationsActive else Icons.Default.NotificationsNone,
                                         focused = focused == PanelControl.BELL && !inRow, big = false
                                     )
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                if (PanelControl.PIP in controls) {
+                                    RoundButton(Icons.Default.PictureInPictureAlt, focused = focused == PanelControl.PIP && !inRow, big = false)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                if (PanelControl.QUICK_CHANNELS in controls) {
+                                    RoundButton(Icons.Default.PlaylistPlay, focused = focused == PanelControl.QUICK_CHANNELS && !inRow, big = false)
                                     Spacer(Modifier.width(8.dp))
                                 }
                                 if (PanelControl.BACKUPS in controls) {

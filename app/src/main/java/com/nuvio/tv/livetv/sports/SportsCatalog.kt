@@ -345,6 +345,10 @@ object SportsCatalog {
         // ---- Fighting
         League("mma/ufc", Sport.FIGHTING, "UFC", "UFC", "mma/ufc", LeagueKind.EVENT, guideWords = listOf("UFC"),
             regions = EVERYWHERE, minutes = 300, color = 0xFFD20A0A),
+        // Bare Knuckle Fighting Championship: listed in the guide like boxing, searched on YouTube for replays.
+        League("guide/bkfc", Sport.FIGHTING, "BKFC", "BKFC",
+            guideWords = listOf("BKFC", "Bare Knuckle Fighting Championship", "Bare Knuckle FC", "Bare Knuckle"),
+            regions = EVERYWHERE, guideOnly = true, kind = LeagueKind.EVENT, minutes = 180, color = 0xFF1A1A1A),
         // A fight card's listed time is when the card starts; the main event is often 5 or 6 hours later.
         League("guide/boxing", Sport.FIGHTING, "Boxing", "BOXING", guideWords = listOf("Boxing"), regions = EVERYWHERE,
             guideOnly = true, fixtureSlug = "boxing", kind = LeagueKind.EVENT, minutes = 420, color = 0xFF7A1F1F),

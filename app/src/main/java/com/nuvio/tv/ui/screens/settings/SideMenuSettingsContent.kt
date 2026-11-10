@@ -104,6 +104,7 @@ fun SideMenuSettingsContent(initialFocusRequester: FocusRequester? = null) {
         SideMenuPages.SEARCH -> PageRow("Search", "Search movies, shows, channels and On Demand", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.LIBRARY -> PageRow("Library", "Your saved movies and shows", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.MUSIC -> PageRow("Music", "Songs, artists, albums, playlists and videos", id !in hidden) { setHidden(id, id !in hidden) }
+        SideMenuPages.YOUTUBE -> PageRow("YouTube", "Subscriptions, history, playlists, live and search", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.DISCOVER -> PageRow(
             "Discover", "Browse by genre, network and more", discover != DiscoverLocation.OFF,
             value = when (discover) { DiscoverLocation.IN_SIDEBAR -> "In the menu"; DiscoverLocation.IN_SEARCH -> "Inside Search"; DiscoverLocation.OFF -> "Off" }
@@ -157,6 +158,7 @@ fun SideMenuSettingsContent(initialFocusRequester: FocusRequester? = null) {
         if (s.onDemandEnabled && s.onDemandInSidebar && onDemandHas) add("ON_DEMAND" to "On Demand")
         if (SideMenuPages.CALENDAR !in hidden) add("CALENDAR" to "Calendar")
         if (SideMenuPages.LIBRARY !in hidden) add("LIBRARY" to "Library")
+        if (SideMenuPages.YOUTUBE !in hidden) add("YOUTUBE" to "YouTube")
         if (SideMenuPages.MUSIC !in hidden) add("MUSIC" to "Music")
         if (SideMenuPages.SEARCH !in hidden) add("SEARCH" to "Search")
     }

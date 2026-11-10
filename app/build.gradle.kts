@@ -620,6 +620,13 @@ dependencies {
 
     implementation(libs.gson)
 
+    // SmartTube's YouTube engine: the same feeds, search, TV sign-in and stream lookup as the
+    // YouTube tabs on the phone app.
+    implementation(project(":mediaservicecore:youtubeapi"))
+    implementation(project(":mediaservicecore:mediaserviceinterfaces"))
+    implementation(project(":mediaservicecore:sharedutils"))
+    implementation(project(":mediaservicecore:j2v8"))
+
     add("fullImplementation", files("libs/quickjs-kt-android-1.0.5-nuvio.aar"))
     add("fullImplementation", libs.jsoup)
     add("fullImplementation", "com.fasterxml.jackson.core:jackson-databind:2.17.0")
