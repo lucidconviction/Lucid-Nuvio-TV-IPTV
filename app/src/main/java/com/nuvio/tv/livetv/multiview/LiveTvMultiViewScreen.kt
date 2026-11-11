@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -42,6 +43,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,18 +75,23 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.nuvio.tv.livetv.model.ChannelGroup
 import com.nuvio.tv.livetv.model.LiveChannel
+import com.nuvio.tv.livetv.ui.AddonBrowserViewModel
 import com.nuvio.tv.livetv.ui.KeepScreenAwake
 import com.nuvio.tv.livetv.ui.LivePlayerSurface
 import com.nuvio.tv.livetv.ui.LiveTvViewModel
+import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.ui.components.glassSurface
 import com.nuvio.tv.ui.theme.NuvioTheme
 import com.nuvio.tv.ui.util.rememberLongPressKeyTracker
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.ceil
 
 /**
- * Up to six live channels at once. The quick Multi-view button in the player adds the channel
+ * Up to four live channels at once. The quick Multi-view button in the player adds the channel
  * on screen; the picker adds more from Favorites, Recently watched and the channel list.
  */
 @Composable
@@ -98,7 +105,9 @@ fun LiveTvMultiViewScreen(
     val pauseAll by MultiViewRepository.pauseAll.collectAsStateWithLifecycle()
     val layout by MultiViewRepository.layout.collectAsStateWithLifecycle()
     val channels by viewModel.displayChannels.collectAsStateWithLifecycle()
+    val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
+    val addonBrowserViewModel: AddonBrowserViewModel = hiltViewModel()
     var showPicker by remember { mutableStateOf(streams.isEmpty()) }
     var showLayouts by remember { mutableStateOf(false) }
     var swapMode by remember { mutableStateOf(false) }
@@ -106,6 +115,8 @@ fun LiveTvMultiViewScreen(
     var fullscreenId by remember { mutableStateOf<String?>(null) }
     var paneMenuFor by remember { mutableStateOf<MultiViewStream?>(null) }
     val volumes = remember { mutableStateMapOf<String, Int>() }
+    val refreshTicks = remember { mutableStateMapOf<String, Int>() }
+    val paneFocuses = remember { mutableMapOf<String, FocusRequester>() }
     val controlsFocus = remember { FocusRequester() }
     val rootFocus = remember { FocusRequester() }
     var showControls by remember { mutableStateOf(true) }
@@ -119,10 +130,10 @@ fun LiveTvMultiViewScreen(
         }
     }
     LaunchedEffect(showControls) {
-        if (showControls) {
+        if (showControls && !showPicker && !showLayouts && paneMenuFor == null && !swapMode) {
             delay(80)
             runCatching { controlsFocus.requestFocus() }
-        } else {
+        } else if (!showControls) {
             delay(30)
             runCatching { rootFocus.requestFocus() }
         }
@@ -131,6 +142,18 @@ fun LiveTvMultiViewScreen(
         if (showPicker || showLayouts || paneMenuFor != null) {
             showControls = true
             controlsTick++
+        }
+    }
+    // Swapping is a mode, not a dead end: put the remote on a window as soon as it starts,
+    // and back on the bar when it ends.
+    LaunchedEffect(swapMode, swapFirst, streams) {
+        delay(90)
+        if (swapMode) {
+            val target = swapFirst ?: streams.firstOrNull()?.id
+            val firstOther = streams.firstOrNull { it.id != target }?.id
+            firstOther?.let { paneFocuses[it] }?.let { runCatching { it.requestFocus() } }
+        } else {
+            runCatching { controlsFocus.requestFocus() }
         }
     }
 
@@ -253,6 +276,13 @@ fun LiveTvMultiViewScreen(
                 Spacer(Modifier.width(5.dp))
                 Text(if (pauseAll) "Resume all" else "Pause all")
             }
+            Button(onClick = {
+                streams.forEach { stream -> refreshTicks[stream.id] = (refreshTicks[stream.id] ?: 0) + 1 }
+            }) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("Refresh")
+            }
             Button(onClick = { showPicker = true }, enabled = streams.size < MultiViewRepository.MAX_STREAMS) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(5.dp))
@@ -275,6 +305,8 @@ fun LiveTvMultiViewScreen(
                     paused = pauseAll,
                     volume = volumes[fullscreenStream.id],
                     swapMarked = false,
+                    refreshTick = refreshTicks[fullscreenStream.id] ?: 0,
+                    showInfo = false,
                     onClick = {},
                     onLongPress = { paneMenuFor = fullscreenStream },
                 )
@@ -285,7 +317,7 @@ fun LiveTvMultiViewScreen(
                     Text("No screens yet.", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Pick up to six channels with Add channel, or press Multi-view while watching one.",
+                        "Pick up to four channels with Add channel, or press Multi-view while watching one.",
                         color = NuvioTheme.colors.TextSecondary,
                         style = NuvioTheme.textStyles.body,
                     )
@@ -301,6 +333,9 @@ fun LiveTvMultiViewScreen(
                 swapMode = swapMode,
                 swapFirst = swapFirst,
                 volumes = volumes,
+                refreshTicks = refreshTicks,
+                showInfo = showControls,
+                paneFocuses = paneFocuses,
                 onLongPress = { paneMenuFor = it },
                 onPaneClick = { id ->
                     if (swapMode) {
@@ -321,10 +356,33 @@ fun LiveTvMultiViewScreen(
     if (showPicker) {
         ChannelPicker(
             channels = channels,
+            groups = ui.groups.filter { it.id != ChannelGroup.SEARCH && it.id != ChannelGroup.ADDONS },
+            channelsForGroup = viewModel::channelsInGroup,
             favoriteKeys = user.favorites.toSet(),
             recentKeys = user.recent.toSet(),
             addedKeys = streams.mapTo(HashSet()) { it.id },
+            addonViewModel = addonBrowserViewModel,
             onPick = { channel -> MultiViewRepository.add(channel) },
+            onPickAddon = { stream, item ->
+                val url = stream.getStreamUrl()
+                if (url != null) {
+                    MultiViewRepository.add(
+                        LiveChannel(
+                            key = "addon:${item.apiType}:${item.id}:${url.hashCode()}",
+                            sourceId = "",
+                            sourceName = stream.addonName,
+                            name = item.name,
+                            tvgId = null,
+                            tvgName = null,
+                            logo = item.logo ?: item.poster,
+                            groupId = ChannelGroup.ADDONS,
+                            group = "Addons",
+                            number = 0,
+                            url = url,
+                        )
+                    )
+                }
+            },
             onDismiss = { showPicker = false },
         )
     }
@@ -355,6 +413,16 @@ fun LiveTvMultiViewScreen(
                 paneMenuFor = null
             },
             onVolume = { volumes[stream.id] = it },
+            onRefresh = {
+                refreshTicks[stream.id] = (refreshTicks[stream.id] ?: 0) + 1
+                paneMenuFor = null
+            },
+            onCloseWindow = {
+                MultiViewRepository.remove(stream.id)
+                volumes.remove(stream.id)
+                refreshTicks.remove(stream.id)
+                paneMenuFor = null
+            },
             onClose = { paneMenuFor = null },
         )
     }
@@ -367,6 +435,8 @@ private fun PaneMenu(
     onFullscreen: () -> Unit,
     onSwap: () -> Unit,
     onVolume: (Int) -> Unit,
+    onRefresh: () -> Unit,
+    onCloseWindow: () -> Unit,
     onClose: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
@@ -390,6 +460,7 @@ private fun PaneMenu(
                 modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
             ) { Text("Fullscreen") }
             Button(onClick = onSwap, modifier = Modifier.fillMaxWidth()) { Text("Swap with another window") }
+            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text("Refresh stream") }
             Text("Volume", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary, modifier = Modifier.padding(top = 4.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf(0, 20, 40, 60, 80, 100).forEach { level ->
@@ -404,7 +475,8 @@ private fun PaneMenu(
                     ) { Text("$level%") }
                 }
             }
-            Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close") }
+            Button(onClick = onCloseWindow, modifier = Modifier.fillMaxWidth()) { Text("Close window") }
+            Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close menu") }
         }
     }
 }
@@ -419,6 +491,9 @@ private fun MultiViewGrid(
     swapMode: Boolean,
     swapFirst: String?,
     volumes: Map<String, Int>,
+    refreshTicks: Map<String, Int>,
+    showInfo: Boolean,
+    paneFocuses: MutableMap<String, FocusRequester>,
     onLongPress: (MultiViewStream) -> Unit,
     onPaneClick: (String) -> Unit,
 ) {
@@ -431,6 +506,9 @@ private fun MultiViewGrid(
                 paused = pauseAll,
                 volume = volumes[stream.id],
                 swapMarked = swapMode && swapFirst == stream.id,
+                refreshTick = refreshTicks[stream.id] ?: 0,
+                showInfo = showInfo,
+                focusRequester = paneFocuses.getOrPut(stream.id) { FocusRequester() },
                 onClick = { onPaneClick(stream.id) },
                 onLongPress = { onLongPress(stream) },
             )
@@ -589,6 +667,9 @@ private fun MultiViewPane(
     paused: Boolean,
     volume: Int? = null,
     swapMarked: Boolean,
+    refreshTick: Int = 0,
+    showInfo: Boolean = true,
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit,
     onLongPress: () -> Unit = {},
 ) {
@@ -597,8 +678,10 @@ private fun MultiViewPane(
     var failed by remember(stream.id) { mutableStateOf(false) }
     val longPressTracker = rememberLongPressKeyTracker()
 
-    LaunchedEffect(stream.id) {
+    LaunchedEffect(stream.id, refreshTick) {
         failed = false
+        player?.release()
+        player = null
         val created = buildLivePlayer(context, stream)
         created.addListener(object : androidx.media3.common.Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -613,7 +696,7 @@ private fun MultiViewPane(
     LaunchedEffect(player, audible, paused, volume) {
         val current = player ?: return@LaunchedEffect
         current.volume = volume?.let { (it / 100f).coerceIn(0f, 1f) } ?: if (audible) 1f else 0f
-        // Muted windows don't decode audio: with six streams at once that saves a decoder each.
+        // Muted windows don't decode audio: with four streams at once that saves a decoder each.
         val audioOn = audible || (volume ?: 0) > 0
         current.trackSelectionParameters = current.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !audioOn)
@@ -635,7 +718,9 @@ private fun MultiViewPane(
 
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+        modifier = Modifier.fillMaxSize()
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .onPreviewKeyEvent { event ->
             longPressTracker.handle(event.nativeKeyEvent, ::isSelectKey) { onLongPress() }
         },
         shape = CardDefaults.shape(RoundedCornerShape(14.dp)),
@@ -657,13 +742,15 @@ private fun MultiViewPane(
                 useSurfaceView = true,
                 modifier = Modifier.fillMaxSize(),
             )
-            Box(
-                Modifier.fillMaxSize().background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
+            if (showInfo) {
+                Box(
+                    Modifier.fillMaxSize().background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
+                        ),
                     ),
-                ),
-            )
+                )
+            }
             if (swapMarked) {
                 Box(
                     Modifier.fillMaxSize().border(
@@ -673,6 +760,7 @@ private fun MultiViewPane(
                     ),
                 )
             }
+            if (showInfo) {
             Row(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -705,6 +793,7 @@ private fun MultiViewPane(
                 if (failed) {
                     Text("Retrying…", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.Warning)
                 }
+            }
             }
         }
     }
@@ -756,30 +845,72 @@ private fun buildLivePlayer(context: android.content.Context, stream: MultiViewS
     return player
 }
 
+private enum class PickerTab(val label: String) {
+    ADDONS("Addons"),
+    GROUPS("Playlist groups"),
+    CHANNELS("All channels"),
+}
+
+@Composable
+private fun PickerTabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundCard,
+            contentColor = if (selected) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary,
+            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+            focusedContentColor = NuvioTheme.colors.TextPrimary,
+        ),
+    ) { Text(label) }
+}
+
 @Composable
 private fun ChannelPicker(
     channels: List<LiveChannel>,
+    groups: List<ChannelGroup>,
+    channelsForGroup: (String) -> List<LiveChannel>,
     favoriteKeys: Set<String>,
     recentKeys: Set<String>,
     addedKeys: Set<String>,
+    addonViewModel: AddonBrowserViewModel,
     onPick: (LiveChannel) -> Unit,
+    onPickAddon: (Stream, MetaPreview) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val addonState by addonViewModel.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     val ordered = remember(channels, favoriteKeys, recentKeys) {
         val byKey = channels.associateBy { it.key }
         (favoriteKeys.mapNotNull { byKey[it] } + recentKeys.mapNotNull { byKey[it] } + channels)
             .distinctBy { it.key }
             .take(120)
     }
-    val firstFocus = remember { FocusRequester() }
+    var tab by remember { mutableStateOf(PickerTab.ADDONS) }
+    var selectedGroupId by remember { mutableStateOf(groups.firstOrNull()?.id) }
+    LaunchedEffect(groups) {
+        if (selectedGroupId == null || groups.none { it.id == selectedGroupId }) {
+            selectedGroupId = groups.firstOrNull()?.id
+        }
+    }
+    val groupChannels = remember(selectedGroupId, groups) {
+        selectedGroupId?.let(channelsForGroup).orEmpty()
+    }
+    val catalogFocus = remember { FocusRequester() }
+    val itemFocus = remember { FocusRequester() }
+    val groupFocus = remember { FocusRequester() }
+    val channelFocus = remember { FocusRequester() }
+    val tabsFocus = remember { FocusRequester() }
+    BackHandler { onDismiss() }
+
     LaunchedEffect(Unit) {
         delay(100)
-        runCatching { firstFocus.requestFocus() }
+        runCatching { tabsFocus.requestFocus() }
     }
-    BackHandler { onDismiss() }
+
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f)), contentAlignment = Alignment.Center) {
         Column(
-            Modifier.fillMaxWidth(0.7f).fillMaxHeight(0.8f)
+            Modifier.fillMaxWidth(0.78f).fillMaxHeight(0.84f)
                 .clip(RoundedCornerShape(20.dp))
                 .background(NuvioTheme.colors.BackgroundElevated)
                 .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(20.dp))
@@ -790,35 +921,205 @@ private fun ChannelPicker(
                 Text("Back to close", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
             }
             Spacer(Modifier.height(10.dp))
-            if (ordered.isEmpty()) {
-                Text("Channels are still loading.", color = NuvioTheme.colors.TextSecondary)
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-                    itemsIndexed(ordered, key = { _, channel -> channel.key }) { index, channel ->
-                        val added = channel.key in addedKeys
-                        Button(
-                            onClick = { if (!added) onPick(channel) },
-                            enabled = !added && addedKeys.size < MultiViewRepository.MAX_STREAMS,
-                            modifier = Modifier.fillMaxWidth()
-                                .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
-                            colors = ButtonDefaults.colors(
-                                containerColor = if (added) NuvioTheme.colors.BackgroundElevated else NuvioTheme.colors.BackgroundCard,
-                                contentColor = if (added) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
-                                focusedContainerColor = NuvioTheme.colors.FocusBackground,
-                                focusedContentColor = NuvioTheme.colors.TextPrimary,
-                            ),
-                        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PickerTab.entries.forEach { entry ->
+                    PickerTabButton(
+                        label = entry.label,
+                        selected = tab == entry,
+                        modifier = if (entry == PickerTab.ADDONS) Modifier.focusRequester(tabsFocus) else Modifier,
+                    ) { tab = entry }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            when (tab) {
+                PickerTab.ADDONS -> Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(0.38f).fillMaxHeight()) {
+                        Text("Catalogs", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
+                        Spacer(Modifier.height(6.dp))
+                        if (addonState.catalogs.isEmpty()) {
                             Text(
-                                "${channel.number}  ${channel.name}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
+                                if (addonState.loaded) "No live, TV, other or sport catalogs installed."
+                                else "Loading addons…",
+                                color = NuvioTheme.colors.TextSecondary,
+                                style = NuvioTheme.textStyles.body,
                             )
-                            Text(
-                                if (added) "Added" else channel.group,
-                                style = NuvioTheme.textStyles.metadata,
-                                color = if (added) NuvioTheme.colors.Success else NuvioTheme.colors.TextSecondary,
-                            )
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+                                itemsIndexed(addonState.catalogs, key = { _, entry -> entry.key }) { index, entry ->
+                                    val selected = addonState.selectedKey == entry.key
+                                    Button(
+                                        onClick = { addonViewModel.selectCatalog(entry) },
+                                        modifier = Modifier.fillMaxWidth()
+                                            .then(if (index == 0) Modifier.focusRequester(catalogFocus) else Modifier),
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundCard,
+                                            contentColor = if (selected) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary,
+                                            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                            focusedContentColor = NuvioTheme.colors.TextPrimary,
+                                        ),
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(entry.catalog.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(
+                                                "${entry.addon.displayName} · ${entry.catalog.apiType}",
+                                                style = NuvioTheme.textStyles.metadata,
+                                                color = if (selected) NuvioTheme.colors.TextInverse.copy(alpha = 0.72f) else NuvioTheme.colors.TextSecondary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Column(Modifier.weight(0.62f).fillMaxHeight()) {
+                        Text(
+                            addonState.catalogs.firstOrNull { it.key == addonState.selectedKey }?.catalog?.name ?: "Streams",
+                            style = NuvioTheme.textStyles.sectionTitle,
+                            color = NuvioTheme.colors.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        when {
+                            addonState.loading -> Text("Loading streams…", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+                            addonState.error != null -> Text(addonState.error!!, color = NuvioTheme.colors.Warning, style = NuvioTheme.textStyles.body)
+                            addonState.selectedKey == null -> Text("Pick a catalog to see its streams.", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+                            addonState.items.isEmpty() -> Text("No streams in this catalog.", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+                            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+                                itemsIndexed(addonState.items, key = { _, item -> "${item.apiType}:${item.id}" }) { index, item ->
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                val stream = addonViewModel.resolvePreview(item)
+                                                if (stream != null) onPickAddon(stream, item)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                            .then(if (index == 0) Modifier.focusRequester(itemFocus) else Modifier),
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = NuvioTheme.colors.BackgroundCard,
+                                            contentColor = NuvioTheme.colors.TextPrimary,
+                                            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                            focusedContentColor = NuvioTheme.colors.TextPrimary,
+                                        ),
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(item.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            Text(
+                                                item.apiType,
+                                                style = NuvioTheme.textStyles.metadata,
+                                                color = NuvioTheme.colors.TextSecondary,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PickerTab.GROUPS -> Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(0.36f).fillMaxHeight()) {
+                        Text("Playlist groups", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
+                        Spacer(Modifier.height(6.dp))
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+                            itemsIndexed(groups, key = { _, group -> group.id }) { index, group ->
+                                val selected = group.id == selectedGroupId
+                                Button(
+                                    onClick = { selectedGroupId = group.id },
+                                    modifier = Modifier.fillMaxWidth()
+                                        .then(if (index == 0) Modifier.focusRequester(groupFocus) else Modifier),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundCard,
+                                        contentColor = if (selected) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary,
+                                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                                    ),
+                                ) {
+                                    Text(group.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    Text(
+                                        group.count.toString(),
+                                        style = NuvioTheme.textStyles.metadata,
+                                        color = if (selected) NuvioTheme.colors.TextInverse.copy(alpha = 0.72f) else NuvioTheme.colors.TextSecondary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Column(Modifier.weight(0.64f).fillMaxHeight()) {
+                        Text(
+                            groups.firstOrNull { it.id == selectedGroupId }?.title ?: "Channels",
+                            style = NuvioTheme.textStyles.sectionTitle,
+                            color = NuvioTheme.colors.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        if (groupChannels.isEmpty()) {
+                            Text("No channels in this group.", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+                                itemsIndexed(groupChannels, key = { _, channel -> channel.key }) { index, channel ->
+                                    val added = channel.key in addedKeys
+                                    Button(
+                                        onClick = { if (!added) onPick(channel) },
+                                        enabled = !added && addedKeys.size < MultiViewRepository.MAX_STREAMS,
+                                        modifier = Modifier.fillMaxWidth()
+                                            .then(if (index == 0) Modifier.focusRequester(channelFocus) else Modifier),
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = if (added) NuvioTheme.colors.BackgroundElevated else NuvioTheme.colors.BackgroundCard,
+                                            contentColor = if (added) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
+                                            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                            focusedContentColor = NuvioTheme.colors.TextPrimary,
+                                        ),
+                                    ) {
+                                        Text("${channel.number}  ${channel.name}", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                        Text(
+                                            if (added) "Added" else channel.group,
+                                            style = NuvioTheme.textStyles.metadata,
+                                            color = if (added) NuvioTheme.colors.Success else NuvioTheme.colors.TextSecondary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PickerTab.CHANNELS -> {
+                    if (ordered.isEmpty()) {
+                        Text("Channels are still loading.", color = NuvioTheme.colors.TextSecondary)
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+                            itemsIndexed(ordered, key = { _, channel -> channel.key }) { index, channel ->
+                                val added = channel.key in addedKeys
+                                Button(
+                                    onClick = { if (!added) onPick(channel) },
+                                    enabled = !added && addedKeys.size < MultiViewRepository.MAX_STREAMS,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .then(if (index == 0) Modifier.focusRequester(channelFocus) else Modifier),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = if (added) NuvioTheme.colors.BackgroundElevated else NuvioTheme.colors.BackgroundCard,
+                                        contentColor = if (added) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
+                                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                                    ),
+                                ) {
+                                    Text(
+                                        "${channel.number}  ${channel.name}",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        if (added) "Added" else channel.group,
+                                        style = NuvioTheme.textStyles.metadata,
+                                        color = if (added) NuvioTheme.colors.Success else NuvioTheme.colors.TextSecondary,
+                                    )
+                                }
+                            }
                         }
                     }
                 }

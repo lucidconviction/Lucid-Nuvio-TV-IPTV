@@ -10,15 +10,15 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Full EPG guide with channel groups, favourites, recently watched and a fast channel list.
 - Catch-up and archive playback where your provider supports it.
 - Recordings, scheduled recordings, reminders and a TV guide that stays out of the way.
-- Quick Channels: curated channel names such as ESPN, CNN, Sky Sports and regional bundles, matched across every playlist.
 - Channel backup streams, channel numbers, custom logos, hidden channels and arrangeable groups.
-- Addons group: browse Live, TV, Sports and Other addon catalogs next to your channel groups, with their streams in the third column.
-- Multi-view for watching up to **six channels at once**.
+- Addons group: browse Live, TV, Sports and Other addon catalogs beside your channel groups and preview their streams in the info window.
+- Multi-view for watching up to **four channels at once**.
 
 ### Multi-view
 - Auto layout that grows with each added channel: one full screen, two shared, then one large + smaller windows, grids and more.
 - Named layouts per window count, plus quick window swapping.
-- Per-window volume, fullscreen, swap and pause from a long-press window menu.
+- Per-window volume, fullscreen, swap, refresh, close and pause from a long-press window menu.
+- Add channels from Addons, playlist groups, or the full channel list.
 - Controls hide after five seconds and return on any remote press, so the windows use the whole screen.
 - One sound or all sound, pause all, and screen-awake while multi-view is open.
 
@@ -56,7 +56,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 ### Player
 - Subtitles, audio tracks, playback speed, aspect ratio and stream info.
 - Picture-in-picture for video playback.
-- Sleep timer, backup streams, quick channels and stream reload.
+- Sleep timer, backup streams and stream reload.
 - External player support and playback diagnostics.
 - Smooth transitions and glass-style panels throughout the app.
 - The screen stays awake while the app is open.

@@ -39,11 +39,11 @@ fun availableMultiViewLayouts(count: Int): List<MultiViewLayout> = when (count) 
 }
 
 /**
- * The TV multi-view session: up to six channels at once. Kept above navigation so the quick
+ * The TV multi-view session: up to four channels at once. Kept above navigation so the quick
  * button in the player and the guide both feed the same grid.
  */
 object MultiViewRepository {
-    const val MAX_STREAMS = 6
+    const val MAX_STREAMS = 4
 
     private val _streams = MutableStateFlow<List<MultiViewStream>>(emptyList())
     val streams: StateFlow<List<MultiViewStream>> = _streams.asStateFlow()

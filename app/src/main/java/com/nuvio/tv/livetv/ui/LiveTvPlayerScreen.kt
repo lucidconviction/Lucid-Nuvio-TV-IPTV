@@ -645,8 +645,6 @@ fun LiveTvPlayerScreen(
                                     com.nuvio.tv.livetv.record.LiveTvNotice.show(if (pinned) "Score pinned to the corner" else "Score unpinned")
                                 }
                                 PanelControl.BACKUPS -> dialog = PlayerDialog.BACKUPS
-                                PanelControl.PIP -> pip.enter()
-                                PanelControl.QUICK_CHANNELS -> dialog = PlayerDialog.QUICK_CHANNELS
                                 PanelControl.MULTIVIEW -> {
                                     current?.let { com.nuvio.tv.livetv.multiview.MultiViewRepository.add(it) }
                                     // The grid opens its own player; don't leave this one playing behind it.

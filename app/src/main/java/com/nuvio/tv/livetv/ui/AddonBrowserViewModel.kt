@@ -7,9 +7,11 @@ import com.nuvio.tv.core.poster.CustomPosterScreen
 import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.CatalogDescriptor
 import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.enabledAddons
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.CatalogRepository
+import com.nuvio.tv.domain.repository.StreamRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,7 @@ import javax.inject.Inject
 class AddonBrowserViewModel @Inject constructor(
     addonRepository: AddonRepository,
     private val catalogRepository: CatalogRepository,
+    private val streamRepository: StreamRepository,
 ) : ViewModel() {
 
     data class CatalogEntry(
@@ -80,6 +83,15 @@ class AddonBrowserViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /** The first playable source for [item], fetched from the addon that supplied its catalog. */
+    suspend fun resolvePreview(item: MetaPreview): Stream? {
+        val entry = state.value.catalogs.firstOrNull { it.key == state.value.selectedKey } ?: return null
+        return when (val result = streamRepository.getStreamsFromAddon(entry.addon, item.apiType, item.id)) {
+            is NetworkResult.Success -> result.data.firstOrNull { it.getStreamUrl() != null }
+            else -> null
         }
     }
 

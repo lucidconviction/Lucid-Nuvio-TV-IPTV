@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,8 +41,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The middle and right columns of the guide's Addons group: the addon catalogs that carry
@@ -51,6 +54,7 @@ import kotlinx.coroutines.delay
 internal fun AddonBrowserPanel(
     modifier: Modifier = Modifier,
     onOpenStream: (videoId: String, contentType: String, title: String, poster: String?) -> Unit,
+    onPreviewStream: (Stream, MetaPreview) -> Unit,
     onBackToGroups: () -> Unit,
     focusTick: Int = 0,
     viewModel: AddonBrowserViewModel = hiltViewModel(),
@@ -58,6 +62,7 @@ internal fun AddonBrowserPanel(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val catalogFocus = remember { FocusRequester() }
     val firstItemFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
     var itemsFocused by remember { mutableStateOf(false) }
     var catalogFocused by remember { mutableStateOf(false) }
     var focusItemsTick by remember { mutableIntStateOf(0) }
@@ -163,7 +168,14 @@ internal fun AddonBrowserPanel(
                             ),
                             onFocused = { itemsFocused = it },
                             onClick = {
-                                onOpenStream(item.apiType, item.id, item.name, item.poster)
+                                scope.launch {
+                                    val stream = viewModel.resolvePreview(item)
+                                    if (stream != null) {
+                                        onPreviewStream(stream, item)
+                                    } else {
+                                        onOpenStream(item.apiType, item.id, item.name, item.poster)
+                                    }
+                                }
                             },
                         )
                     }

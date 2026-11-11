@@ -107,6 +107,8 @@ import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.livetv.model.LiveChannel
 import com.nuvio.tv.livetv.model.LiveTvSettings
 import com.nuvio.tv.livetv.model.effectiveGuideSize
+import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.ui.theme.NuvioTheme
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.hazeEffect
@@ -718,6 +720,31 @@ private fun LiveTvGuideScreenBody(
         onFindInNuvio()
     }
 
+    // An addon stream playing in the guide's preview window (it isn't a playlist channel).
+    var addonPreviewChannel by remember { mutableStateOf<LiveChannel?>(null) }
+    var addonPreviewPoster by remember { mutableStateOf<String?>(null) }
+
+    fun previewAddonStream(stream: Stream, item: MetaPreview) {
+        val url = stream.getStreamUrl() ?: return
+        val channel = LiveChannel(
+            key = "addon:${item.apiType}:${item.id}:${url.hashCode()}",
+            sourceId = "",
+            sourceName = stream.addonName,
+            name = item.name,
+            tvgId = null,
+            tvgName = null,
+            logo = item.logo ?: item.poster,
+            groupId = ChannelGroup.ADDONS,
+            group = "Addons",
+            number = 0,
+            url = url,
+        )
+        addonPreviewChannel = channel
+        addonPreviewPoster = item.poster ?: item.background
+        groupsOpen = true
+        viewModel.playback.play(channel, overrideUrl = url)
+    }
+
     val focusedChannel = channels.getOrNull(row)
     val focusedPrograms = rememberGuidePrograms(focusedChannel, programs[focusedChannel?.key].orEmpty(), now, settings.epgPastHours)
 
@@ -745,8 +772,8 @@ private fun LiveTvGuideScreenBody(
     // While browsing the group list, the info panel stays on what's playing in the preview;
     // it only follows the highlight when you're moving through the channels themselves.
     val browsingGroups = groupsOpen && !gridFocused
-    val playingChannel = viewModel.channelByKey(playback.channelKey)
-    val headerChannel = if (browsingGroups && playingChannel != null) playingChannel else focusedChannel
+    val playingChannel = addonPreviewChannel ?: viewModel.channelByKey(playback.channelKey)
+    val headerChannel = addonPreviewChannel ?: if (browsingGroups && playingChannel != null) playingChannel else focusedChannel
     val headerBlock = if (browsingGroups && playingChannel != null) {
         val headerPrograms = if (playingChannel.key == focusedChannel?.key) focusedPrograms
         else rememberGuidePrograms(playingChannel, programs[playingChannel.key].orEmpty(), now, settings.epgPastHours)
@@ -906,12 +933,23 @@ private fun LiveTvGuideScreenBody(
     var rootBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var previewBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var headerGlassBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    // The Addons browser is not a channel list: no info bar or preview of the last channel.
     LaunchedEffect(ui.selectedGroupId) {
         if (ui.selectedGroupId == ChannelGroup.ADDONS) {
-            previewBounds = null
-            viewModel.playback.stop()
             groupsOpen = true
+        } else if (addonPreviewChannel != null) {
+            viewModel.playback.stop()
+            addonPreviewChannel = null
+            addonPreviewPoster = null
+        }
+    }
+    LaunchedEffect(playback.channelKey) {
+        val fake = addonPreviewChannel ?: return@LaunchedEffect
+        if (playback.channelKey != fake.key) {
+            delay(250)
+            if (playback.channelKey != fake.key && addonPreviewChannel?.key == fake.key) {
+                addonPreviewChannel = null
+                addonPreviewPoster = null
+            }
         }
     }
     // Only a Back press that *started* in the guide counts as "hold Back" here.
@@ -1025,11 +1063,10 @@ private fun LiveTvGuideScreenBody(
                 )
         ) {
             // ---------------------------------------------------------------- header
-            if (ui.selectedGroupId != ChannelGroup.ADDONS) {
             GuideHeader(
                 channel = headerChannel,
                 block = headerBlock,
-                poster = headerPoster,
+                poster = addonPreviewPoster ?: headerPoster,
                 onSurfaceAttached = { viewModel.playback.onSurfaceAttached() },
                 onPreviewBounds = { previewBounds = it },
                 onGlassBounds = { headerGlassBounds = it },
@@ -1044,12 +1081,10 @@ private fun LiveTvGuideScreenBody(
                 },
                 onRecordings = onOpenRecordings,
                 onMultiView = onOpenMultiView,
-                onQuickChannels = { quickChannelsOpen = true },
-                quickFocus = quickChannelsFocus,
                 playlistName = if (settings.showPlaylistInInfo) headerChannel?.sourceId?.let { playlistNames[it] } else null,
                 settings = settings,
                 now = now,
-                showPreview = settings.showPreview,
+                showPreview = settings.showPreview || ui.selectedGroupId == ChannelGroup.ADDONS,
                 player = viewModel.playback.player,
                 playingKey = playback.channelKey,
                 playbackBuffering = playback.isBuffering,
@@ -1057,18 +1092,13 @@ private fun LiveTvGuideScreenBody(
                 catchupTitle = playback.catchupTitle,
                 status = status.message.takeIf { settings.showImportProgress && status.loading }
             )
-            }
 
             // ---------------------------------------------------------------- groups + guide
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(
-                        start = 56.dp,
-                        // The Addons browser has no info bar above it.
-                        top = if (ui.selectedGroupId == ChannelGroup.ADDONS) 20.dp else 0.dp,
-                    )
+                    .padding(start = 56.dp)
             ) {
                 // As wide as the longest group name needs, up to the full width (190dp) and never
                 // below a small minimum. Based on every group, so it doesn't move while browsing.
@@ -1225,6 +1255,7 @@ private fun LiveTvGuideScreenBody(
                     AddonBrowserPanel(
                         modifier = Modifier.weight(1f),
                         onOpenStream = onOpenStream,
+                        onPreviewStream = { stream, item -> previewAddonStream(stream, item) },
                         onBackToGroups = { focusGroups() },
                         focusTick = addonBrowserFocusTick,
                     )
@@ -2413,9 +2444,6 @@ private fun GuideHeader(
     onRecordings: () -> Unit = {},
     /** Opens the six-channel Multi-view grid. */
     onMultiView: () -> Unit = {},
-    /** Opens the quick channel list (under Multi-view). */
-    onQuickChannels: () -> Unit = {},
-    quickFocus: FocusRequester = FocusRequester()
 ) {
     if (!settings.showProgramDetails && !showPreview) {
         Row(
@@ -2427,9 +2455,7 @@ private fun GuideHeader(
             status?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 13.sp) }
             Spacer(Modifier.width(16.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                GuideMultiViewButton(onOpen = onMultiView, onDown = { runCatching { quickFocus.requestFocus() } })
-                Spacer(Modifier.height(4.dp))
-                GuideQuickChannelsButton(Modifier.focusRequester(quickFocus), onOpen = onQuickChannels, onDown = onGearDown)
+                GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
             }
             Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
@@ -2585,9 +2611,7 @@ private fun GuideHeader(
         // guide's display settings, in the corner.
         Row {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                GuideMultiViewButton(onOpen = onMultiView, onDown = { runCatching { quickFocus.requestFocus() } })
-                Spacer(Modifier.height(4.dp))
-                GuideQuickChannelsButton(Modifier.focusRequester(quickFocus), onOpen = onQuickChannels, onDown = onGearDown)
+                GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
             }
             Spacer(Modifier.width(6.dp))
             GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
