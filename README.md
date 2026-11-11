@@ -64,13 +64,13 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 ### Android TV / Google TV — Downloader app
 
 1. Install **Downloader by AFTVnews** on your TV.
-2. Open Downloader and enter this code:
+2. Open Downloader and enter this short link in the URL field:
 
    ```text
-   lucidnuvio
+   tinyurl.com/lucidnuvio
    ```
 
-   Or use the full short link `tinyurl.com/lucidnuvio`. It downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
+   It downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
 
 Scan the QR code with your phone to open the download:
 
@@ -107,7 +107,7 @@ curl -L -o LucidNuvioTV.apk \
 
 - [Nuvio](https://github.com/lucidconviction/NuvioTV_Rdnutz) — the original Nuvio TV experience.
 - **Nuvio One / Nuvio + IPTV** — the Live TV and IPTV foundation.
-- [SmartTube](https://github.com/yuliskov/SmartTube) — YouTube playback engine inspiration.
+- The open-source projects whose playback and TV interface libraries make this app possible.
 - All playlist, guide and sports data belongs to its respective providers.
 
 ## License
