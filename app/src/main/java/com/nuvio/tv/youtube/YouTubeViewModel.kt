@@ -6,8 +6,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.liskovsoft.mediaserviceinterfaces.ContentService
 import com.liskovsoft.mediaserviceinterfaces.data.MediaGroup
+import com.liskovsoft.mediaserviceinterfaces.data.CommentGroup
+import com.liskovsoft.mediaserviceinterfaces.data.CommentItem
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItem
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo
+import com.liskovsoft.mediaserviceinterfaces.data.MediaItemMetadata
 import com.liskovsoft.sharedutils.prefs.GlobalPreferences
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
 import kotlinx.coroutines.CompletableDeferred
@@ -98,6 +101,36 @@ data class YtPlayable(
     /** Still safe to play from, without asking YouTube again. */
     val isFresh: Boolean get() = android.os.SystemClock.elapsedRealtime() - lookedUpAt < 20 * 60 * 1000L
 }
+
+/** Metadata shown in the player's info panel. */
+data class YtVideoInfo(
+    val title: String,
+    val author: String?,
+    val authorImageUrl: String?,
+    val description: String?,
+    val viewCount: String?,
+    val likeCount: String?,
+    val publishedDate: String?,
+    val durationMs: Long,
+)
+
+/** One YouTube comment, top-level or a reply. */
+data class YtComment(
+    val id: String,
+    val author: String?,
+    val authorPhoto: String?,
+    val message: String,
+    val published: String?,
+    val likeCount: String?,
+    val replyCount: String?,
+    val nestedKey: String?,
+    val isLiked: Boolean,
+)
+
+data class YtCommentPage(
+    val comments: List<YtComment>,
+    val nextKey: String?,
+)
 
 /**
  * The YouTube section's data. Everything here is shown only inside the YouTube page; nothing is
@@ -877,6 +910,55 @@ open class YouTubeViewModel (private val context: Context, autoSelect: Boolean =
             runCatching { content.clearSearchHistory() }
             _suggestions.value = emptyList()
         }
+    }
+
+    suspend fun videoInfo(videoId: String): Result<YtVideoInfo> = withContext(Dispatchers.IO) {
+        runCatching {
+            val info = service.mediaItemService.getMetadataObserve(videoId).blockingFirst()
+            YtVideoInfo(
+                title = info.title.orEmpty(),
+                author = info.author,
+                authorImageUrl = info.authorImageUrl,
+                description = info.description,
+                viewCount = info.viewCount,
+                likeCount = info.likeCount,
+                publishedDate = info.publishedDate,
+                durationMs = info.durationMs,
+            )
+        }
+    }
+
+    /** The video's top-level comments. Needs the watch page's comments key. */
+    suspend fun videoComments(videoId: String): Result<YtCommentPage> = withContext(Dispatchers.IO) {
+        runCatching {
+            val info = service.mediaItemService.getMetadataObserve(videoId).blockingFirst()
+            val key = info.commentsKey?.takeIf { it.isNotBlank() }
+                ?: error("Comments aren't available for this video.")
+            commentPage(key)
+        }
+    }
+
+    /** A comment's replies, or the next page of comments, by its continuation key. */
+    suspend fun commentReplies(key: String): Result<YtCommentPage> = withContext(Dispatchers.IO) {
+        runCatching { commentPage(key) }
+    }
+
+    private fun commentPage(key: String): YtCommentPage {
+        val group: CommentGroup = service.commentsService.getCommentsObserve(key).blockingFirst()
+        val comments = group.comments.orEmpty().filterNotNull().map { c: CommentItem ->
+            YtComment(
+                id = c.id.orEmpty(),
+                author = c.authorName,
+                authorPhoto = c.authorPhoto,
+                message = c.message.orEmpty(),
+                published = c.publishedDate,
+                likeCount = c.likeCount,
+                replyCount = c.replyCount,
+                nestedKey = c.nestedCommentsKey,
+                isLiked = c.isLiked,
+            )
+        }
+        return YtCommentPage(comments, group.nextCommentsKey)
     }
 
     fun clearError() { _error.value = null }

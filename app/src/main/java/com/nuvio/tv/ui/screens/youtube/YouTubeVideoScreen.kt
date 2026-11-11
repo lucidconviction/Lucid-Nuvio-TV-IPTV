@@ -1,36 +1,55 @@
+@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
+
 package com.nuvio.tv.ui.screens.youtube
 
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -40,9 +59,11 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.media3.common.Player
@@ -51,14 +72,20 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
 import com.nuvio.tv.livetv.ui.LivePlayerSurface
 import com.nuvio.tv.music.MusicPlaybackFactory
 import com.nuvio.tv.music.MusicStream
 import com.nuvio.tv.music.YouTubeMusicService
 import com.nuvio.tv.ui.theme.NuvioTheme
 import com.nuvio.tv.ui.util.LocalPictureInPicture
+import com.nuvio.tv.youtube.YtComment
+import com.nuvio.tv.youtube.YtCommentPage
+import com.nuvio.tv.youtube.YtVideoInfo
+import com.nuvio.tv.youtube.YouTubePlaybackSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
@@ -67,7 +94,9 @@ class YouTubeVideoViewModel @Inject constructor(
     val history: YouTubeHistoryRepository,
 ) : ViewModel()
 
-/** A full-screen YouTube video: used by Sports replays and the YouTube Continue Watching entry. */
+private enum class YtPanel { INFO, MORE, COMMENTS }
+
+/** A full-screen YouTube video with the info, source-list and comments panels. */
 @Composable
 fun YouTubeVideoScreen(
     videoId: String,
@@ -77,28 +106,76 @@ fun YouTubeVideoScreen(
 ) {
     val context = LocalContext.current
     val pip = LocalPictureInPicture.current
-    val resolved by produceState<Result<MusicStream>?>(null, videoId) {
-        value = viewModel.youtube.resolve(videoId)
+    val initialEntry = remember(videoId) {
+        YouTubePlaybackSession.current(videoId)
+            ?: YouTubePlaybackSession.Entry(videoId, title, null)
+    }
+    var current by remember(videoId) { mutableStateOf(initialEntry) }
+    var advanceTo by remember { mutableStateOf<YouTubePlaybackSession.Entry?>(null) }
+
+    val resolved by produceState<Result<MusicStream>?>(null, current.videoId) {
+        value = viewModel.youtube.resolve(current.videoId)
     }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
+    var playingEntry by remember { mutableStateOf(initialEntry) }
     var isPlaying by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
     var showControls by remember { mutableStateOf(true) }
     var controlsTick by remember { mutableIntStateOf(0) }
+    var panel by remember { mutableStateOf<YtPanel?>(null) }
+    var info by remember { mutableStateOf<YtVideoInfo?>(null) }
+    var infoLoading by remember { mutableStateOf(false) }
+    var infoError by remember { mutableStateOf<String?>(null) }
     val rootFocus = remember { FocusRequester() }
+    var controlIndex by remember { mutableIntStateOf(3) }
+
+    fun revealControls() {
+        showControls = true
+        controlsTick++
+        controlIndex = 3
+    }
+
+    fun activateControl(index: Int) {
+        when (index) {
+            0 -> onBack()
+            1 -> pip.enter()
+            2 -> player?.let { if (it.isPlaying) it.pause() else it.play() }
+            3 -> panel = if (panel == YtPanel.INFO) null else YtPanel.INFO
+            4 -> panel = if (panel == YtPanel.MORE) null else YtPanel.MORE
+            5 -> panel = if (panel == YtPanel.COMMENTS) null else YtPanel.COMMENTS
+        }
+        if (index >= 3) revealControls()
+    }
+
+    fun switchTo(entry: YouTubePlaybackSession.Entry) {
+        if (entry.videoId == current.videoId) {
+            panel = null
+            return
+        }
+        player = null
+        current = entry
+        panel = null
+        revealControls()
+    }
 
     LaunchedEffect(Unit) {
         delay(80)
         runCatching { rootFocus.requestFocus() }
     }
-    LaunchedEffect(showControls, controlsTick) {
-        if (showControls) {
+    LaunchedEffect(showControls, controlsTick, panel) {
+        if (showControls && panel == null) {
             delay(5_000)
             showControls = false
-        } else {
+        } else if (!showControls) {
             delay(30)
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(showControls, panel, current.videoId) {
+        if (panel == null) {
+            delay(40)
             runCatching { rootFocus.requestFocus() }
         }
     }
@@ -114,70 +191,130 @@ fun YouTubeVideoScreen(
         })
         created.prepare()
         created.play()
+        playingEntry = current
         player = created
     }
 
     LaunchedEffect(player) {
-        val current = player ?: return@LaunchedEffect
+        val currentPlayer = player ?: return@LaunchedEffect
         var saveTick = 0
         while (true) {
-            isPlaying = current.isPlaying
-            positionMs = current.currentPosition.coerceAtLeast(0L)
-            durationMs = current.duration.coerceAtLeast(0L)
+            isPlaying = currentPlayer.isPlaying
+            positionMs = currentPlayer.currentPosition.coerceAtLeast(0L)
+            durationMs = currentPlayer.duration.coerceAtLeast(0L)
             if (++saveTick >= 12 && durationMs > 0L) {
                 saveTick = 0
-                viewModel.history.record(videoId, title, positionMs, durationMs)
+                viewModel.history.record(
+                    playingEntry.videoId,
+                    playingEntry.title.ifBlank { title },
+                    positionMs,
+                    durationMs,
+                )
+            }
+            if (currentPlayer.playbackState == Player.STATE_ENDED && advanceTo == null) {
+                val next = YouTubePlaybackSession.next(current.videoId)
+                if (next != null) advanceTo = next else revealControls()
             }
             delay(400L)
         }
     }
 
+    LaunchedEffect(advanceTo) {
+        val next = advanceTo ?: return@LaunchedEffect
+        advanceTo = null
+        player = null
+        current = next
+        panel = null
+        revealControls()
+    }
+
     val currentPlayer = player
     DisposableEffect(currentPlayer) {
         onDispose {
-            currentPlayer?.let { current ->
-                val duration = current.duration.coerceAtLeast(0L)
-                val position = current.currentPosition.coerceAtLeast(0L)
-                if (duration > 0L) viewModel.history.record(videoId, title, position, duration)
-                current.release()
+            currentPlayer?.let { p ->
+                val duration = p.duration.coerceAtLeast(0L)
+                val position = p.currentPosition.coerceAtLeast(0L)
+                if (duration > 0L) {
+                    viewModel.history.record(playingEntry.videoId, playingEntry.title.ifBlank { title }, position, duration)
+                }
+                p.release()
             }
             if (player === currentPlayer) player = null
         }
     }
 
-    BackHandler { onBack() }
+    LaunchedEffect(panel, current.videoId) {
+        if (panel == YtPanel.INFO) {
+            infoLoading = true
+            infoError = null
+            info = null
+            viewModel.youtube.videoInfo(current.videoId)
+                .onSuccess { info = it }
+                .onFailure { infoError = it.message }
+            infoLoading = false
+        }
+    }
+
+    BackHandler {
+        if (panel != null) panel = null else onBack()
+    }
 
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             .focusRequester(rootFocus)
-            .focusable()
+            .focusable(enabled = panel == null)
             .onPreviewKeyEvent { event ->
+                if (panel != null) return@onPreviewKeyEvent false
                 if (event.type == KeyEventType.KeyDown) {
                     controlsTick++
                     if (!showControls) {
                         showControls = true
+                        controlIndex = 3
                         return@onPreviewKeyEvent true
                     }
-                    return@onPreviewKeyEvent false
+                    val code = event.nativeKeyEvent.keyCode
+                    if (code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+                        code == AndroidKeyEvent.KEYCODE_ENTER ||
+                        code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+                    ) {
+                        activateControl(controlIndex)
+                        return@onPreviewKeyEvent true
+                    }
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            controlIndex = if (controlIndex < 3) (controlIndex - 1).coerceAtLeast(0)
+                            else (controlIndex - 1).coerceAtLeast(3)
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionRight -> {
+                            controlIndex = if (controlIndex < 3) (controlIndex + 1).coerceAtMost(2)
+                            else (controlIndex + 1).coerceAtMost(5)
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp -> {
+                            if (controlIndex >= 3) controlIndex -= 3
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionDown -> {
+                            if (controlIndex < 3) controlIndex += 3
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionCenter, Key.Enter -> {
+                            activateControl(controlIndex)
+                            return@onPreviewKeyEvent true
+                        }
+                        else -> return@onPreviewKeyEvent false
+                    }
                 }
                 if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
                 controlsTick++
-                when (event.key) {
-                    Key.DirectionLeft -> {
-                        player?.seekTo((player?.currentPosition ?: 0L) - 10_000L)
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        player?.seekTo((player?.currentPosition ?: 0L) + 10_000L)
-                        true
-                    }
-                    Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
-                        player?.let { if (it.isPlaying) it.pause() else it.play() }
-                        true
-                    }
-                    else -> false
+                if (event.key == Key.MediaPlayPause) {
+                    player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    true
+                } else {
+                    false
                 }
             },
     ) {
@@ -186,88 +323,471 @@ fun YouTubeVideoScreen(
             useSurfaceView = true,
             modifier = Modifier.fillMaxSize(),
         )
+
         if (!pip.isInPip && showControls) {
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent, Color.Black.copy(alpha = 0.75f)),
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent, Color.Black.copy(alpha = 0.78f)),
+                    ),
                 ),
-            ),
-        )
-        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("Back")
-                }
-                Text(
-                    title,
-                    style = NuvioTheme.textStyles.sectionTitle,
-                    color = NuvioTheme.colors.TextPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Button(
-                    onClick = { pip.enter() },
-                    colors = ButtonDefaults.colors(
-                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.85f),
-                        contentColor = NuvioTheme.colors.TextPrimary,
-                    ),
-                ) {
-                    Icon(
+            )
+            Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    YtControl("Back", Icons.Default.ArrowBack, focused = controlIndex == 0, onClick = { activateControl(0) })
+                    Text(
+                        current.title.ifBlank { title },
+                        style = NuvioTheme.textStyles.sectionTitle,
+                        color = NuvioTheme.colors.TextPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    YtControl(
+                        null,
                         Icons.Default.PictureInPictureAlt,
-                        contentDescription = "Picture in picture",
-                        modifier = Modifier.size(22.dp),
+                        focused = controlIndex == 1,
+                        modifier = Modifier.size(50.dp),
+                        onClick = { activateControl(1) },
                     )
-                }
-                Button(
-                    onClick = { player?.let { if (it.isPlaying) it.pause() else it.play() } },
-                    colors = ButtonDefaults.colors(
-                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.85f),
-                        contentColor = NuvioTheme.colors.TextPrimary,
-                    ),
-                ) {
-                    Icon(
+                    YtControl(
+                        null,
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(22.dp),
+                        focused = controlIndex == 2,
+                        modifier = Modifier.size(50.dp),
+                        onClick = { activateControl(2) },
                     )
                 }
-            }
-            Spacer(Modifier.weight(1f))
-            error?.let {
-                Text(it, color = NuvioTheme.colors.Error, style = NuvioTheme.textStyles.body)
-                Spacer(Modifier.height(8.dp))
-            }
-            if (resolved == null) {
-                Text("Preparing video…", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
-            } else if (resolved?.isFailure == true && error == null) {
-                Text(
-                    resolved?.exceptionOrNull()?.message ?: "Couldn't play this video.",
-                    color = NuvioTheme.colors.TextSecondary,
-                    style = NuvioTheme.textStyles.body,
-                )
-            }
-            if (durationMs > 0L) {
-                val fraction = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-                Box(
-                    Modifier.fillMaxWidth().height(6.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50)),
+                Spacer(Modifier.weight(1f))
+                error?.let {
+                    Text(it, color = NuvioTheme.colors.Error, style = NuvioTheme.textStyles.body)
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (resolved == null) {
+                    Text("Preparing video…", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+                } else if (resolved?.isFailure == true && error == null) {
+                    Text(
+                        resolved?.exceptionOrNull()?.message ?: "Couldn't play this video.",
+                        color = NuvioTheme.colors.TextSecondary,
+                        style = NuvioTheme.textStyles.body,
+                    )
+                }
+                // Info / More videos / Comments, centred just above the progress bar.
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier.fillMaxWidth(fraction).height(6.dp)
-                            .background(NuvioTheme.colors.TextPrimary, RoundedCornerShape(50)),
+                    YtControl(
+                        "Info",
+                        Icons.Default.Info,
+                        focused = controlIndex == 3,
+                        selected = panel == YtPanel.INFO,
+                        onClick = { activateControl(3) },
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    YtControl(
+                        "More videos",
+                        Icons.Default.VideoLibrary,
+                        focused = controlIndex == 4,
+                        selected = panel == YtPanel.MORE,
+                        onClick = { activateControl(4) },
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    YtControl(
+                        "Comments",
+                        Icons.Default.Comment,
+                        focused = controlIndex == 5,
+                        selected = panel == YtPanel.COMMENTS,
+                        onClick = { activateControl(5) },
                     )
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "${formatTime(positionMs)} / ${formatTime(durationMs)}",
-                    style = NuvioTheme.textStyles.metadata,
-                    color = NuvioTheme.colors.TextSecondary,
-                )
+                if (durationMs > 0L) {
+                    val fraction = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                    Box(
+                        Modifier.fillMaxWidth().height(6.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50)),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth(fraction).height(6.dp)
+                                .background(NuvioTheme.colors.TextPrimary, RoundedCornerShape(50)),
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.TextSecondary,
+                    )
+                }
             }
         }
+
+        val openPanel = panel
+        if (openPanel != null) {
+            YouTubeSidePanel(
+                panel = openPanel,
+                current = current,
+                info = info,
+                infoLoading = infoLoading,
+                infoError = infoError,
+                youtube = viewModel.youtube,
+                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.30f).align(Alignment.CenterEnd),
+                onClose = { panel = null },
+                onPick = { switchTo(it) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun YtControl(
+    label: String?,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    focused: Boolean,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val highlight = focused || selected
+    val background = if (highlight) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.82f)
+    val content = if (highlight) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(background)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (label == null) {
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(22.dp))
+        } else {
+            Row(
+                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(label, fontSize = 13.sp, color = content)
+            }
+        }
+    }
+}
+
+@Composable
+private fun YouTubeSidePanel(
+    panel: YtPanel,
+    current: YouTubePlaybackSession.Entry,
+    info: YtVideoInfo?,
+    infoLoading: Boolean,
+    infoError: String?,
+    youtube: YouTubeMusicService,
+    modifier: Modifier = Modifier,
+    onClose: () -> Unit,
+    onPick: (YouTubePlaybackSession.Entry) -> Unit,
+) {
+    Box(modifier.background(Color.Black.copy(alpha = 0.40f))) {
+        when (panel) {
+            YtPanel.INFO -> VideoInfoPanel(current, info, infoLoading, infoError, onClose)
+            YtPanel.MORE -> MoreVideosPanel(current, onPick, onClose)
+            YtPanel.COMMENTS -> CommentsPanel(current.videoId, youtube, onClose)
+        }
+    }
+}
+
+@Composable
+private fun VideoInfoPanel(
+    current: YouTubePlaybackSession.Entry,
+    info: YtVideoInfo?,
+    loading: Boolean,
+    error: String?,
+    onClose: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+    val closeFocus = remember { FocusRequester() }
+    val panelFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    BackHandler { onClose() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { panelFocus.requestFocus() }
+    }
+    Column(
+        Modifier.fillMaxSize()
+            .focusRequester(panelFocus)
+            .focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown && (e.key == Key.DirectionDown || e.key == Key.DirectionUp)) {
+                    scope.launch { listState.scrollBy(if (e.key == Key.DirectionDown) 140f else -140f) }
+                    true
+                } else false
+            },
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Info", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary, modifier = Modifier.weight(1f))
+            Button(onClick = onClose, modifier = Modifier.focusRequester(closeFocus)) { Text("Close") }
+        }
+        LazyColumn(state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+            item {
+                Text(current.title, style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
+                Spacer(Modifier.height(8.dp))
+                if (loading) {
+                    Text("Loading video info…", color = NuvioTheme.colors.TextSecondary)
+                } else if (error != null) {
+                    Text(error, color = NuvioTheme.colors.Warning)
+                } else {
+                    val meta = info
+                    if (meta != null) {
+                        Text(
+                            listOfNotNull(
+                                meta.author,
+                                meta.viewCount?.let { "$it views" },
+                                meta.publishedDate,
+                            ).joinToString(" · "),
+                            style = NuvioTheme.textStyles.metadata,
+                            color = NuvioTheme.colors.TextSecondary,
+                        )
+                        meta.likeCount?.let {
+                            Spacer(Modifier.height(6.dp))
+                            Text("$it likes", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            meta.description?.takeIf { it.isNotBlank() } ?: "No description.",
+                            style = NuvioTheme.textStyles.body,
+                            color = NuvioTheme.colors.TextPrimary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreVideosPanel(
+    current: YouTubePlaybackSession.Entry,
+    onPick: (YouTubePlaybackSession.Entry) -> Unit,
+    onClose: () -> Unit,
+) {
+    val entries = remember(current.videoId) {
+        YouTubePlaybackSession.all().ifEmpty { listOf(current) }
+    }
+    val firstFocus = remember { FocusRequester() }
+    BackHandler { onClose() }
+    LaunchedEffect(entries) {
+        delay(80)
+        runCatching { firstFocus.requestFocus() }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("More videos", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary, modifier = Modifier.weight(1f))
+            Button(onClick = onClose) { Text("Close") }
+        }
+        if (entries.size <= 1) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No other videos in this list.", color = NuvioTheme.colors.TextSecondary)
+            }
+            return@Column
+        }
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        ) {
+            itemsIndexed(entries, key = { _, e -> e.videoId }) { index, entry ->
+                Button(
+                    onClick = { onPick(entry) },
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    contentPadding = PaddingValues(8.dp),
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (entry.videoId == current.videoId) NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.8f) else Color.Transparent,
+                        contentColor = NuvioTheme.colors.TextPrimary,
+                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                    ),
+                ) {
+                    AsyncImage(
+                        model = entry.poster,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.width(104.dp).height(59.dp).clip(RoundedCornerShape(8.dp)),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(entry.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                        entry.author?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis, style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentsPanel(
+    videoId: String,
+    youtube: YouTubeMusicService,
+    onClose: () -> Unit,
+) {
+    var comments by remember(videoId) { mutableStateOf<List<YtComment>>(emptyList()) }
+    var loading by remember(videoId) { mutableStateOf(true) }
+    var error by remember(videoId) { mutableStateOf<String?>(null) }
+    var replyTo by remember(videoId) { mutableStateOf<YtComment?>(null) }
+    var replies by remember(videoId) { mutableStateOf<List<YtComment>>(emptyList()) }
+    var repliesLoading by remember(videoId) { mutableStateOf(false) }
+    var repliesError by remember(videoId) { mutableStateOf<String?>(null) }
+
+    val firstCommentFocus = remember { FocusRequester() }
+    val firstReplyFocus = remember { FocusRequester() }
+
+    LaunchedEffect(videoId) {
+        loading = true
+        error = null
+        youtube.comments(videoId)
+            .onSuccess {
+                comments = it.comments
+            }
+            .onFailure { error = it.message ?: "Couldn't load comments." }
+        loading = false
+    }
+    LaunchedEffect(replyTo) {
+        val comment = replyTo ?: return@LaunchedEffect
+        val key = comment.nestedKey ?: return@LaunchedEffect
+        repliesLoading = true
+        repliesError = null
+        replies = emptyList()
+        youtube.replies(key)
+            .onSuccess { replies = it.comments }
+            .onFailure { repliesError = it.message ?: "Couldn't load replies." }
+        repliesLoading = false
+    }
+    LaunchedEffect(replyTo, loading) {
+        delay(90)
+        runCatching {
+            if (replyTo == null) firstCommentFocus.requestFocus() else firstReplyFocus.requestFocus()
+        }
+    }
+    BackHandler(enabled = replyTo == null) { onClose() }
+    BackHandler(enabled = replyTo != null) { replyTo = null }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (replyTo != null) {
+                Button(
+                    onClick = { replyTo = null },
+                ) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Comments", fontSize = 12.sp)
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                if (replyTo == null) "Comments" else "Replies",
+                style = NuvioTheme.textStyles.sectionTitle,
+                color = NuvioTheme.colors.TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = onClose) { Text("Close") }
+        }
+        if (replyTo == null) {
+            when {
+                loading -> LoadingText("Loading comments…")
+                error != null -> LoadingText(error.orEmpty())
+                comments.isEmpty() -> LoadingText("No comments yet.")
+                else -> LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    itemsIndexed(comments, key = { _, c -> c.id.ifBlank { c.hashCode().toString() } }) { index, comment ->
+                        CommentRow(
+                            comment = comment,
+                            modifier = Modifier.fillMaxWidth()
+                                .then(if (index == 0) Modifier.focusRequester(firstCommentFocus) else Modifier),
+                            onClick = { if (comment.nestedKey != null) replyTo = comment },
+                        )
+                    }
+                }
+            }
+        } else {
+            when {
+                repliesLoading -> LoadingText("Loading replies…")
+                repliesError != null -> LoadingText(repliesError.orEmpty())
+                replies.isEmpty() -> LoadingText("No replies.")
+                else -> LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    itemsIndexed(replies, key = { _, c -> c.id.ifBlank { c.hashCode().toString() } }) { index, reply ->
+                        CommentRow(
+                            comment = reply,
+                            modifier = Modifier.fillMaxWidth()
+                                .then(if (index == 0) Modifier.focusRequester(firstReplyFocus) else Modifier),
+                            onClick = {},
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingText(text: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(text, color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.body)
+    }
+}
+
+@Composable
+private fun CommentRow(
+    comment: YtComment,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        contentPadding = PaddingValues(10.dp),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = NuvioTheme.colors.TextPrimary,
+            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+            focusedContentColor = NuvioTheme.colors.TextPrimary,
+        ),
+    ) {
+        AsyncImage(
+            model = comment.authorPhoto,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(32.dp).clip(CircleShape),
+        )
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    comment.author.orEmpty(),
+                    style = NuvioTheme.textStyles.metadata,
+                    color = NuvioTheme.colors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                comment.published?.let {
+                    Text("  ·  $it", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextTertiary, maxLines = 1)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(comment.message, style = NuvioTheme.textStyles.bodyCompact, color = NuvioTheme.colors.TextPrimary, maxLines = 8, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                comment.likeCount?.takeIf { it.isNotBlank() }?.let {
+                    Text("👍 $it", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextTertiary)
+                }
+                comment.replyCount?.takeIf { it.isNotBlank() }?.let {
+                    Text("Replies $it", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                }
+            }
         }
     }
 }

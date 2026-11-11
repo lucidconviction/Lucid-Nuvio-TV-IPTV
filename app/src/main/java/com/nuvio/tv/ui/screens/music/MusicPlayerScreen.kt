@@ -148,6 +148,7 @@ fun MusicPlayerScreen(
     var showControls by remember { mutableStateOf(true) }
     var controlsTick by remember { mutableIntStateOf(0) }
     val rootFocus = remember { FocusRequester() }
+    val playFocus = remember { FocusRequester() }
     val lyricsState = rememberLazyListState()
     val scopeRef = rememberCoroutineScope()
 
@@ -155,6 +156,14 @@ fun MusicPlayerScreen(
     LaunchedEffect(Unit) {
         delay(80)
         runCatching { rootFocus.requestFocus() }
+    }
+    LaunchedEffect(showControls) {
+        if (showControls) {
+            for (wait in longArrayOf(60, 150, 300)) {
+                delay(wait)
+                if (runCatching { playFocus.requestFocus() }.isSuccess) break
+            }
+        }
     }
     LaunchedEffect(showControls, controlsTick, showPlaylists, showLyrics, showQueue) {
         if (showControls && !showPlaylists) {
@@ -414,6 +423,7 @@ fun MusicPlayerScreen(
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         if (isPlaying) "Pause" else "Play",
                         big = true,
+                        modifier = Modifier.focusRequester(playFocus),
                     ) { active?.player?.let { if (it.isPlaying) it.pause() else it.play() } }
                     MusicPlayerButton(Icons.Default.SkipNext, "Next") { viewModel.player.next() }
                     MusicPlayerButton(
@@ -458,11 +468,12 @@ private fun MusicPlayerButton(
     label: String,
     active: Boolean = false,
     big: Boolean = false,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     Button(
         onClick = onClick,
-        modifier = if (big) Modifier.size(74.dp) else Modifier,
+        modifier = modifier.then(if (big) Modifier.size(74.dp) else Modifier),
         colors = ButtonDefaults.colors(
             containerColor = if (active) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.75f),
             contentColor = if (active) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary,

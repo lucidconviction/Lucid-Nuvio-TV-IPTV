@@ -38,4 +38,10 @@ class YouTubeEngine @Inject constructor(
                 headers = playable.headers,
             )
         }
+
+    suspend fun videoInfo(videoId: String): Result<YtVideoInfo> = viewModel.videoInfo(videoId)
+
+    suspend fun comments(videoId: String): Result<YtCommentPage> = viewModel.videoComments(videoId)
+
+    suspend fun replies(key: String): Result<YtCommentPage> = viewModel.commentReplies(key)
 }

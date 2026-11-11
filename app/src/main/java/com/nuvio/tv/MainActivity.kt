@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.util.Log
 import android.util.Rational
 import android.view.KeyEvent
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -484,6 +485,8 @@ open class MainActivity : ComponentActivity() {
         }
         isFirstResumeAfterCreate = true
         window?.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        // The app is a leanback experience: don't let the TV/device screen time out while it's open.
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Wire the Activity-level launcher to the tracker
         externalPlaybackTracker.activityLauncher = externalPlayerLauncher

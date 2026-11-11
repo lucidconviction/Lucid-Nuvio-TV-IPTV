@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.nuvio.tv.ui.components.glassSurface
 import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.youtube.YouTubePlaybackSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -171,7 +172,15 @@ fun SportsReplaysScreen(
                         Text(row.title, style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             items(row.videos, key = { it.videoId }) { video ->
-                                ReplayCard(video) { onPlay(video.videoId, video.title) }
+                                ReplayCard(video) {
+                                    YouTubePlaybackSession.set(
+                                        row.videos.map {
+                                            YouTubePlaybackSession.Entry(it.videoId, it.title, it.thumbnail, it.author)
+                                        },
+                                        video.videoId,
+                                    )
+                                    onPlay(video.videoId, video.title)
+                                }
                             }
                         }
                     }

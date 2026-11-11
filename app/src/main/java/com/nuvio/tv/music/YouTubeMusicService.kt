@@ -1,6 +1,8 @@
 package com.nuvio.tv.music
 
 import com.nuvio.tv.youtube.YouTubeEngine
+import com.nuvio.tv.youtube.YtCommentPage
+import com.nuvio.tv.youtube.YtVideoInfo
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,4 +28,13 @@ class YouTubeMusicService @Inject constructor(
 
     suspend fun resolve(videoId: String): Result<MusicStream> =
         engine.resolve(videoId)
+
+    suspend fun videoInfo(videoId: String): Result<YtVideoInfo> =
+        engine.videoInfo(videoId)
+
+    suspend fun comments(videoId: String): Result<YtCommentPage> =
+        engine.comments(videoId)
+
+    suspend fun replies(key: String): Result<YtCommentPage> =
+        engine.replies(key)
 }

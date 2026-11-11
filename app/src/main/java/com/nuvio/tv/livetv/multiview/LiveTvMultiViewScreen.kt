@@ -62,8 +62,10 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -611,6 +613,11 @@ private fun MultiViewPane(
     LaunchedEffect(player, audible, paused, volume) {
         val current = player ?: return@LaunchedEffect
         current.volume = volume?.let { (it / 100f).coerceIn(0f, 1f) } ?: if (audible) 1f else 0f
+        // Muted windows don't decode audio: with six streams at once that saves a decoder each.
+        val audioOn = audible || (volume ?: 0) > 0
+        current.trackSelectionParameters = current.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !audioOn)
+            .build()
         if (paused) current.pause() else current.play()
     }
 
@@ -724,7 +731,22 @@ private fun buildLivePlayer(context: android.content.Context, stream: MultiViewS
     val mediaSource = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSource)
         .createMediaSource(MediaItem.fromUri(stream.url))
-    val player = ExoPlayer.Builder(context).build()
+    // Several decoders at once: cap the picture size/bitrate and keep the buffers small so every
+    // window can start and keep up together.
+    val trackSelector = DefaultTrackSelector(context).apply {
+        setParameters(
+            buildUponParameters()
+                .setMaxVideoSize(1280, 720)
+                .setMaxVideoBitrate(2_500_000),
+        )
+    }
+    val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(4_000, 12_000, 1_000, 2_000)
+        .build()
+    val player = ExoPlayer.Builder(context)
+        .setTrackSelector(trackSelector)
+        .setLoadControl(loadControl)
+        .build()
     val attrs = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)

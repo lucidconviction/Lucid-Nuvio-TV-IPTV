@@ -85,10 +85,9 @@ fun QuickChannelsSheet(
         }
     }
 
-    BackHandler(enabled = matchPopup != null) {
-        matchPopup = null
+    BackHandler {
+        if (matchPopup != null) matchPopup = null else onDismiss()
     }
-    BackHandler(enabled = matchPopup == null) { onDismiss() }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f)),
@@ -156,7 +155,12 @@ fun QuickChannelsSheet(
                     val curated = remember(filter, channels) {
                         QuickChannelList.all
                             .filter { QuickChannelList.inFilter(it, filter) }
-                            .map { quick -> quick to channels.filter { QuickChannelList.matches(quick, it) } }
+                            .map { quick ->
+                                quick to channels.asSequence()
+                                    .filter { QuickChannelList.matches(quick, it) }
+                                    .take(250)
+                                    .toList()
+                            }
                     }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
                         itemsIndexed(curated, key = { _, pair -> pair.first.displayName }) { index, pair ->

@@ -75,7 +75,8 @@ fun YouTubeHomeRow(
                                 .background(NuvioTheme.colors.BackgroundCard),
                         ) {
                             AsyncImage(
-                                model = entry.thumbnail,
+                                model = entry.thumbnail?.takeIf { it.isNotBlank() }
+                                    ?: "https://i.ytimg.com/vi/${entry.videoId}/hqdefault.jpg",
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxWidth().height(169.dp),
