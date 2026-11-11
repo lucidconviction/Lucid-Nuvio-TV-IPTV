@@ -655,6 +655,8 @@ data class ChannelGroup(
         const val FAVORITES = "__fav__"
         const val RECENT = "__recent__"
         const val SEARCH = "__search__"
+        /** The addon catalog browser, shown right under Favorites in the guide's group list. */
+        const val ADDONS = "__addons__"
         const val CUSTOM_PREFIX = "custom:"
     }
 }

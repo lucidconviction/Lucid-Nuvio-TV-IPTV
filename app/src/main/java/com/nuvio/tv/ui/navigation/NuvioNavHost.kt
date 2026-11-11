@@ -1472,6 +1472,16 @@ private fun PlaybackNavHost(
                 onOpenMultiView = {
                     navController.navigate(Screen.MultiView.route) { launchSingleTop = true }
                 },
+                onOpenStream = { videoId, contentType, title, poster ->
+                    navController.navigate(
+                        Screen.Stream.createRoute(
+                            videoId = videoId,
+                            contentType = contentType,
+                            title = title,
+                            poster = poster,
+                        )
+                    )
+                },
             )
         }
 

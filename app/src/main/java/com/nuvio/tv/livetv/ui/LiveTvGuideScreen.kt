@@ -167,6 +167,8 @@ fun LiveTvGuideScreen(
     /** A recording played here from Recordings or the Calendar: Back goes back to that screen (its route). */
     onReturnTo: (String) -> Unit = {},
     onOpenMultiView: () -> Unit = {},
+    /** Opens the stream picker for an item in the guide's Addons group. */
+    onOpenStream: (videoId: String, contentType: String, title: String, poster: String?) -> Unit = { _, _, _, _ -> },
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     // Hold the first draw until the saved settings and menu look are read. Before that the guide
@@ -186,6 +188,7 @@ fun LiveTvGuideScreen(
         onReturnToSports = onReturnToSports,
         onReturnTo = onReturnTo,
         onOpenMultiView = onOpenMultiView,
+        onOpenStream = onOpenStream,
         viewModel = viewModel
     )
 }
@@ -202,6 +205,7 @@ private fun LiveTvGuideScreenBody(
     onReturnToSports: () -> Unit = {},
     onReturnTo: (String) -> Unit = {},
     onOpenMultiView: () -> Unit = {},
+    onOpenStream: (videoId: String, contentType: String, title: String, poster: String?) -> Unit = { _, _, _, _ -> },
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     // Full screen happens right here, TiviMate style: the same video view grows from the
@@ -326,6 +330,8 @@ private fun LiveTvGuideScreenBody(
     // The group list slides in from the left when you press Left, and slides away again when
     // you pick a group or go back to the channels, giving the guide the full width.
     var groupsOpen by remember { mutableStateOf(false) }
+    // Moves focus into the Addons browser when Right is pressed on its group tile.
+    var addonBrowserFocusTick by remember { mutableIntStateOf(0) }
     var leftTapPending by remember { mutableStateOf(false) }
     // Up on the first channel: a tap wraps to the last, holding it goes to the ⚙ in the top bar.
     var upTopPending by remember { mutableStateOf(false) }
@@ -900,6 +906,14 @@ private fun LiveTvGuideScreenBody(
     var rootBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var previewBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var headerGlassBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    // The Addons browser is not a channel list: no info bar or preview of the last channel.
+    LaunchedEffect(ui.selectedGroupId) {
+        if (ui.selectedGroupId == ChannelGroup.ADDONS) {
+            previewBounds = null
+            viewModel.playback.stop()
+            groupsOpen = true
+        }
+    }
     // Only a Back press that *started* in the guide counts as "hold Back" here.
     var backPressStartedHere by remember { mutableStateOf(false) }
     // Guide left alone for 2 minutes while a channel plays in the preview, with the guide itself
@@ -1011,6 +1025,7 @@ private fun LiveTvGuideScreenBody(
                 )
         ) {
             // ---------------------------------------------------------------- header
+            if (ui.selectedGroupId != ChannelGroup.ADDONS) {
             GuideHeader(
                 channel = headerChannel,
                 block = headerBlock,
@@ -1042,13 +1057,18 @@ private fun LiveTvGuideScreenBody(
                 catchupTitle = playback.catchupTitle,
                 status = status.message.takeIf { settings.showImportProgress && status.loading }
             )
+            }
 
             // ---------------------------------------------------------------- groups + guide
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(start = 56.dp)
+                    .padding(
+                        start = 56.dp,
+                        // The Addons browser has no info bar above it.
+                        top = if (ui.selectedGroupId == ChannelGroup.ADDONS) 20.dp else 0.dp,
+                    )
             ) {
                 // As wide as the longest group name needs, up to the full width (190dp) and never
                 // below a small minimum. Based on every group, so it doesn't move while browsing.
@@ -1167,6 +1187,16 @@ private fun LiveTvGuideScreenBody(
                         } else if (g.id == ChannelGroup.SEARCH) {
                             LiveTvSearchBridge.origin.value = LiveTvSearchBridge.GUIDE
                             onOpenNuvioSearch()
+                        } else if (g.id == ChannelGroup.ADDONS) {
+                            if (g.id != ui.selectedGroupId) {
+                                viewModel.selectGroup(g.id)
+                                row = 0
+                            }
+                            resetToNow()
+                            // Keep the groups visible: the Addons browser is the middle and
+                            // right columns beside it.
+                            groupsOpen = true
+                            nameFocus = false
                         } else {
                             if (g.id != ui.selectedGroupId) {
                                 viewModel.selectGroup(g.id)
@@ -1181,12 +1211,24 @@ private fun LiveTvGuideScreenBody(
                     onGroupMenu = { g -> if (!g.special) groupMenu = g },
                     searchFocusRequester = groupSearchFocus,
                     onRight = {
-                        column = GuideColumn.CHANNEL
-                        groupsOpen = false
-                        nameFocus = settings.browseByChannelName
-                        runCatching { gridFocus.requestFocus() }
+                        if (ui.selectedGroupId == ChannelGroup.ADDONS) {
+                            addonBrowserFocusTick++
+                        } else {
+                            column = GuideColumn.CHANNEL
+                            groupsOpen = false
+                            nameFocus = settings.browseByChannelName
+                            runCatching { gridFocus.requestFocus() }
+                        }
                     }
                 ) }
+                if (ui.selectedGroupId == ChannelGroup.ADDONS) {
+                    AddonBrowserPanel(
+                        modifier = Modifier.weight(1f),
+                        onOpenStream = onOpenStream,
+                        onBackToGroups = { focusGroups() },
+                        focusTick = addonBrowserFocusTick,
+                    )
+                } else {
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     // ---------------------------------------------------------------- time ruler
                     val channelColWidth = channelColumnWidth(settings)
@@ -1638,6 +1680,7 @@ private fun LiveTvGuideScreenBody(
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -3485,7 +3528,7 @@ private fun GroupItem(
             Icon(Icons.Default.Lock, contentDescription = "Locked", tint = focusedSecondaryTextColor(focused), modifier = Modifier.size(gdp(14f)))
         } else if (moving) {
             LiveText("⇅", color = colors.text, size = gsp(16f), weight = FontWeight.Bold)
-        } else if (showCount && group.id != ChannelGroup.SEARCH) {
+        } else if (showCount && group.id != ChannelGroup.SEARCH && group.id != ChannelGroup.ADDONS) {
             LiveText(group.count.toString(), color = focusedSecondaryTextColor(focused), size = gsp(12f))
         }
     }

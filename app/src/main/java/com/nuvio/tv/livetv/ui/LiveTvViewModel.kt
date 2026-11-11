@@ -1682,6 +1682,8 @@ internal fun buildUi(
     val groups = mutableListOf<ChannelGroup>()
     groups += ChannelGroup(ChannelGroup.SEARCH, "Search", 0, special = true)
     if (s.showFavoritesGroup) groups += ChannelGroup(ChannelGroup.FAVORITES, "Favorites", favorites.size, special = true)
+    // The addon catalog browser sits directly under Favorites.
+    groups += ChannelGroup(ChannelGroup.ADDONS, "Addons", 0, special = true)
     if (s.showRecentGroup) groups += ChannelGroup(ChannelGroup.RECENT, "Recently watched", recent.size, special = true)
     if (s.showAllChannelsGroup) groups += ChannelGroup(ChannelGroup.ALL, "All channels", visible.size, special = true)
 

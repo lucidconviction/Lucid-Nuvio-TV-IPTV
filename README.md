@@ -12,6 +12,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Recordings, scheduled recordings, reminders and a TV guide that stays out of the way.
 - Quick Channels: curated channel names such as ESPN, CNN, Sky Sports and regional bundles, matched across every playlist.
 - Channel backup streams, channel numbers, custom logos, hidden channels and arrangeable groups.
+- Addons group: browse Live, TV, Sports and Other addon catalogs next to your channel groups, with their streams in the third column.
 - Multi-view for watching up to **six channels at once**.
 
 ### Multi-view
@@ -59,6 +60,11 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - External player support and playback diagnostics.
 - Smooth transitions and glass-style panels throughout the app.
 - The screen stays awake while the app is open.
+
+### Tracking
+- Connect **Trakt**, **Simkl** and **MDBList** from Settings → Tracking.
+- Scrobble playback and sync watch progress, libraries and lists across devices.
+- Choose which service supplies your library, watch progress and recommendations.
 
 ## Install
 
