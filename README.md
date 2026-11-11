@@ -64,13 +64,13 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 ### Android TV / Google TV — Downloader app
 
 1. Install **Downloader by AFTVnews** on your TV.
-2. Open Downloader and enter this short link in the URL field:
+2. Enter the Downloader code:
 
    ```text
-   tinyurl.com/lucidnuvio
+   1823357
    ```
 
-   It downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
+   Or use the short link `tinyurl.com/lucidnuvio`. The code downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
 
 Scan the QR code with your phone to open the download:
 
