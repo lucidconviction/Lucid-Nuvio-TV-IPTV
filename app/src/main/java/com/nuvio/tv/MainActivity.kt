@@ -1474,6 +1474,10 @@ open class MainActivity : ComponentActivity() {
                             AmbientModeHost(
                                 controller = ambientIdleController,
                                 allowed = currentRoute?.startsWith("player/") != true &&
+                                    // Full-screen video routes: the idle slideshow must never
+                                    // cover a YouTube video or the music player.
+                                    currentRoute?.startsWith("youtube/") != true &&
+                                    currentRoute != Screen.MusicPlayer.route &&
                                     autoNextOverlay == null &&
                                     !isTrailerPlaying &&
                                     liveTvPlaying == null,

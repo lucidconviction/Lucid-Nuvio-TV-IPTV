@@ -5,6 +5,7 @@ package com.nuvio.tv.ui.screens.youtube
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
@@ -73,6 +74,7 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.nuvio.tv.livetv.ui.KeepScreenAwake
 import com.nuvio.tv.livetv.ui.LivePlayerSurface
 import com.nuvio.tv.music.MusicPlaybackFactory
 import com.nuvio.tv.music.MusicStream
@@ -96,6 +98,12 @@ class YouTubeVideoViewModel @Inject constructor(
 
 private enum class YtPanel { INFO, MORE, COMMENTS }
 
+/** How far one D-pad press jumps in the progress bar. */
+private const val YT_SEEK_STEP_MS = 10_000L
+
+/** The seek bar's place in the control ring, after the row of panel buttons. */
+private const val YT_SEEK_CONTROL = 6
+
 /** A full-screen YouTube video with the info, source-list and comments panels. */
 @Composable
 fun YouTubeVideoScreen(
@@ -106,6 +114,9 @@ fun YouTubeVideoScreen(
 ) {
     val context = LocalContext.current
     val pip = LocalPictureInPicture.current
+    // The activity already asks for this, but setting it on the screen's own view also covers
+    // devices whose screen saver ignores the window flag while a video is playing.
+    KeepScreenAwake(true)
     val initialEntry = remember(videoId) {
         YouTubePlaybackSession.current(videoId)
             ?: YouTubePlaybackSession.Entry(videoId, title, null)
@@ -137,6 +148,21 @@ fun YouTubeVideoScreen(
         controlIndex = 3
     }
 
+    /** Moves the video by [deltaMs] and keeps the seek bar focused so the user can keep scrubbing. */
+    fun seekBy(deltaMs: Long) {
+        player?.let { p ->
+            val duration = if (durationMs > 0L) durationMs else p.duration.coerceAtLeast(0L)
+            val target = (p.currentPosition + deltaMs).coerceAtLeast(0L).let {
+                if (duration > 0L) it.coerceAtMost(duration) else it
+            }
+            p.seekTo(target)
+            positionMs = target
+        }
+        showControls = true
+        controlsTick++
+        controlIndex = YT_SEEK_CONTROL
+    }
+
     fun activateControl(index: Int) {
         when (index) {
             0 -> onBack()
@@ -145,8 +171,13 @@ fun YouTubeVideoScreen(
             3 -> panel = if (panel == YtPanel.INFO) null else YtPanel.INFO
             4 -> panel = if (panel == YtPanel.MORE) null else YtPanel.MORE
             5 -> panel = if (panel == YtPanel.COMMENTS) null else YtPanel.COMMENTS
+            YT_SEEK_CONTROL -> player?.let { if (it.isPlaying) it.pause() else it.play() }
         }
-        if (index >= 3) revealControls()
+        if (index in 3..5) revealControls()
+        if (index == YT_SEEK_CONTROL) {
+            showControls = true
+            controlsTick++
+        }
     }
 
     fun switchTo(entry: YouTubePlaybackSession.Entry) {
@@ -268,13 +299,28 @@ fun YouTubeVideoScreen(
             .onPreviewKeyEvent { event ->
                 if (panel != null) return@onPreviewKeyEvent false
                 if (event.type == KeyEventType.KeyDown) {
-                    controlsTick++
-                    if (!showControls) {
-                        showControls = true
-                        controlIndex = 3
+                    val code = event.nativeKeyEvent.keyCode
+                    // Dedicated rewind/fast-forward buttons work even when the controls are hidden.
+                    if (code == AndroidKeyEvent.KEYCODE_MEDIA_REWIND ||
+                        code == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                    ) {
+                        seekBy(if (code == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD) YT_SEEK_STEP_MS else -YT_SEEK_STEP_MS)
                         return@onPreviewKeyEvent true
                     }
-                    val code = event.nativeKeyEvent.keyCode
+                    controlsTick++
+                    if (!showControls) {
+                        // Left/right scrubs straight away and leaves the seek bar focused;
+                        // any other key just brings the controls back.
+                        when (event.key) {
+                            Key.DirectionLeft -> seekBy(-YT_SEEK_STEP_MS)
+                            Key.DirectionRight -> seekBy(YT_SEEK_STEP_MS)
+                            else -> {
+                                showControls = true
+                                controlIndex = 3
+                            }
+                        }
+                        return@onPreviewKeyEvent true
+                    }
                     if (code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
                         code == AndroidKeyEvent.KEYCODE_ENTER ||
                         code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
@@ -284,21 +330,35 @@ fun YouTubeVideoScreen(
                     }
                     when (event.key) {
                         Key.DirectionLeft -> {
-                            controlIndex = if (controlIndex < 3) (controlIndex - 1).coerceAtLeast(0)
-                            else (controlIndex - 1).coerceAtLeast(3)
+                            if (controlIndex == YT_SEEK_CONTROL) {
+                                seekBy(-YT_SEEK_STEP_MS)
+                            } else {
+                                controlIndex = if (controlIndex < 3) (controlIndex - 1).coerceAtLeast(0)
+                                else (controlIndex - 1).coerceAtLeast(3)
+                            }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionRight -> {
-                            controlIndex = if (controlIndex < 3) (controlIndex + 1).coerceAtMost(2)
-                            else (controlIndex + 1).coerceAtMost(5)
+                            if (controlIndex == YT_SEEK_CONTROL) {
+                                seekBy(YT_SEEK_STEP_MS)
+                            } else {
+                                controlIndex = if (controlIndex < 3) (controlIndex + 1).coerceAtMost(2)
+                                else (controlIndex + 1).coerceAtMost(5)
+                            }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionUp -> {
-                            if (controlIndex >= 3) controlIndex -= 3
+                            when {
+                                controlIndex == YT_SEEK_CONTROL -> controlIndex = 4
+                                controlIndex >= 3 -> controlIndex -= 3
+                            }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionDown -> {
-                            if (controlIndex < 3) controlIndex += 3
+                            when {
+                                controlIndex < 3 -> controlIndex += 3
+                                controlIndex in 3..5 -> controlIndex = YT_SEEK_CONTROL
+                            }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionCenter, Key.Enter -> {
@@ -404,20 +464,41 @@ fun YouTubeVideoScreen(
                 }
                 if (durationMs > 0L) {
                     val fraction = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                    val seekFocused = controlIndex == YT_SEEK_CONTROL
                     Box(
-                        Modifier.fillMaxWidth().height(6.dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50)),
+                        Modifier.fillMaxWidth()
+                            .height(if (seekFocused) 10.dp else 6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White.copy(alpha = if (seekFocused) 0.35f else 0.25f))
+                            .then(
+                                if (seekFocused) {
+                                    Modifier.border(2.dp, NuvioTheme.colors.TextPrimary, RoundedCornerShape(50))
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     ) {
                         Box(
-                            Modifier.fillMaxWidth(fraction).height(6.dp)
+                            Modifier.fillMaxWidth(fraction).fillMaxHeight()
                                 .background(NuvioTheme.colors.TextPrimary, RoundedCornerShape(50)),
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${formatTime(positionMs)} / ${formatTime(durationMs)}",
-                        style = NuvioTheme.textStyles.metadata,
-                        color = NuvioTheme.colors.TextSecondary,
-                    )
+                    Spacer(Modifier.height(if (seekFocused) 8.dp else 4.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                            style = NuvioTheme.textStyles.metadata,
+                            color = if (seekFocused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        if (seekFocused) {
+                            Text(
+                                "◀  10s      ▶  10s",
+                                style = NuvioTheme.textStyles.metadata,
+                                color = NuvioTheme.colors.TextPrimary,
+                            )
+                        }
+                    }
                 }
             }
         }

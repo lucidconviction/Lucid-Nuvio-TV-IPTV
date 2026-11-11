@@ -39,6 +39,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Player with Info, More videos and Comments panels.
 - Comments are two levels: the main comment list, then replies for any comment.
 - Autoplay next video from the list you started watching.
+- Remote seeking: press Down to focus the progress bar, then Left/Right to jump 10 seconds.
 - Picture-in-picture where the device supports it.
 - Continue watching on Home with thumbnails and progress.
 
