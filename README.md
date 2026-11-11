@@ -67,26 +67,26 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 2. Enter the Downloader code:
 
    ```text
-   1823357
+   9027970
    ```
 
-   Or use the short link `tinyurl.com/lucidnuvio`. The code downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
+   The code downloads the universal APK, which works on any device. The release page also has smaller arm64 and 32-bit APKs.
 
-Scan the QR code with your phone to open the download:
+Scan the QR code with your phone to open the release page:
 
 ![Download QR](screenshots/download-qr.png)
 
 ### Sideload with ADB
 
 ```bash
-adb install -r app-full-arm64-v8a-debug.apk
+adb install -r LucidNuvioTV-arm64-v8a.apk
 ```
 
 Or download the latest APK directly:
 
 ```bash
 curl -L -o LucidNuvioTV.apk \
-  https://github.com/lucidconviction/Lucid-Nuvio-TV-IPTV/releases/latest/download/app-full-universal-debug.apk
+  https://github.com/lucidconviction/Lucid-Nuvio-TV-IPTV/releases/latest/download/LucidNuvioTV-universal.apk
 ```
 
 ## Requirements

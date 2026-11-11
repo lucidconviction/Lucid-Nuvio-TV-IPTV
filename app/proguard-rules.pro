@@ -156,3 +156,6 @@
 # still optimised), so a crash or freeze report names the real screen and function instead
 # of scrambled letters like "za.q2.f".
 -keep,allowshrinking,allowoptimization class com.nuvio.tv.** { *; }
+
+# DNS-Java references JDK-only service classes that Android does not ship.
+-dontwarn sun.net.spi.nameservice.**

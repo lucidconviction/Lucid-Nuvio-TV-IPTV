@@ -177,8 +177,8 @@ android {
         buildConfigField("String", "SENTRY_DSN", buildConfigString(sentryDsn))
 
         // In-app updater (GitHub Releases)
-        buildConfigField("String", "GITHUB_OWNER", "\"homelessbrian\"")
-        buildConfigField("String", "GITHUB_REPO", "\"NuvioPlusIPTV\"")
+        buildConfigField("String", "GITHUB_OWNER", "\"lucidconviction\"")
+        buildConfigField("String", "GITHUB_REPO", "\"Lucid-Nuvio-TV-IPTV\"")
     }
 
     flavorDimensions += "distribution"
@@ -251,8 +251,10 @@ android {
             buildConfigField("String", "SPONSOR_NAMES", buildConfigString(sponsorNames))
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // The TV app is sideloaded; keeping resource shrinking off avoids a very slow R8 pass on
+            // the large MediaServiceCore graph while still producing a non-debuggable release APK.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

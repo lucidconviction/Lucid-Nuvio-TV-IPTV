@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO="lucidconviction/Lucid-Nuvio-TV-IPTV"
-ASSET="${1:-app-full-universal-debug.apk}"
+ASSET="${1:-LucidNuvioTV-universal.apk}"
 OUT="${2:-LucidNuvioTV.apk}"
 URL="https://github.com/${REPO}/releases/latest/download/${ASSET}"
 
