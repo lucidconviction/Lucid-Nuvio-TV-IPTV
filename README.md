@@ -11,7 +11,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Catch-up and archive playback where your provider supports it.
 - Recordings, scheduled recordings, reminders and a TV guide that stays out of the way.
 - Channel backup streams, channel numbers, custom logos, hidden channels and arrangeable groups.
-- Addons group: browse Live, TV, Sports and Other addon catalogs beside your channel groups and preview their streams in the info window.
+- Addons group: Live, TV, Sports and Other addon catalogs appear as normal guide channels, with full screen, channel surfing, stream menus and Recently Watched.
 - Multi-view for watching up to **four channels at once**.
 
 ### Multi-view
@@ -19,6 +19,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Named layouts per window count, plus quick window swapping.
 - Per-window volume, fullscreen, swap, refresh, close and pause from a long-press window menu.
 - Add channels from Addons, playlist groups, or the full channel list.
+- Saved layouts: keep up to ten window arrangements and restore them with their streams.
 - Controls hide after five seconds and return on any remote press, so the windows use the whole screen.
 - One sound or all sound, pause all, and screen-awake while multi-view is open.
 
@@ -106,6 +107,7 @@ curl -L -o LucidNuvioTV.apk \
 ## Notes
 
 - This app does not include any playlists, accounts or paid subscriptions.
+- The ambient/screensaver slideshow is off by default; enable it in Settings if you want it.
 - Picture-in-picture availability depends on the device and system version.
 - Recordings are stored locally on the device.
 - The app is built for the big screen: 1080p and 4K TVs are supported.

@@ -17,6 +17,9 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.nuvio.tv.core.network.NetworkResult
+import com.nuvio.tv.domain.repository.AddonRepository
+import com.nuvio.tv.domain.repository.StreamRepository
 import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.model.LiveChannel
 import com.nuvio.tv.ui.screens.settings.MemoryBudget
@@ -29,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -72,7 +76,9 @@ data class LiveTrackOption(
 @OptIn(UnstableApi::class)
 @Singleton
 class LiveTvPlaybackController @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val addonRepository: AddonRepository,
+    private val streamRepository: StreamRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -661,6 +667,54 @@ class LiveTvPlaybackController @Inject constructor(
     /** The catch-up now playing has actually started (pictures moving), at least once. */
     @Volatile private var archiveStarted = false
 
+    private var resolvingAddonKey: String? = null
+
+    /**
+     * Addon guide channels carry an "addon:<addonId>:<type>:<itemId>" address. The catalog item
+     * is fetched with the guide; its playable source is resolved only when it is actually played.
+     */
+    private fun resolveAndPlayAddon(channel: LiveChannel) {
+        if (resolvingAddonKey == channel.key) return
+        resolvingAddonKey = channel.key
+        _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        scope.launch {
+            val parts = channel.url.split(':', limit = 4)
+            val addonId = parts.getOrNull(1).orEmpty()
+            val type = parts.getOrNull(2).orEmpty()
+            val itemId = parts.getOrNull(3).orEmpty()
+            val addons = runCatching { addonRepository.getInstalledAddons().first() }.getOrDefault(emptyList())
+            val addon = addons.firstOrNull { it.id == addonId }
+            val result = if (addon != null && type.isNotBlank() && itemId.isNotBlank()) {
+                runCatching { streamRepository.getStreamsFromAddon(addon, type, itemId) }.getOrNull()
+            } else {
+                null
+            }
+            var url = (result as? NetworkResult.Success)?.data
+                ?.firstOrNull { it.getStreamUrl() != null }
+                ?.getStreamUrl()
+            // The catalog addon may carry only metadata; use another installed addon's streams.
+            if (url == null && type.isNotBlank() && itemId.isNotBlank()) {
+                for (other in addons) {
+                    if (other.id == addonId) continue
+                    val otherResult = runCatching { streamRepository.getStreamsFromAddon(other, type, itemId) }.getOrNull()
+                    url = (otherResult as? NetworkResult.Success)?.data
+                        ?.firstOrNull { it.getStreamUrl() != null }
+                        ?.getStreamUrl()
+                    if (url != null) break
+                }
+            }
+            resolvingAddonKey = null
+            if (url != null) {
+                play(channel.copy(url = url), overrideUrl = url)
+            } else {
+                _state.value = LivePlaybackState(
+                    channelKey = channel.key,
+                    error = "This addon stream could not be opened.",
+                )
+            }
+        }
+    }
+
     fun play(
         channel: LiveChannel,
         overrideUrl: String? = null,
@@ -676,6 +730,10 @@ class LiveTvPlaybackController @Inject constructor(
         /** Catch-up: the real time the link asks for, to check against the stream's own clock (null: don't check). */
         catchupExpectWallMs: Long? = null
     ) {
+        if (overrideUrl == null && channel.url.startsWith("addon:")) {
+            resolveAndPlayAddon(channel)
+            return
+        }
         // Something chosen to play (back from the background through a launcher row, say):
         // that wins over picking up what was on before.
         resumeAfterBackground = null

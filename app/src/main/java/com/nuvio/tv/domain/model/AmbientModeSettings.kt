@@ -1,7 +1,7 @@
 package com.nuvio.tv.domain.model
 
 data class AmbientModeSettings(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val timeoutMinutes: Int = DEFAULT_TIMEOUT_MINUTES,
     val catalogKeys: List<String> = emptyList()
 ) {

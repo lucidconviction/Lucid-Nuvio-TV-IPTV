@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Pause
@@ -100,6 +101,8 @@ fun LiveTvMultiViewScreen(
     viewModel: LiveTvViewModel = hiltViewModel(),
 ) {
     val streams by MultiViewRepository.streams.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) { MultiViewSavedLayouts.load(context) }
     val audibleId by MultiViewRepository.audibleId.collectAsStateWithLifecycle()
     val soundAll by MultiViewRepository.soundAll.collectAsStateWithLifecycle()
     val pauseAll by MultiViewRepository.pauseAll.collectAsStateWithLifecycle()
@@ -110,6 +113,7 @@ fun LiveTvMultiViewScreen(
     val addonBrowserViewModel: AddonBrowserViewModel = hiltViewModel()
     var showPicker by remember { mutableStateOf(streams.isEmpty()) }
     var showLayouts by remember { mutableStateOf(false) }
+    var showSavedLayouts by remember { mutableStateOf(false) }
     var swapMode by remember { mutableStateOf(false) }
     var swapFirst by remember { mutableStateOf<String?>(null) }
     var fullscreenId by remember { mutableStateOf<String?>(null) }
@@ -123,14 +127,14 @@ fun LiveTvMultiViewScreen(
     var controlsTick by remember { mutableIntStateOf(0) }
 
     // Windows fill the screen after five seconds without a key; any key brings the bars back.
-    LaunchedEffect(showControls, controlsTick, showPicker, showLayouts, paneMenuFor, swapMode) {
-        if (showControls && !showPicker && !showLayouts && paneMenuFor == null && !swapMode) {
+    LaunchedEffect(showControls, controlsTick, showPicker, showLayouts, showSavedLayouts, paneMenuFor, swapMode) {
+        if (showControls && !showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
             delay(5_000)
             showControls = false
         }
     }
     LaunchedEffect(showControls) {
-        if (showControls && !showPicker && !showLayouts && paneMenuFor == null && !swapMode) {
+        if (showControls && !showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
             delay(80)
             runCatching { controlsFocus.requestFocus() }
         } else if (!showControls) {
@@ -138,8 +142,8 @@ fun LiveTvMultiViewScreen(
             runCatching { rootFocus.requestFocus() }
         }
     }
-    LaunchedEffect(showPicker, showLayouts, paneMenuFor) {
-        if (showPicker || showLayouts || paneMenuFor != null) {
+    LaunchedEffect(showPicker, showLayouts, showSavedLayouts, paneMenuFor) {
+        if (showPicker || showLayouts || showSavedLayouts || paneMenuFor != null) {
             showControls = true
             controlsTick++
         }
@@ -152,14 +156,14 @@ fun LiveTvMultiViewScreen(
             val target = swapFirst ?: streams.firstOrNull()?.id
             val firstOther = streams.firstOrNull { it.id != target }?.id
             firstOther?.let { paneFocuses[it] }?.let { runCatching { it.requestFocus() } }
-        } else {
+        } else if (!showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null) {
             runCatching { controlsFocus.requestFocus() }
         }
     }
 
     // After a sheet closes, put the remote back on the control bar (otherwise focus is lost).
-    LaunchedEffect(showPicker, showLayouts, paneMenuFor, swapMode) {
-        if (!showPicker && !showLayouts && paneMenuFor == null && !swapMode) {
+    LaunchedEffect(showPicker, showLayouts, showSavedLayouts, paneMenuFor, swapMode) {
+        if (!showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
             delay(120)
             runCatching { controlsFocus.requestFocus() }
         }
@@ -170,6 +174,7 @@ fun LiveTvMultiViewScreen(
         when {
             fullscreenId != null -> fullscreenId = null
             paneMenuFor != null -> paneMenuFor = null
+            showSavedLayouts -> showSavedLayouts = false
             showLayouts -> showLayouts = false
             showPicker -> showPicker = false
             swapMode -> { swapMode = false; swapFirst = null }
@@ -196,7 +201,7 @@ fun LiveTvMultiViewScreen(
         if (showControls) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(18.dp))
                 .padding(horizontal = 14.dp, vertical = 8.dp),
         ) {
@@ -239,7 +244,7 @@ fun LiveTvMultiViewScreen(
         Spacer(Modifier.height(8.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(18.dp))
                 .padding(horizontal = 14.dp, vertical = 8.dp),
         ) {
@@ -254,6 +259,18 @@ fun LiveTvMultiViewScreen(
                 Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(5.dp))
                 Text(layoutLabel(layout))
+            }
+            Button(
+                onClick = { showSavedLayouts = true },
+                enabled = streams.isNotEmpty(),
+                colors = ButtonDefaults.colors(
+                    containerColor = NuvioTheme.colors.BackgroundElevated,
+                    contentColor = NuvioTheme.colors.TextPrimary,
+                ),
+            ) {
+                Icon(Icons.Default.Bookmarks, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("Saved")
             }
             Button(
                 onClick = { MultiViewRepository.setSoundAll(!soundAll) },
@@ -399,6 +416,21 @@ fun LiveTvMultiViewScreen(
         )
     }
 
+    if (showSavedLayouts) {
+        SavedLayoutsMenu(
+            currentLayout = layout,
+            currentStreams = streams,
+            onSave = {
+                MultiViewSavedLayouts.save(context, layout, streams)
+            },
+            onPick = { saved ->
+                MultiViewRepository.restore(saved.layout, saved.streams)
+                showSavedLayouts = false
+            },
+            onDismiss = { showSavedLayouts = false },
+        )
+    }
+
     paneMenuFor?.let { stream ->
         PaneMenu(
             stream = stream,
@@ -425,6 +457,80 @@ fun LiveTvMultiViewScreen(
             },
             onClose = { paneMenuFor = null },
         )
+    }
+}
+
+@Composable
+private fun SavedLayoutsMenu(
+    currentLayout: MultiViewLayout,
+    currentStreams: List<MultiViewStream>,
+    onSave: () -> Unit,
+    onPick: (SavedMultiViewLayout) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val firstFocus = remember { FocusRequester() }
+    BackHandler { onDismiss() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { firstFocus.requestFocus() }
+    }
+    val saved = MultiViewSavedLayouts.saved
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.width(520.dp).fillMaxHeight(0.8f)
+                .glassSurface(RoundedCornerShape(18.dp))
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Saved layouts", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
+            Text(
+                "${saved.size} of ${MultiViewSavedLayouts.MAX_SAVED} · ${layoutLabel(currentLayout)} · ${currentStreams.size} windows",
+                style = NuvioTheme.textStyles.metadata,
+                color = NuvioTheme.colors.TextSecondary,
+            )
+            Button(
+                onClick = onSave,
+                enabled = currentStreams.isNotEmpty() && saved.size < MultiViewSavedLayouts.MAX_SAVED,
+                modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
+            ) { Text(if (saved.size >= MultiViewSavedLayouts.MAX_SAVED) "10 layouts saved" else "Save this layout") }
+            if (saved.isEmpty()) {
+                Text(
+                    "No saved layouts yet.",
+                    style = NuvioTheme.textStyles.body,
+                    color = NuvioTheme.colors.TextSecondary,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(bottom = 8.dp),
+                ) {
+                    itemsIndexed(saved, key = { _, item -> item.name + item.layout.name + item.streams.size }) { _, item ->
+                        Button(
+                            onClick = { onPick(item) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.colors(
+                                containerColor = NuvioTheme.colors.BackgroundCard,
+                                contentColor = NuvioTheme.colors.TextPrimary,
+                                focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                focusedContentColor = NuvioTheme.colors.TextPrimary,
+                            ),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${item.streams.size} windows · ${layoutLabel(item.layout)}",
+                                    style = NuvioTheme.textStyles.metadata,
+                                    color = NuvioTheme.colors.TextSecondary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Close") }
+        }
     }
 }
 

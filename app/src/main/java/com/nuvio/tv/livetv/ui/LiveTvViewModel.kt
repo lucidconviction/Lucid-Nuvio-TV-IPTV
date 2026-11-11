@@ -78,7 +78,8 @@ data class LiveTvUiState(
 ) {
     /** The group to switch to so [channel] is in the list. */
     fun groupFor(channel: LiveChannel): String =
-        if (groups.any { it.id == ChannelGroup.ALL }) ChannelGroup.ALL else channel.groupId
+        if (channel.groupId == ChannelGroup.ADDONS && groups.any { it.id == ChannelGroup.ADDONS }) ChannelGroup.ADDONS
+        else if (groups.any { it.id == ChannelGroup.ALL }) ChannelGroup.ALL else channel.groupId
 }
 
 @HiltViewModel
@@ -88,6 +89,7 @@ class LiveTvViewModel @Inject constructor(
     val playback: LiveTvPlaybackController,
     private val session: LiveTvSession,
     private val channelStore: com.nuvio.tv.livetv.data.LiveTvChannelStore,
+    private val addonGuide: com.nuvio.tv.livetv.data.AddonGuideRepository,
     private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver,
     private val matcher247: com.nuvio.tv.livetv.data.LiveTv247Matcher,
     layoutPrefs: com.nuvio.tv.data.local.LayoutPreferenceDataStore,
@@ -100,6 +102,7 @@ class LiveTvViewModel @Inject constructor(
     init {
         // Google Drive sync (if connected): pick up a newer setup from another TV.
         driveSync.start()
+        addonGuide.ensureLoaded()
     }
 
 
@@ -194,7 +197,13 @@ class LiveTvViewModel @Inject constructor(
      * Channels with the user's renames and renumbering applied. Worked out once for the whole
      * app (guide, full screen and search share it) instead of once per screen.
      */
-    val displayChannels: StateFlow<List<LiveChannel>> = channelStore.displayChannels
+    val displayChannels: StateFlow<List<LiveChannel>> = combine(
+        channelStore.displayChannels,
+        addonGuide.channels,
+    ) { playlistChannels, addonChannels ->
+        if (addonChannels.isEmpty()) playlistChannels
+        else (playlistChannels + addonChannels).distinctBy { it.key }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, channelStore.displayChannels.value)
     private val channelKeyLookup = ChannelKeyLookup<LiveChannel> { it.key }
 
     val uiState: StateFlow<LiveTvUiState> = combine(
@@ -1621,6 +1630,8 @@ internal fun buildUi(
     // group: its channels still show in your own groups (customPool below).
     val notHidden = channels.filter { it.key !in user.hiddenChannels }
     val shown = notHidden.filter { it.groupId !in user.hiddenGroups }
+    // Addon channels are the Addons group; they must not also become a playlist group.
+    val playlistShown = shown.filter { it.groupId != ChannelGroup.ADDONS }
     // Parental controls: channels in locked groups stay out of every list until unlocked.
     val lockedIds = HashSet<String>()
     notHidden.distinctBy { it.groupId }.forEach { c ->
@@ -1682,8 +1693,13 @@ internal fun buildUi(
     val groups = mutableListOf<ChannelGroup>()
     groups += ChannelGroup(ChannelGroup.SEARCH, "Search", 0, special = true)
     if (s.showFavoritesGroup) groups += ChannelGroup(ChannelGroup.FAVORITES, "Favorites", favorites.size, special = true)
-    // The addon catalog browser sits directly under Favorites.
-    groups += ChannelGroup(ChannelGroup.ADDONS, "Addons", 0, special = true)
+    // Addon catalogs, shown as ordinary channels directly under Favorites.
+    groups += ChannelGroup(
+        ChannelGroup.ADDONS,
+        "Addons",
+        visible.count { it.groupId == ChannelGroup.ADDONS },
+        special = true,
+    )
     if (s.showRecentGroup) groups += ChannelGroup(ChannelGroup.RECENT, "Recently watched", recent.size, special = true)
     if (s.showAllChannelsGroup) groups += ChannelGroup(ChannelGroup.ALL, "All channels", visible.size, special = true)
 
@@ -1694,16 +1710,16 @@ internal fun buildUi(
         .map { g -> ChannelGroup(g.id, g.name, g.channelKeys.count { it in customPool }, locked = g.id in lockedIds) }
     regular += custom
     val playlistGroups = LinkedHashMap<String, Pair<String, Int>>()
-    shown.forEach { c ->
+    playlistShown.forEach { c ->
         val cur = playlistGroups[c.groupId]
         playlistGroups[c.groupId] = (cur?.first ?: c.group) to ((cur?.second ?: 0) + 1)
     }
     val groupSource = HashMap<String, String>()
-    shown.forEach { c -> groupSource.putIfAbsent(c.groupId, c.sourceId) }
+    playlistShown.forEach { c -> groupSource.putIfAbsent(c.groupId, c.sourceId) }
     // Each playlist's groups in the provider's own order where it gave one (Xtream logins),
     // not the order their channels happen to come in. Groups it didn't name follow.
     val providerRanks = com.nuvio.tv.livetv.model.PlaylistGroupOrder.ranks
-    val sourceIndex = HashMap<String, Int>().also { m -> shown.forEach { c -> m.putIfAbsent(c.sourceId, m.size) } }
+    val sourceIndex = HashMap<String, Int>().also { m -> playlistShown.forEach { c -> m.putIfAbsent(c.sourceId, m.size) } }
     val playlistGroupList = if (providerRanks.isEmpty()) playlistGroups.entries.toList()
     else playlistGroups.entries.sortedWith(
         compareBy({ sourceIndex[groupSource[it.key]] ?: Int.MAX_VALUE }, { providerRanks[it.key] ?: Int.MAX_VALUE })
@@ -1715,7 +1731,7 @@ internal fun buildUi(
     val orderIndex = user.groupOrder.withIndex().associate { (i, id) -> id to i }
     // Playlists in their own order (your own groups first), for keeping each playlist's
     // groups together when sorting by name.
-    val playlistIndex = HashMap<String, Int>().also { m -> shown.forEach { c -> m.putIfAbsent(c.sourceId, m.size) } }
+    val playlistIndex = HashMap<String, Int>().also { m -> playlistShown.forEach { c -> m.putIfAbsent(c.sourceId, m.size) } }
     val orderedRegular = when (s.groupSort) {
         // As the playlist lists them (your own groups first).
         "playlist" -> regular
@@ -1749,6 +1765,7 @@ internal fun buildUi(
     }
     val groupId = if (exactGroup) groupIdRaw ?: "" else groupIdRaw?.takeIf { id -> groups.any { it.id == id } } ?: defaultGroupId
     val rawList = when {
+        groupId == ChannelGroup.ADDONS -> sorted(visible.filter { it.groupId == ChannelGroup.ADDONS })
         groupId == ChannelGroup.ALL && s.showAllChannelsGroup -> ordered(ChannelGroup.ALL, visible)
         // "Playlist order" keeps your own order here; Number / Name sort these too.
         groupId == ChannelGroup.FAVORITES -> sorted(favorites)

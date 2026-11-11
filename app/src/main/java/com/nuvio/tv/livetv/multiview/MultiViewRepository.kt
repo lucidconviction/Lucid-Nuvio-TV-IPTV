@@ -90,6 +90,15 @@ object MultiViewRepository {
         _pauseAll.value = false
     }
 
+    /** Restores a saved layout and its streams, keeping at most four windows. */
+    fun restore(layout: MultiViewLayout, streams: List<MultiViewStream>) {
+        val restored = streams.take(MAX_STREAMS)
+        _streams.value = restored
+        _layout.value = layout
+        _audibleId.value = restored.firstOrNull()?.id
+        _pauseAll.value = false
+    }
+
     fun setAudible(id: String) {
         if (_streams.value.any { it.id == id }) _audibleId.value = id
     }
