@@ -32,7 +32,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -674,28 +677,57 @@ class LiveTvPlaybackController @Inject constructor(
     private var resolvingAddonKey: String? = null
     private data class CachedAddonUrl(val url: String, val atMs: Long)
     private val addonUrlCache = java.util.concurrent.ConcurrentHashMap<String, CachedAddonUrl>()
+    private val addonBackups = java.util.concurrent.ConcurrentHashMap<String, List<LiveChannel>>()
 
-    private suspend fun addonStreamUrl(addon: com.nuvio.tv.domain.model.Addon, type: String, itemId: String): String? {
+    /** All sources found for an addon guide channel, including the one playing. */
+    fun addonBackupsFor(key: String): List<LiveChannel> =
+        addonBackups[key] ?: addonBackups[key.substringBefore("#backup")].orEmpty()
+
+    /** A quick reachability check so a dead first link doesn't hold the preview on "Loading…". */
+    private suspend fun addonSourceReachable(url: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            fun probe(method: String): Boolean {
+                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method
+                    connectTimeout = 4_000
+                    readTimeout = 4_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "NuvioTV")
+                    if (method == "GET") setRequestProperty("Range", "bytes=0-0")
+                }
+                return try {
+                    connection.responseCode in 200..399
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            probe("HEAD") || probe("GET")
+        }.getOrDefault(false)
+    }
+
+    private suspend fun addonStreams(
+        addon: com.nuvio.tv.domain.model.Addon,
+        type: String,
+        itemId: String,
+    ): List<com.nuvio.tv.domain.model.Stream> {
         val result = withTimeoutOrNull(12_000) {
             streamRepository.getStreamsFromAddon(addon, type, itemId)
-        } ?: return null
-        return (result as? NetworkResult.Success)?.data
-            ?.firstOrNull { it.getStreamUrl() != null }
-            ?.getStreamUrl()
+        } ?: return emptyList()
+        return (result as? NetworkResult.Success)?.data.orEmpty()
     }
 
     /**
      * Addon guide channels carry an "addon:<addonId>:<type>:<itemId>" address. The catalog item
-     * is fetched with the guide; its playable source is resolved only when it is actually played.
-     * The first source is cached briefly, and other installed addons are asked in parallel when
-     * the catalog addon carries metadata only, so preview changes stay quick.
+     * is fetched with the guide; its playable sources are resolved when it is played. The first
+     * source is used for the preview, the rest become the player's backups.
      */
     private fun resolveAndPlayAddon(channel: LiveChannel) {
         if (resolvingAddonKey == channel.key) return
         val cached = addonUrlCache[channel.key]
             ?.takeIf { System.currentTimeMillis() - it.atMs < 5 * 60_000L }
         if (cached != null) {
-            play(channel.copy(url = cached.url), overrideUrl = cached.url)
+            val backups = addonBackupsFor(channel.key).drop(1).map { it.url }
+            play(channel.copy(url = cached.url), overrideUrl = cached.url, fallbacks = backups)
             return
         }
         resolvingAddonKey = channel.key
@@ -707,19 +739,53 @@ class LiveTvPlaybackController @Inject constructor(
             val itemId = parts.getOrNull(3).orEmpty()
             val addons = runCatching { addonRepository.getInstalledAddons().first() }.getOrDefault(emptyList())
             val owner = addons.firstOrNull { it.id == addonId }
-            var url = owner?.let { addonStreamUrl(it, type, itemId) }
-            if (url == null && type.isNotBlank() && itemId.isNotBlank()) {
-                url = coroutineScope {
+
+            val sources = ArrayList<Pair<String, com.nuvio.tv.domain.model.Stream>>()
+            owner?.let { addon ->
+                addonStreams(addon, type, itemId)
+                    .filter { it.getStreamUrl() != null }
+                    .forEach { stream -> sources += stream.getStreamUrl()!! to stream }
+            }
+            if (sources.isEmpty() && type.isNotBlank() && itemId.isNotBlank()) {
+                val others = coroutineScope {
                     addons.filter { it.id != addonId }
-                        .map { other -> async { addonStreamUrl(other, type, itemId) } }
+                        .map { other -> async { addonStreams(other, type, itemId) } }
                         .awaitAll()
-                        .firstOrNull { it != null }
+                }.flatten()
+                others.filter { it.getStreamUrl() != null }
+                    .forEach { stream -> sources += stream.getStreamUrl()!! to stream }
+            }
+
+            val uniqueSources = sources.distinctBy { it.first }
+            val probed = if (uniqueSources.size > 1) {
+                coroutineScope {
+                    uniqueSources.map { source -> async { source to addonSourceReachable(source.first) } }.awaitAll()
                 }
+            } else {
+                uniqueSources.map { it to true }
+            }
+            // Working links first, in their original order; a dead link is only a last resort.
+            val orderedSources = probed.filter { it.second }.map { it.first } +
+                probed.filterNot { it.second }.map { it.first }
+            val candidates = orderedSources
+                .mapIndexed { index, (url, stream) ->
+                    channel.copy(
+                        key = if (index == 0) channel.key else "${channel.key}#backup$index",
+                        url = url,
+                        name = channel.name,
+                        sourceName = listOfNotNull(stream.addonName, stream.name ?: stream.title)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" · "),
+                    )
+                }
+            if (candidates.isNotEmpty()) {
+                addonBackups[channel.key] = candidates
             }
             resolvingAddonKey = null
-            if (url != null) {
-                addonUrlCache[channel.key] = CachedAddonUrl(url, System.currentTimeMillis())
-                play(channel.copy(url = url), overrideUrl = url)
+            if (candidates.isNotEmpty()) {
+                val first = candidates.first()
+                addonUrlCache[channel.key] = CachedAddonUrl(first.url, System.currentTimeMillis())
+                play(first, overrideUrl = first.url, fallbacks = candidates.drop(1).map { it.url })
             } else {
                 _state.value = LivePlaybackState(
                     channelKey = channel.key,
@@ -1138,6 +1204,21 @@ class LiveTvPlaybackController @Inject constructor(
         if (!archive && ((awaitingFrame && neverStartedCount >= 2) || (!awaitingFrame && recentStalls.size >= 2)) &&
             tryGameFailover(ch, if (awaitingFrame) "never started" else "kept freezing")
         ) return
+        // An addon channel that never started: move to its next source before asking for a
+        // backup channel, so the preview doesn't sit on a dead link.
+        if (!archive && awaitingFrame && ch.key.startsWith("addon:")) {
+            val fb = fallbackUrls.removeFirstOrNull()
+            if (fb != null) {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Addon source didn't start on ${ch.name}; trying the next source")
+                p.stop()
+                neverStartedCount = 0
+                currentUrl = fb
+                p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = true))
+                p.prepare()
+                p.playWhenReady = true
+                return
+            }
+        }
         if (!archive && awaitingFrame && neverStartedCount >= 2 && onLiveFailure?.invoke(ch.key) == true) return
         com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
             "Channel ${ch.name} " + (if (awaitingFrame) "never started (nothing came in for ${STALL_MS / 1000}s)" else "stalled") +

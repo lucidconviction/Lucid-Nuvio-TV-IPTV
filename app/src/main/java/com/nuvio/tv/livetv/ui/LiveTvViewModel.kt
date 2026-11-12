@@ -94,8 +94,9 @@ class LiveTvViewModel @Inject constructor(
     private val matcher247: com.nuvio.tv.livetv.data.LiveTv247Matcher,
     layoutPrefs: com.nuvio.tv.data.local.LayoutPreferenceDataStore,
     driveSync: com.nuvio.tv.livetv.sync.LiveTvDriveSync,
-    val recorder: com.nuvio.tv.livetv.record.LiveTvRecorder,
+    private val recorder: com.nuvio.tv.livetv.record.LiveTvRecorder,
     val scheduler: com.nuvio.tv.livetv.record.LiveTvRecordingScheduler,
+    private val sportsRepository: com.nuvio.tv.livetv.sports.SportsRepository,
     private val hooks: com.nuvio.tv.livetv.player.LiveTvPlayerHooks
 ) : ViewModel(), com.nuvio.tv.livetv.player.LiveTvPlayerHooks.Owner {
 
@@ -340,6 +341,24 @@ class LiveTvViewModel @Inject constructor(
      */
     private fun switchToBackup(failedKey: String): Boolean {
         if (!settings.value.autoBackupChannel) return false
+        // An addon guide channel: the other resolved sources are its backups. (Sports addon
+        // channels also use addon: keys but have real URLs; those keep the normal path.)
+        if (failedKey.startsWith("addon:") && playback.playingChannel?.url?.startsWith("addon:") == true) {
+            val failed = playback.playingChannel?.takeIf { it.key == failedKey }
+            val current = playback.playingChannel?.key
+            val next = playback.addonBackupsFor(failedKey)
+                .firstOrNull { it.key != current && it.key !in backupTried }
+                ?: return false
+            backupTried += failedKey
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "Addon channel ${failed?.name ?: failedKey} won't play: switched to another source"
+            )
+            com.nuvio.tv.livetv.record.LiveTvNotice.show("${failed?.name ?: "Addon stream"} isn't working right now. Trying another source.")
+            lastBackupPick = next.key
+            switchingToBackup = true
+            try { preview(next) } finally { switchingToBackup = false }
+            return true
+        }
         // A channel this screen didn't switch to (started here or from Home, Sports…): a new
         // run of backups, so channels tried for an earlier one are tried again.
         if (failedKey != lastBackupPick) backupTried.clear()
@@ -374,6 +393,10 @@ class LiveTvViewModel @Inject constructor(
      * Empty when there are no others.
      */
     fun backupsFor(ch: LiveChannel): List<LiveChannel> {
+        if (ch.sourceId == com.nuvio.tv.livetv.sports.SportsAddonSource.SOURCE_ID) {
+            return sportsRepository.backupsForEvent(ch)
+        }
+        if (ch.key.startsWith("addon:") && ch.url.startsWith("addon:")) return playback.addonBackupsFor(ch.key)
         val index = backupIndex ?: return emptyList()
         val name = backupName(ch.name)
         if (name.length < 2) return emptyList()

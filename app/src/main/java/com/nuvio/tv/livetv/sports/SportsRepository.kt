@@ -416,6 +416,20 @@ class SportsRepository @Inject constructor(
         return (copies + others).firstOrNull()?.channel
     }
 
+    /**
+     * The player's Backups button while watching a Sports event: every stream/channel for that
+     * event, current first, then the other addon streams and channels showing it.
+     */
+    fun backupsForEvent(channel: LiveChannel): List<LiveChannel> {
+        val entry = matches.value.entries.firstOrNull { (_, list) ->
+            list.any { it.channel.key == channel.key }
+        } ?: return emptyList()
+        val ordered = entry.value.map { it.channel }.distinctBy { it.key }
+        val current = ordered.firstOrNull { it.key == channel.key } ?: channel
+        val others = ordered.filter { it.key != current.key }
+        return if (others.isEmpty()) emptyList() else listOf(current) + others
+    }
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
     private val _matching = MutableStateFlow(false)
