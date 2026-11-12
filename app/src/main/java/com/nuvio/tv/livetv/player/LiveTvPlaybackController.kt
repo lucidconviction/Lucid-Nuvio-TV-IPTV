@@ -28,7 +28,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -668,13 +672,32 @@ class LiveTvPlaybackController @Inject constructor(
     @Volatile private var archiveStarted = false
 
     private var resolvingAddonKey: String? = null
+    private data class CachedAddonUrl(val url: String, val atMs: Long)
+    private val addonUrlCache = java.util.concurrent.ConcurrentHashMap<String, CachedAddonUrl>()
+
+    private suspend fun addonStreamUrl(addon: com.nuvio.tv.domain.model.Addon, type: String, itemId: String): String? {
+        val result = withTimeoutOrNull(12_000) {
+            streamRepository.getStreamsFromAddon(addon, type, itemId)
+        } ?: return null
+        return (result as? NetworkResult.Success)?.data
+            ?.firstOrNull { it.getStreamUrl() != null }
+            ?.getStreamUrl()
+    }
 
     /**
      * Addon guide channels carry an "addon:<addonId>:<type>:<itemId>" address. The catalog item
      * is fetched with the guide; its playable source is resolved only when it is actually played.
+     * The first source is cached briefly, and other installed addons are asked in parallel when
+     * the catalog addon carries metadata only, so preview changes stay quick.
      */
     private fun resolveAndPlayAddon(channel: LiveChannel) {
         if (resolvingAddonKey == channel.key) return
+        val cached = addonUrlCache[channel.key]
+            ?.takeIf { System.currentTimeMillis() - it.atMs < 5 * 60_000L }
+        if (cached != null) {
+            play(channel.copy(url = cached.url), overrideUrl = cached.url)
+            return
+        }
         resolvingAddonKey = channel.key
         _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
         scope.launch {
@@ -683,28 +706,19 @@ class LiveTvPlaybackController @Inject constructor(
             val type = parts.getOrNull(2).orEmpty()
             val itemId = parts.getOrNull(3).orEmpty()
             val addons = runCatching { addonRepository.getInstalledAddons().first() }.getOrDefault(emptyList())
-            val addon = addons.firstOrNull { it.id == addonId }
-            val result = if (addon != null && type.isNotBlank() && itemId.isNotBlank()) {
-                runCatching { streamRepository.getStreamsFromAddon(addon, type, itemId) }.getOrNull()
-            } else {
-                null
-            }
-            var url = (result as? NetworkResult.Success)?.data
-                ?.firstOrNull { it.getStreamUrl() != null }
-                ?.getStreamUrl()
-            // The catalog addon may carry only metadata; use another installed addon's streams.
+            val owner = addons.firstOrNull { it.id == addonId }
+            var url = owner?.let { addonStreamUrl(it, type, itemId) }
             if (url == null && type.isNotBlank() && itemId.isNotBlank()) {
-                for (other in addons) {
-                    if (other.id == addonId) continue
-                    val otherResult = runCatching { streamRepository.getStreamsFromAddon(other, type, itemId) }.getOrNull()
-                    url = (otherResult as? NetworkResult.Success)?.data
-                        ?.firstOrNull { it.getStreamUrl() != null }
-                        ?.getStreamUrl()
-                    if (url != null) break
+                url = coroutineScope {
+                    addons.filter { it.id != addonId }
+                        .map { other -> async { addonStreamUrl(other, type, itemId) } }
+                        .awaitAll()
+                        .firstOrNull { it != null }
                 }
             }
             resolvingAddonKey = null
             if (url != null) {
+                addonUrlCache[channel.key] = CachedAddonUrl(url, System.currentTimeMillis())
                 play(channel.copy(url = url), overrideUrl = url)
             } else {
                 _state.value = LivePlaybackState(

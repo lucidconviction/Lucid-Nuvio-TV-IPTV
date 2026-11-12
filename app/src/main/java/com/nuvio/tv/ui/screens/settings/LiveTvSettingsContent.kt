@@ -281,7 +281,6 @@ private fun openOnLabel(page: String): String = when (page) {
     "LIVE_TV" -> "Live TV"
     "ON_DEMAND" -> "On Demand"
     "SPORTS" -> "Sports"
-    "MUSIC" -> "Music"
     "YOUTUBE" -> "YouTube"
     else -> "Home"
 }
@@ -1919,7 +1918,6 @@ internal fun LiveTvSettingsContent(
                 if (onDemandHas) add(SettingsPickerOption("ON_DEMAND", "On Demand"))
                 add(SettingsPickerOption("SPORTS", "Sports"))
                 add(SettingsPickerOption("YOUTUBE", "YouTube"))
-                add(SettingsPickerOption("MUSIC", "Music"))
             },
             selectedValue = s.openOn,
             onOptionSelected = { v -> update { it.copy(openOn = v) }; close() },

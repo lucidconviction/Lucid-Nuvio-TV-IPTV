@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Comment
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
@@ -102,7 +101,7 @@ private enum class YtPanel { INFO, MORE, COMMENTS }
 private const val YT_SEEK_STEP_MS = 10_000L
 
 /** The seek bar's place in the control ring, after the row of panel buttons. */
-private const val YT_SEEK_CONTROL = 6
+private const val YT_SEEK_CONTROL = 5
 
 /** A full-screen YouTube video with the info, source-list and comments panels. */
 @Composable
@@ -140,12 +139,12 @@ fun YouTubeVideoScreen(
     var infoLoading by remember { mutableStateOf(false) }
     var infoError by remember { mutableStateOf<String?>(null) }
     val rootFocus = remember { FocusRequester() }
-    var controlIndex by remember { mutableIntStateOf(3) }
+    var controlIndex by remember { mutableIntStateOf(2) }
 
     fun revealControls() {
         showControls = true
         controlsTick++
-        controlIndex = 3
+        controlIndex = 2
     }
 
     /** Moves the video by [deltaMs] and keeps the seek bar focused so the user can keep scrubbing. */
@@ -166,14 +165,13 @@ fun YouTubeVideoScreen(
     fun activateControl(index: Int) {
         when (index) {
             0 -> onBack()
-            1 -> pip.enter()
-            2 -> player?.let { if (it.isPlaying) it.pause() else it.play() }
-            3 -> panel = if (panel == YtPanel.INFO) null else YtPanel.INFO
-            4 -> panel = if (panel == YtPanel.MORE) null else YtPanel.MORE
-            5 -> panel = if (panel == YtPanel.COMMENTS) null else YtPanel.COMMENTS
+            1 -> player?.let { if (it.isPlaying) it.pause() else it.play() }
+            2 -> panel = if (panel == YtPanel.INFO) null else YtPanel.INFO
+            3 -> panel = if (panel == YtPanel.MORE) null else YtPanel.MORE
+            4 -> panel = if (panel == YtPanel.COMMENTS) null else YtPanel.COMMENTS
             YT_SEEK_CONTROL -> player?.let { if (it.isPlaying) it.pause() else it.play() }
         }
-        if (index in 3..5) revealControls()
+        if (index in 2..4) revealControls()
         if (index == YT_SEEK_CONTROL) {
             showControls = true
             controlsTick++
@@ -316,7 +314,7 @@ fun YouTubeVideoScreen(
                             Key.DirectionRight -> seekBy(YT_SEEK_STEP_MS)
                             else -> {
                                 showControls = true
-                                controlIndex = 3
+                                controlIndex = 2
                             }
                         }
                         return@onPreviewKeyEvent true
@@ -333,8 +331,8 @@ fun YouTubeVideoScreen(
                             if (controlIndex == YT_SEEK_CONTROL) {
                                 seekBy(-YT_SEEK_STEP_MS)
                             } else {
-                                controlIndex = if (controlIndex < 3) (controlIndex - 1).coerceAtLeast(0)
-                                else (controlIndex - 1).coerceAtLeast(3)
+                                controlIndex = if (controlIndex < 2) (controlIndex - 1).coerceAtLeast(0)
+                                else (controlIndex - 1).coerceAtLeast(2)
                             }
                             return@onPreviewKeyEvent true
                         }
@@ -342,22 +340,23 @@ fun YouTubeVideoScreen(
                             if (controlIndex == YT_SEEK_CONTROL) {
                                 seekBy(YT_SEEK_STEP_MS)
                             } else {
-                                controlIndex = if (controlIndex < 3) (controlIndex + 1).coerceAtMost(2)
-                                else (controlIndex + 1).coerceAtMost(5)
+                                controlIndex = if (controlIndex < 2) (controlIndex + 1).coerceAtMost(1)
+                                else (controlIndex + 1).coerceAtMost(4)
                             }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionUp -> {
                             when {
-                                controlIndex == YT_SEEK_CONTROL -> controlIndex = 4
-                                controlIndex >= 3 -> controlIndex -= 3
+                                controlIndex == YT_SEEK_CONTROL -> controlIndex = 3
+                                controlIndex in 2..4 -> controlIndex -= 2
                             }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionDown -> {
                             when {
-                                controlIndex < 3 -> controlIndex += 3
-                                controlIndex in 3..5 -> controlIndex = YT_SEEK_CONTROL
+                                controlIndex == 0 -> controlIndex = 2
+                                controlIndex == 1 -> controlIndex = 3
+                                controlIndex in 2..4 -> controlIndex = YT_SEEK_CONTROL
                             }
                             return@onPreviewKeyEvent true
                         }
@@ -405,17 +404,10 @@ fun YouTubeVideoScreen(
                     )
                     YtControl(
                         null,
-                        Icons.Default.PictureInPictureAlt,
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         focused = controlIndex == 1,
                         modifier = Modifier.size(50.dp),
                         onClick = { activateControl(1) },
-                    )
-                    YtControl(
-                        null,
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        focused = controlIndex == 2,
-                        modifier = Modifier.size(50.dp),
-                        onClick = { activateControl(2) },
                     )
                 }
                 Spacer(Modifier.weight(1f))
@@ -441,25 +433,25 @@ fun YouTubeVideoScreen(
                     YtControl(
                         "Info",
                         Icons.Default.Info,
-                        focused = controlIndex == 3,
+                        focused = controlIndex == 2,
                         selected = panel == YtPanel.INFO,
-                        onClick = { activateControl(3) },
+                        onClick = { activateControl(2) },
                     )
                     Spacer(Modifier.width(10.dp))
                     YtControl(
                         "More videos",
                         Icons.Default.VideoLibrary,
-                        focused = controlIndex == 4,
+                        focused = controlIndex == 3,
                         selected = panel == YtPanel.MORE,
-                        onClick = { activateControl(4) },
+                        onClick = { activateControl(3) },
                     )
                     Spacer(Modifier.width(10.dp))
                     YtControl(
                         "Comments",
                         Icons.Default.Comment,
-                        focused = controlIndex == 5,
+                        focused = controlIndex == 4,
                         selected = panel == YtPanel.COMMENTS,
-                        onClick = { activateControl(5) },
+                        onClick = { activateControl(4) },
                     )
                 }
                 if (durationMs > 0L) {

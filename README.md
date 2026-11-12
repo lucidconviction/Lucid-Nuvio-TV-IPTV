@@ -1,6 +1,6 @@
 # Lucid Nuvio TV IPTV
 
-A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV, Sports, YouTube and Music in one leanback interface built for a remote — no mouse, no touch, no keyboard required.
+A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV, Sports and YouTube in one leanback interface built for a remote — no mouse, no touch, no keyboard required.
 
 ![YouTube player](screenshots/youtube-player.png)
 
@@ -42,17 +42,7 @@ A TV-first streaming app for Android TV and Google TV. Nuvio's library, Live TV,
 - Comments are two levels: the main comment list, then replies for any comment.
 - Autoplay next video from the list you started watching.
 - Remote seeking: press Down to focus the progress bar, then Left/Right to jump 10 seconds.
-- Picture-in-picture where the device supports it.
 - Continue watching on Home with thumbnails and progress.
-
-### Music
-- Songs, artists, albums, playlists, genres and downloads.
-- Video and audio-only modes.
-- Synced lyrics, queue management and a full-screen player.
-- Automatic next track and crossfade between tracks.
-- Remote-first controls that hide after five seconds and return with Play focused.
-
-![Music](screenshots/music.png)
 
 ### Player
 - Subtitles, audio tracks, playback speed, aspect ratio and stream info.
