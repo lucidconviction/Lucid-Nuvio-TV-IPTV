@@ -44,4 +44,25 @@ class YouTubeEngine @Inject constructor(
     suspend fun comments(videoId: String): Result<YtCommentPage> = viewModel.videoComments(videoId)
 
     suspend fun replies(key: String): Result<YtCommentPage> = viewModel.commentReplies(key)
+
+    fun isSignedIn(): Boolean = viewModel.isSignedIn()
+
+    suspend fun setReaction(videoId: String, current: Int, target: Int): Result<Unit> =
+        viewModel.setReaction(videoId, current, target)
+
+    suspend fun setSubscribed(channelId: String, subscribed: Boolean): Result<Unit> =
+        viewModel.setSubscribed(channelId, subscribed)
+
+    suspend fun playlists(videoId: String): Result<List<YtPlaylist>> = viewModel.playlists(videoId)
+
+    suspend fun addToPlaylist(playlistId: String, videoId: String): Result<Unit> =
+        viewModel.addToPlaylist(playlistId, videoId)
+
+    suspend fun removeFromPlaylist(playlistId: String, videoId: String): Result<Unit> =
+        viewModel.removeFromPlaylist(playlistId, videoId)
+
+    suspend fun createPlaylist(name: String, videoId: String): Result<Unit> =
+        viewModel.createPlaylist(name, videoId)
+
+    suspend fun nextEntry(videoId: String): YouTubePlaybackSession.Entry? = viewModel.nextEntry(videoId)
 }

@@ -26,6 +26,7 @@ object YouTubeSettings {
     private const val KEY_CODEC = "codec_preference"
     private const val KEY_FEED_PREVIEW = "feed_preview"
     private const val KEY_CONTENT_REGION = "content_region"
+    private const val KEY_RESUME = "resume_playback"
 
     /** SponsorBlock's segment types, in the order they're listed. */
     val sponsorCategories: List<Pair<String, String>> = listOf(
@@ -174,6 +175,13 @@ object YouTubeSettings {
 
     fun setAutoplayNext(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTOPLAY, on).apply()
+    }
+
+    /** Start a video where it was left, instead of from the beginning. */
+    fun resumePlayback(context: Context) = prefs(context).getBoolean(KEY_RESUME, true)
+
+    fun setResumePlayback(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_RESUME, on).apply()
     }
 
     /** Which video format to prefer when YouTube offers the same size in several. */

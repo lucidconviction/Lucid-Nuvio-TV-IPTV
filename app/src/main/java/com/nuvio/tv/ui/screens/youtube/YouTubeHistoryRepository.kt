@@ -72,6 +72,14 @@ class YouTubeHistoryRepository @Inject constructor(
         persist()
     }
 
+    /** Where to start [videoId] again, or 0 when it was never part-watched. */
+    fun resumePositionFor(videoId: String): Long {
+        val entry = _entries.value.firstOrNull { it.videoId == videoId } ?: return 0L
+        if (entry.durationMs <= 0L) return 0L
+        val percent = entry.positionMs * 100 / entry.durationMs
+        return if (percent in 3..94) entry.positionMs else 0L
+    }
+
     fun clear() {
         _entries.value = emptyList()
         persist()

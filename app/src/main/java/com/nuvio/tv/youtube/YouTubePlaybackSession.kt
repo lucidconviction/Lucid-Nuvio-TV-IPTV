@@ -31,4 +31,10 @@ object YouTubePlaybackSession {
         val index = list.indexOfFirst { it.videoId == videoId }
         return if (index >= 0) list.getOrNull(index + 1) else null
     }
+
+    fun previous(videoId: String): Entry? {
+        val list = entries
+        val index = list.indexOfFirst { it.videoId == videoId }
+        return if (index > 0) list[index - 1] else null
+    }
 }

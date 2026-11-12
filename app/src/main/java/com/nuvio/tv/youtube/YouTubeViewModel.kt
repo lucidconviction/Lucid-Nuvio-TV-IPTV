@@ -13,6 +13,7 @@ import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemMetadata
 import com.liskovsoft.sharedutils.prefs.GlobalPreferences
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
+import com.liskovsoft.youtubeapi.service.data.YouTubeMediaItem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -112,7 +113,21 @@ data class YtVideoInfo(
     val likeCount: String?,
     val publishedDate: String?,
     val durationMs: Long,
+    /** 0 = no reaction, 1 = liked, 2 = disliked. */
+    val likeStatus: Int = 0,
+    val channelId: String? = null,
+    val isSubscribed: Boolean = false,
 )
+
+/** A playlist the current video can be saved to, and whether it's already in it. */
+data class YtPlaylist(
+    val id: String,
+    val title: String,
+    val selected: Boolean,
+) {
+    val isWatchLater: Boolean
+        get() = id == "WL" || title.equals("Watch later", ignoreCase = true)
+}
 
 /** One YouTube comment, top-level or a reply. */
 data class YtComment(
@@ -924,8 +939,86 @@ open class YouTubeViewModel (private val context: Context, autoSelect: Boolean =
                 likeCount = info.likeCount,
                 publishedDate = info.publishedDate,
                 durationMs = info.durationMs,
+                likeStatus = info.likeStatus,
+                channelId = info.channelId,
+                isSubscribed = info.isSubscribed,
             )
         }
+    }
+
+    /** Subscribes to, or unsubscribes from, a channel. */
+    suspend fun setSubscribed(channelId: String, subscribed: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (subscribed) {
+                    service.mediaItemService.subscribe(channelId)
+                } else {
+                    service.mediaItemService.unsubscribe(channelId)
+                }
+            }
+        }
+
+    /** True when a YouTube account is connected; likes and playlists need one. */
+    fun isSignedIn(): Boolean = runCatching { service.signInService.isSigned }.getOrDefault(false)
+
+    /**
+     * Sets the video's reaction to [target] (0 none, 1 like, 2 dislike). [current] is what the UI
+     * believes is set, so removing a reaction can tell YouTube which one to clear.
+     */
+    suspend fun setReaction(videoId: String, current: Int, target: Int): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val item = YouTubeMediaItem.fromIds(videoId, null)
+                val media = service.mediaItemService
+                when {
+                    target == MediaItemMetadata.LIKE_STATUS_LIKE -> media.setLike(item)
+                    target == MediaItemMetadata.LIKE_STATUS_DISLIKE -> media.setDislike(item)
+                    current == MediaItemMetadata.LIKE_STATUS_LIKE -> media.removeLike(item)
+                    current == MediaItemMetadata.LIKE_STATUS_DISLIKE -> media.removeDislike(item)
+                }
+            }
+        }
+
+    /** The playlists this video can be saved to. Watch Later comes first. */
+    suspend fun playlists(videoId: String): Result<List<YtPlaylist>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val found = service.mediaItemService.getPlaylistsInfo(videoId).orEmpty()
+                .mapNotNull { info ->
+                    info.playlistId?.takeIf { it.isNotBlank() }?.let { id ->
+                        YtPlaylist(id = id, title = info.title.orEmpty().ifBlank { "Playlist" }, selected = info.isSelected)
+                    }
+                }
+                .distinctBy { it.id }
+            // Watch Later is a built-in playlist; keep it available even if the response omits it.
+            if (found.any { it.isWatchLater }) found else listOf(YtPlaylist("WL", "Watch later", false)) + found
+        }
+    }
+
+    suspend fun addToPlaylist(playlistId: String, videoId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { service.mediaItemService.addToPlaylistObserve(playlistId, videoId).blockingSubscribe() }
+    }
+
+    suspend fun removeFromPlaylist(playlistId: String, videoId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { service.mediaItemService.removeFromPlaylist(playlistId, videoId) }
+    }
+
+    suspend fun createPlaylist(name: String, videoId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { service.mediaItemService.createPlaylistObserve(name, videoId).blockingSubscribe() }
+    }
+
+    /** YouTube's up-next video, for the player's Next button when the opened list has no next entry. */
+    suspend fun nextEntry(videoId: String): YouTubePlaybackSession.Entry? = withContext(Dispatchers.IO) {
+        runCatching {
+            val meta = service.mediaItemService.getMetadataObserve(videoId).blockingFirst()
+            val candidates = listOfNotNull(meta.nextVideo) +
+                meta.suggestions.orEmpty().flatMap { it.mediaItems.orEmpty() }
+            candidates.filter(::allowed)
+                .mapNotNull(::toItem)
+                .firstOrNull {
+                    it.kind == YtKind.VIDEO && !it.isLive && !it.videoId.isNullOrBlank() && it.videoId != videoId
+                }
+                ?.let { YouTubePlaybackSession.Entry(it.videoId!!, it.title, it.thumbnail, it.author) }
+        }.getOrNull()
     }
 
     /** The video's top-level comments. Needs the watch page's comments key. */

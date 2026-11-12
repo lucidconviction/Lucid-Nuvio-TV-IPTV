@@ -79,4 +79,12 @@ object YouTubeProgress {
         if (dur <= 0) return 0
         return (pos * 100 / dur).toInt().coerceIn(0, 100)
     }
+
+    /** Forgets every saved position, for the "clear watch history" action. */
+    fun clear(context: Context) {
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        }
+    }
 }

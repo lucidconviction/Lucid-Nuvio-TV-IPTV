@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.focus.FocusRequester
@@ -55,6 +56,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +81,7 @@ import com.nuvio.tv.youtube.YtRow
 import com.nuvio.tv.youtube.YtTab
 import com.nuvio.tv.youtube.YouTubeAccountState
 import com.nuvio.tv.youtube.YouTubePlaybackSession
+import com.nuvio.tv.youtube.YouTubeProgress
 
 /**
  * The YouTube tab, built for the leanback remote: one large horizontal feed, focusable cards and
@@ -90,12 +93,15 @@ fun YouTubeScreen(
     onPlay: (videoId: String, title: String, poster: String?) -> Unit,
     viewModel: TvYouTubeViewModel = hiltViewModel(),
     accountViewModel: TvYouTubeAccountViewModel = hiltViewModel(),
+    historyViewModel: YouTubeHistoryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val account by accountViewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var showAccount by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
     val openVideoFrom: (YtItem, List<YtItem>) -> Unit = { item, list ->
         val id = item.videoId
@@ -110,7 +116,7 @@ fun YouTubeScreen(
     }
 
     LaunchedEffect(Unit) { accountViewModel.refresh() }
-    BackHandler { if (!viewModel.back()) onBack() }
+    BackHandler(enabled = !showSettings) { if (!viewModel.back()) onBack() }
 
     Box(Modifier.fillMaxSize().background(NuvioTheme.colors.Background)) {
         Box(
@@ -124,131 +130,162 @@ fun YouTubeScreen(
                 ),
             ),
         )
-        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 18.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth()
-                    .glassSurface(RoundedCornerShape(14.dp))
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-            ) {
-                Text("YouTube", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    account.accountName ?: if (account.signedIn) "Signed in" else "Not signed in",
-                    style = NuvioTheme.textStyles.metadata,
-                    color = NuvioTheme.colors.TextSecondary,
-                )
-                Button(
-                    onClick = { showAccount = true },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
-                ) { Text(if (account.signedIn) "Account" else "Sign in", fontSize = 11.sp) }
-            }
-            Spacer(Modifier.height(6.dp))
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(vertical = 2.dp),
-            ) {
-                items(YtTab.entries, key = { it.name }) { tab ->
-                    YouTubeChip(
-                        label = tab.title,
-                        selected = state.tab == tab,
-                        onClick = { viewModel.selectTab(tab) },
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = NuvioTheme.colors.TextPrimary, fontSize = 13.sp),
-                    cursorBrush = SolidColor(NuvioTheme.colors.TextPrimary),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { viewModel.search(query) }),
-                    modifier = Modifier.weight(1f).height(36.dp),
-                ) { inner ->
-                    Row(
-                        Modifier.fillMaxSize()
-                            .glassSurface(RoundedCornerShape(10.dp), strength = 0.55f)
-                            .padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp), tint = NuvioTheme.colors.TextSecondary)
-                        Spacer(Modifier.width(8.dp))
-                        Box(Modifier.weight(1f)) {
-                            if (query.isEmpty()) {
-                                Text("Search YouTube", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
-                            }
-                            inner()
-                        }
-                    }
-                }
-                Button(
-                    onClick = { viewModel.search(query) },
-                    modifier = Modifier.height(36.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
-                ) { Text("Search", fontSize = 11.sp) }
-            }
-            if (state.subTitle != null) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { viewModel.back() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Back")
-                    }
+        if (showSettings) {
+            YouTubeSettingsScreen(
+                account = account,
+                onClose = { showSettings = false },
+                onManageAccount = {
+                    showSettings = false
+                    showAccount = true
+                },
+                onClearWatchHistory = {
+                    historyViewModel.history.clear()
+                    YouTubeProgress.clear(context)
+                },
+                onClearSearchHistory = { viewModel.clearSearchHistory() },
+                onFeedsChanged = { viewModel.selectTab(state.tab) },
+            )
+        } else {
+            Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 18.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                        .glassSurface(RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                ) {
+                    Text("YouTube", style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
+                    Spacer(Modifier.weight(1f))
                     Text(
-                        state.subTitle.orEmpty(),
-                        style = NuvioTheme.textStyles.sectionTitle,
-                        color = NuvioTheme.colors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        account.accountName ?: if (account.signedIn) "Signed in" else "Not signed in",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.TextSecondary,
                     )
+                    Button(
+                        onClick = { showAccount = true },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
+                    ) { Text(if (account.signedIn) "Account" else "Sign in", fontSize = 11.sp) }
+                    Button(
+                        onClick = { showSettings = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "YouTube settings",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
-            }
-            Spacer(Modifier.height(12.dp))
-            AnimatedContent(
-                targetState = state.tab to state.subTitle,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                modifier = Modifier.fillMaxSize(),
-                label = "youtube-tab",
-            ) { (tab, subtitle) ->
-                Box(Modifier.fillMaxSize()) {
-                    when {
-                        state.loading && state.rows.isEmpty() && state.grid.isEmpty() -> YouTubeLoading()
-                        (error != null || state.error != null) && state.rows.isEmpty() && state.grid.isEmpty() -> {
-                            Column(
-                                Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.Center,
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text(error ?: state.error.orEmpty(), color = NuvioTheme.colors.TextSecondary)
-                                Spacer(Modifier.height(10.dp))
-                                Button(onClick = { viewModel.selectTab(tab) }) { Text("Try again") }
+                Spacer(Modifier.height(6.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp),
+                ) {
+                    items(YtTab.entries, key = { it.name }) { tab ->
+                        YouTubeChip(
+                            label = tab.title,
+                            selected = state.tab == tab,
+                            onClick = { viewModel.selectTab(tab) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = NuvioTheme.colors.TextPrimary, fontSize = 13.sp),
+                        cursorBrush = SolidColor(NuvioTheme.colors.TextPrimary),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { viewModel.search(query) }),
+                        modifier = Modifier.weight(1f).height(36.dp),
+                    ) { inner ->
+                        Row(
+                            Modifier.fillMaxSize()
+                                .glassSurface(RoundedCornerShape(10.dp), strength = 0.55f)
+                                .padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp), tint = NuvioTheme.colors.TextSecondary)
+                            Spacer(Modifier.width(8.dp))
+                            Box(Modifier.weight(1f)) {
+                                if (query.isEmpty()) {
+                                    Text("Search YouTube", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                                }
+                                inner()
                             }
                         }
-                        state.grid.isNotEmpty() -> YouTubeGrid(state.grid) { item -> openItem(item, viewModel, state.grid, openVideoFrom) }
-                        state.rows.isNotEmpty() -> YouTubeRows(state.rows, viewModel, openVideoFrom)
-                        tab.needsSignIn && !state.signedIn -> {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("Sign in to YouTube to see ${tab.title.lowercase()}.", color = NuvioTheme.colors.TextSecondary)
+                    }
+                    Button(
+                        onClick = { viewModel.search(query) },
+                        modifier = Modifier.height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
+                    ) { Text("Search", fontSize = 11.sp) }
+                }
+                if (state.subTitle != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = { viewModel.back() }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Back")
+                        }
+                        Text(
+                            state.subTitle.orEmpty(),
+                            style = NuvioTheme.textStyles.sectionTitle,
+                            color = NuvioTheme.colors.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                AnimatedContent(
+                    targetState = state.tab to state.subTitle,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    modifier = Modifier.fillMaxSize(),
+                    label = "youtube-tab",
+                ) { (tab, subtitle) ->
+                    Box(Modifier.fillMaxSize()) {
+                        when {
+                            state.loading && state.rows.isEmpty() && state.grid.isEmpty() -> YouTubeLoading()
+                            (error != null || state.error != null) && state.rows.isEmpty() && state.grid.isEmpty() -> {
+                                Column(
+                                    Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Text(error ?: state.error.orEmpty(), color = NuvioTheme.colors.TextSecondary)
                                     Spacer(Modifier.height(10.dp))
-                                    Button(onClick = { showAccount = true }) { Text("Sign in") }
+                                    Button(onClick = { viewModel.selectTab(tab) }) { Text("Try again") }
                                 }
                             }
-                        }
-                        subtitle == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Nothing here yet.", color = NuvioTheme.colors.TextSecondary)
+                            state.grid.isNotEmpty() -> YouTubeGrid(state.grid) { item -> openItem(item, viewModel, state.grid, openVideoFrom) }
+                            state.rows.isNotEmpty() -> YouTubeRows(state.rows, viewModel, openVideoFrom)
+                            tab.needsSignIn && !state.signedIn -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Sign in to YouTube to see ${tab.title.lowercase()}.", color = NuvioTheme.colors.TextSecondary)
+                                        Spacer(Modifier.height(10.dp))
+                                        Button(onClick = { showAccount = true }) { Text("Sign in") }
+                                    }
+                                }
+                            }
+                            subtitle == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Nothing here yet.", color = NuvioTheme.colors.TextSecondary)
+                            }
                         }
                     }
                 }
             }
-        }
+        } // !showSettings
 
         if (showAccount) {
+            BackHandler {
+                showAccount = false
+                accountViewModel.cancelSignIn()
+            }
             YouTubeAccountOverlay(
                 account = account,
                 onStartSignIn = { accountViewModel.startSignIn(); showAccount = true },
