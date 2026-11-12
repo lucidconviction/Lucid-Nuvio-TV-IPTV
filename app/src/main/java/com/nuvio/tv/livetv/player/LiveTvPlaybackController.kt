@@ -17,6 +17,8 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.nuvio.tv.core.debrid.DirectDebridPlayableResult
+import com.nuvio.tv.core.debrid.DirectDebridResolver
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.StreamRepository
@@ -43,6 +45,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val MAX_SOURCES_TO_RESOLVE = 12
 
 data class LivePlaybackState(
     val channelKey: String? = null,
@@ -86,6 +90,7 @@ class LiveTvPlaybackController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val addonRepository: AddonRepository,
     private val streamRepository: StreamRepository,
+    private val debridResolver: DirectDebridResolver,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -678,13 +683,18 @@ class LiveTvPlaybackController @Inject constructor(
     private data class CachedAddonUrl(val url: String, val atMs: Long)
     private val addonUrlCache = java.util.concurrent.ConcurrentHashMap<String, CachedAddonUrl>()
     private val addonBackups = java.util.concurrent.ConcurrentHashMap<String, List<LiveChannel>>()
+    private val addonSourceHeaders = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
+
+
+    private fun headersFor(url: String, fallback: Map<String, String>): Map<String, String> =
+        addonSourceHeaders[url]?.takeIf { it.isNotEmpty() } ?: fallback
 
     /** All sources found for an addon guide channel, including the one playing. */
     fun addonBackupsFor(key: String): List<LiveChannel> =
         addonBackups[key] ?: addonBackups[key.substringBefore("#backup")].orEmpty()
 
     /** A quick reachability check so a dead first link doesn't hold the preview on "Loading…". */
-    private suspend fun addonSourceReachable(url: String): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun addonSourceReachable(url: String, headers: Map<String, String> = emptyMap()): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             fun probe(method: String): Boolean {
                 val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -693,6 +703,7 @@ class LiveTvPlaybackController @Inject constructor(
                     readTimeout = 4_000
                     instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "NuvioTV")
+                    headers.forEach { (key, value) -> setRequestProperty(key, value) }
                     if (method == "GET") setRequestProperty("Range", "bytes=0-0")
                 }
                 return try {
@@ -703,6 +714,36 @@ class LiveTvPlaybackController @Inject constructor(
             }
             probe("HEAD") || probe("GET")
         }.getOrDefault(false)
+    }
+
+    /** Turns a candidate into a playable URL, resolving direct-debrid/cached torrents when possible. */
+    private suspend fun resolvedAddonSource(
+        stream: com.nuvio.tv.domain.model.Stream,
+    ): Pair<String, com.nuvio.tv.domain.model.Stream>? {
+        stream.getStreamUrl()?.let { return it to stream }
+        val canResolve = runCatching { debridResolver.shouldResolveToPlayableStream(stream) }.getOrDefault(false)
+        if (!canResolve) return null
+        val result = withTimeoutOrNull(20_000) {
+            debridResolver.resolveToPlayableStream(stream, null, null)
+        }
+        val playable = (result as? DirectDebridPlayableResult.Success)?.stream ?: return null
+        val url = playable.getStreamUrl() ?: return null
+        return url to playable
+    }
+
+    /** The same full source list the stream screen uses: all addons, embedded meta and plugins. */
+    private suspend fun allAddonStreams(
+        type: String,
+        itemId: String,
+    ): List<com.nuvio.tv.domain.model.Stream> {
+        val result = withTimeoutOrNull(25_000) {
+            streamRepository.getStreamsFromAllAddons(type, itemId)
+                .first { it !is NetworkResult.Loading }
+        } ?: return emptyList()
+        return when (result) {
+            is NetworkResult.Success -> result.data.flatMap { it.streams }
+            else -> emptyList()
+        }
     }
 
     private suspend fun addonStreams(
@@ -741,10 +782,25 @@ class LiveTvPlaybackController @Inject constructor(
             val owner = addons.firstOrNull { it.id == addonId }
 
             val sources = ArrayList<Pair<String, com.nuvio.tv.domain.model.Stream>>()
+            if (type.isNotBlank() && itemId.isNotBlank()) {
+                val raw = allAddonStreams(type, itemId)
+                val resolved = coroutineScope {
+                    raw.take(MAX_SOURCES_TO_RESOLVE)
+                        .map { stream -> async { resolvedAddonSource(stream) } }
+                        .awaitAll()
+                }.filterNotNull()
+                sources += resolved
+            }
             owner?.let { addon ->
-                addonStreams(addon, type, itemId)
-                    .filter { it.getStreamUrl() != null }
-                    .forEach { stream -> sources += stream.getStreamUrl()!! to stream }
+                if (sources.isEmpty()) {
+                    val raw = addonStreams(addon, type, itemId)
+                    val resolved = coroutineScope {
+                        raw.take(MAX_SOURCES_TO_RESOLVE)
+                            .map { stream -> async { resolvedAddonSource(stream) } }
+                            .awaitAll()
+                    }.filterNotNull()
+                    sources += resolved
+                }
             }
             if (sources.isEmpty() && type.isNotBlank() && itemId.isNotBlank()) {
                 val others = coroutineScope {
@@ -752,14 +808,18 @@ class LiveTvPlaybackController @Inject constructor(
                         .map { other -> async { addonStreams(other, type, itemId) } }
                         .awaitAll()
                 }.flatten()
-                others.filter { it.getStreamUrl() != null }
-                    .forEach { stream -> sources += stream.getStreamUrl()!! to stream }
+                val resolved = coroutineScope {
+                    others.take(MAX_SOURCES_TO_RESOLVE)
+                        .map { stream -> async { resolvedAddonSource(stream) } }
+                        .awaitAll()
+                }.filterNotNull()
+                sources += resolved
             }
 
             val uniqueSources = sources.distinctBy { it.first }
             val probed = if (uniqueSources.size > 1) {
                 coroutineScope {
-                    uniqueSources.map { source -> async { source to addonSourceReachable(source.first) } }.awaitAll()
+                    uniqueSources.map { source -> async { source to addonSourceReachable(source.first, source.second.behaviorHints?.proxyHeaders?.request.orEmpty()) } }.awaitAll()
                 }
             } else {
                 uniqueSources.map { it to true }
@@ -776,6 +836,9 @@ class LiveTvPlaybackController @Inject constructor(
                         sourceName = listOfNotNull(stream.addonName, stream.name ?: stream.title)
                             .filter { it.isNotBlank() }
                             .joinToString(" · "),
+                        headers = stream.behaviorHints?.proxyHeaders?.request.orEmpty().also { h ->
+                            if (h.isNotEmpty()) addonSourceHeaders[url] = h
+                        },
                     )
                 }
             if (candidates.isNotEmpty()) {
@@ -968,7 +1031,7 @@ class LiveTvPlaybackController @Inject constructor(
             currentUrl = fb
             if (saveFallback(ch, fb)) return@launch
             archiveStartPending = true
-            pl.setMediaSource(buildMediaSource(fb, ch.headers, isLive = false))
+            pl.setMediaSource(buildMediaSource(fb, headersFor(fb, ch.headers), isLive = false))
             pl.prepare()
             pl.playWhenReady = true
         }
@@ -1166,7 +1229,7 @@ class LiveTvPlaybackController @Inject constructor(
                 // A TS replay: saved while it plays, like one that started as TS.
                 if (saveFallback(ch, fb)) return
                 archiveStartPending = true
-                p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = false))
+                p.setMediaSource(buildMediaSource(fb, headersFor(fb, ch.headers), isLive = false))
                 p.prepare()
                 p.playWhenReady = true
             } else {
@@ -1213,7 +1276,7 @@ class LiveTvPlaybackController @Inject constructor(
                 p.stop()
                 neverStartedCount = 0
                 currentUrl = fb
-                p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = true))
+                p.setMediaSource(buildMediaSource(fb, headersFor(fb, ch.headers), isLive = true))
                 p.prepare()
                 p.playWhenReady = true
                 return
@@ -1980,7 +2043,7 @@ class LiveTvPlaybackController @Inject constructor(
                 currentUrl = fb
                 if (_state.value.catchupTitle != null && saveFallback(ch, fb)) return
                 archiveStartPending = _state.value.catchupTitle != null
-                p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = _state.value.catchupTitle == null))
+                p.setMediaSource(buildMediaSource(fb, headersFor(fb, ch.headers), isLive = _state.value.catchupTitle == null))
                 p.prepare()
                 p.playWhenReady = true
                 return
