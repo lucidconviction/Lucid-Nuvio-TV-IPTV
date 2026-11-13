@@ -37,6 +37,7 @@ import javax.inject.Inject
 @HiltViewModel
 class LiveTvHomeRowViewModel @Inject constructor(
     private val repository: LiveTvRepository,
+    private val lucid: com.nuvio.tv.livetv.lucid.LucidTvRepository,
     private val prefs: LiveTvPreferences,
     private val playback: LiveTvPlaybackController,
     private val session: LiveTvSession,
@@ -65,9 +66,11 @@ class LiveTvHomeRowViewModel @Inject constructor(
     val homeRow: StateFlow<List<LiveTvViewModel.HomeRowEntry>> = combine(
         rowChannels,
         repository.programs,
+        lucid.programs,
         now
-    ) { (list, s), progs, nowMs ->
+    ) { (list, s), stored, virtualPrograms, nowMs ->
         if (list.isEmpty()) return@combine emptyList()
+        val progs = if (virtualPrograms.isEmpty()) stored else stored + virtualPrograms
         // Guide Time Offset: the row's own shows moved, not the whole guide.
         val shift = s.epgOffsetMinutes * 60_000L
         fun moved(p: EpgProgram?) = if (p == null || shift == 0L) p else p.copy(startMs = p.startMs + shift, stopMs = p.stopMs + shift)
@@ -93,6 +96,7 @@ class LiveTvHomeRowViewModel @Inject constructor(
         // Google Drive sync (if connected): pick up a newer setup from another TV.
         driveSync.start()
         repository.ensureLoaded()
+        lucid.ensureLoaded()
         repository.refreshIfStale()
         viewModelScope.launch {
             while (true) {

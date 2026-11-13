@@ -23,6 +23,8 @@ import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.StreamRepository
 import com.nuvio.tv.livetv.data.LiveTvRepository
+import com.nuvio.tv.livetv.lucid.LucidTune
+import com.nuvio.tv.livetv.lucid.LucidTvRepository
 import com.nuvio.tv.livetv.model.LiveChannel
 import com.nuvio.tv.ui.screens.settings.MemoryBudget
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -91,6 +93,7 @@ class LiveTvPlaybackController @Inject constructor(
     private val addonRepository: AddonRepository,
     private val streamRepository: StreamRepository,
     private val debridResolver: DirectDebridResolver,
+    private val lucid: LucidTvRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -685,6 +688,13 @@ class LiveTvPlaybackController @Inject constructor(
     private val addonBackups = java.util.concurrent.ConcurrentHashMap<String, List<LiveChannel>>()
     private val addonSourceHeaders = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
 
+    private var resolvingVirtualKey: String? = null
+    private var virtualResolveToken = 0
+    /** The Lucid TV slot currently playing, so the next one can start when this film ends. */
+    @Volatile private var activeVirtual: LucidTune? = null
+    /** Where to seek once the virtual film is ready (join-in-progress). */
+    @Volatile private var pendingVirtualStartMs: Long? = null
+
 
     private fun headersFor(url: String, fallback: Map<String, String>): Map<String, String> =
         addonSourceHeaders[url]?.takeIf { it.isNotEmpty() } ?: fallback
@@ -858,6 +868,67 @@ class LiveTvPlaybackController @Inject constructor(
         }
     }
 
+    /**
+     * Lucid TV: a catalog channel. Resolve the film for the current slot and the streams for it
+     * now, then play it through the normal player at the joined offset.
+     */
+    private fun resolveAndPlayVirtual(channel: LiveChannel, slotNumber: Long? = null) {
+        if (resolvingVirtualKey == channel.key) return
+        val token = ++virtualResolveToken
+        resolvingVirtualKey = channel.key
+        activeVirtual = null
+        pendingVirtualStartMs = null
+        _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        scope.launch {
+            try {
+                val tune = lucid.tune(channel.key, slotNumber = slotNumber)
+                if (tune == null) {
+                    _state.value = LivePlaybackState(
+                        channelKey = channel.key,
+                        error = "This Lucid TV channel has no films yet. Check its addon catalog.",
+                    )
+                    return@launch
+                }
+                val item = tune.item
+                val raw = allAddonStreams(item.type, item.id)
+                val resolved = coroutineScope {
+                    raw.take(MAX_SOURCES_TO_RESOLVE)
+                        .map { stream -> async { resolvedAddonSource(stream) } }
+                        .awaitAll()
+                }.filterNotNull().distinctBy { it.first }
+                if (token != virtualResolveToken) return@launch
+                if (resolved.isEmpty()) {
+                    _state.value = LivePlaybackState(
+                        channelKey = channel.key,
+                        error = "No playable stream was found for ${item.title}.",
+                    )
+                    return@launch
+                }
+                resolved.forEach { (url, stream) ->
+                    stream.behaviorHints?.proxyHeaders?.request
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { addonSourceHeaders[url] = it }
+                }
+                val primary = resolved.first()
+                val headers = primary.second.behaviorHints?.proxyHeaders?.request.orEmpty()
+                play(
+                    channel = channel.copy(headers = headers),
+                    overrideUrl = primary.first,
+                    fallbacks = resolved.drop(1).map { it.first },
+                    virtualTune = tune,
+                )
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _state.value = LivePlaybackState(
+                    channelKey = channel.key,
+                    error = "This Lucid TV channel couldn't be opened.",
+                )
+            } finally {
+                if (token == virtualResolveToken) resolvingVirtualKey = null
+            }
+        }
+    }
+
     fun play(
         channel: LiveChannel,
         overrideUrl: String? = null,
@@ -871,11 +942,27 @@ class LiveTvPlaybackController @Inject constructor(
         /** Catch-up: the link the app built first (the others are other kinds of the same request). */
         catchupPrimaryUrl: String? = null,
         /** Catch-up: the real time the link asks for, to check against the stream's own clock (null: don't check). */
-        catchupExpectWallMs: Long? = null
+        catchupExpectWallMs: Long? = null,
+        /** Lucid TV: the slot and join offset to play. */
+        virtualTune: LucidTune? = null
     ) {
+        if (overrideUrl == null && channel.url.startsWith("virtual:")) {
+            resolveAndPlayVirtual(channel)
+            return
+        }
         if (overrideUrl == null && channel.url.startsWith("addon:")) {
             resolveAndPlayAddon(channel)
             return
+        }
+        if (virtualTune != null) {
+            activeVirtual = virtualTune
+            pendingVirtualStartMs = virtualTune.startOffsetMs
+        } else {
+            activeVirtual = null
+            pendingVirtualStartMs = null
+            // A virtual channel that was still resolving must not take over this one.
+            virtualResolveToken++
+            resolvingVirtualKey = null
         }
         // Something chosen to play (back from the background through a launcher row, say):
         // that wins over picking up what was on before.
@@ -944,6 +1031,7 @@ class LiveTvPlaybackController @Inject constructor(
         if (currentChannel?.key == channel.key && currentUrl == url && _state.value.error == null &&
             p.playbackState != Player.STATE_IDLE
         ) {
+            if (virtualTune != null) applyPendingVirtualStart(p)
             if (!p.isPlaying) p.play()
             return
         }
@@ -961,7 +1049,7 @@ class LiveTvPlaybackController @Inject constructor(
         if (catchupTitle == null) markStarting(channel.key)
         if (bufferFailedKey != null && bufferFailedKey != channel.key) bufferFailedKey = null
         // Rewind anytime (full screen): play through the rolling buffer instead.
-        if (shouldBuffer(channel, catchupTitle)) {
+        if (virtualTune == null && shouldBuffer(channel, catchupTitle)) {
             p.stop()
             if (startAlwaysBuffer(channel, url)) { p.playWhenReady = true; return }
         }
@@ -970,9 +1058,20 @@ class LiveTvPlaybackController @Inject constructor(
             !url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) && startReplayCache(channel, url)
         ) return
         archiveStartPending = catchupTitle != null
-        p.setMediaSource(buildMediaSource(url, channel.headers, isLive = catchupTitle == null))
+        p.setMediaSource(buildMediaSource(url, channel.headers, isLive = catchupTitle == null && virtualTune == null))
         p.prepare()
         p.playWhenReady = true
+        applyPendingVirtualStart(p)
+    }
+
+    /** Seeks once to the joined position of a Lucid TV film, when the player is ready. */
+    private fun applyPendingVirtualStart(p: ExoPlayer) {
+        val start = pendingVirtualStartMs ?: return
+        pendingVirtualStartMs = null
+        if (start <= 0L) return
+        val duration = p.duration
+        val target = if (duration > 0L) start.coerceIn(0L, (duration - 1_000L).coerceAtLeast(0L)) else start
+        if (target > 0L) p.seekTo(target)
     }
 
     /**
@@ -1160,6 +1259,10 @@ class LiveTvPlaybackController @Inject constructor(
         LiveWatching.sourceId = null
         currentUrl = null
         _ownTimeline.value = false
+        activeVirtual = null
+        pendingVirtualStartMs = null
+        virtualResolveToken++
+        resolvingVirtualKey = null
         _state.value = LivePlaybackState()
     }
 
@@ -1951,6 +2054,21 @@ class LiveTvPlaybackController @Inject constructor(
                 error = if (playbackState == Player.STATE_READY) null else _state.value.error,
                 reconnectAttempt = if (playbackState == Player.STATE_READY) 0 else _state.value.reconnectAttempt
             )
+            if (playbackState == Player.STATE_READY) _player?.let { applyPendingVirtualStart(it) }
+            if (playbackState == Player.STATE_ENDED) {
+                val tune = activeVirtual
+                if (tune != null) {
+                    // A Lucid TV film finished: move to the next slot on this channel.
+                    val ch = currentChannel
+                    activeVirtual = null
+                    pendingVirtualStartMs = null
+                    if (ch != null) {
+                        currentUrl = null
+                        resolveAndPlayVirtual(ch, tune.slotNumber + 1)
+                        return
+                    }
+                }
+            }
             if (playbackState == Player.STATE_ENDED && _shiftStartedAt.value != null && timeshift.isRecording) {
                 // Caught up with the end of what's recorded while it's still recording: carry on
                 // from here (the newest pieces come in), rather than dropping back to live.
@@ -2104,6 +2222,13 @@ class LiveTvPlaybackController @Inject constructor(
             if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
                 "Catch-up failed on ${ch?.name} (${error.errorCodeName}); no other links left to try"
             )
+            if (activeVirtual != null) {
+                _state.value = _state.value.copy(
+                    error = "This Lucid TV film couldn't be played.",
+                    isBuffering = false,
+                )
+                return
+            }
             scheduleReconnect(describe(error), error)
         }
     }
@@ -2494,6 +2619,10 @@ class LiveTvPlaybackController @Inject constructor(
         LiveWatching.sourceId = null
         currentUrl = null
         _ownTimeline.value = false
+        activeVirtual = null
+        pendingVirtualStartMs = null
+        virtualResolveToken++
+        resolvingVirtualKey = null
         _state.value = LivePlaybackState()
     }
 

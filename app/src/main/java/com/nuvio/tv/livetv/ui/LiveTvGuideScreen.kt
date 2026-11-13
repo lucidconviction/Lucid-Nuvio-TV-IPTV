@@ -260,6 +260,8 @@ private fun LiveTvGuideScreenBody(
     /** The Record item for a show, or null when it can't be recorded (already over, no catch-up). */
     fun recordLabel(ch: LiveChannel, p: EpgProgram?): String? {
         p ?: return null
+        // Lucid TV resolves a film at tune time; there is no provider stream to record.
+        if (ch.key.startsWith("virtual:")) return null
         val nowMs = System.currentTimeMillis()
         val onNow = nowMs >= p.startMs && nowMs < p.stopMs
         return when {
@@ -271,6 +273,7 @@ private fun LiveTvGuideScreenBody(
     }
     fun seriesLabel(ch: LiveChannel, p: EpgProgram?): String? {
         p ?: return null
+        if (ch.key.startsWith("virtual:")) return null
         if (p.stopMs <= System.currentTimeMillis()) return null
         val n = com.nuvio.tv.livetv.data.LiveTvRepository.normalize(titleMarks(p.title).title)
         return if (seriesList.any { it.channel.key == ch.key && it.norm == n }) "Stop recording series" else "Record series"

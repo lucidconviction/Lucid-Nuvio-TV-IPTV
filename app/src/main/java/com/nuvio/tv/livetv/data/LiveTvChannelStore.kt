@@ -24,6 +24,7 @@ import javax.inject.Singleton
 class LiveTvChannelStore @Inject constructor(
     private val repository: LiveTvRepository,
     private val prefs: LiveTvPreferences,
+    private val lucid: com.nuvio.tv.livetv.lucid.LucidTvRepository,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -40,9 +41,18 @@ class LiveTvChannelStore @Inject constructor(
     private val memoFile by lazy { java.io.File(java.io.File(context.filesDir, "livetv"), "name_editor_cache.txt") }
     private var saveJob: kotlinx.coroutines.Job? = null
 
+    /** Playlist channels plus Lucid TV's virtual channels, before user renames and numbers. */
+    private val allChannels = combine(
+        repository.channels,
+        lucid.channels
+    ) { playlistChannels, virtualChannels ->
+        if (virtualChannels.isEmpty()) playlistChannels
+        else (playlistChannels + virtualChannels).distinctBy { it.key }
+    }
+
     /** Channels with the user's renames and renumbering applied. */
     val displayChannels: StateFlow<List<LiveChannel>> = combine(
-        repository.channels,
+        allChannels,
         prefs.userState.displayChannelUserChanges(),
         prefs.settings.displayChannelSettingsChanges(),
         repository.epgLogos,

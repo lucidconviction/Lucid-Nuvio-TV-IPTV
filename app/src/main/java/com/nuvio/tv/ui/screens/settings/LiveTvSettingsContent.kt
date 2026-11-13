@@ -550,6 +550,13 @@ internal fun LiveTvSettingsContent(
                         color = NuvioTheme.colors.TextSecondary,
                         modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.sm)
                     )
+                    SubHeading("Lucid TV")
+                    SettingsToggleRow(
+                        "Lucid TV",
+                        "Turn addon movie catalogs into always-on channels with their own guide. Each catalog becomes a channel that joins the film already in progress.",
+                        s.lucidTvEnabled,
+                        { update { it.copy(lucidTvEnabled = !it.lucidTvEnabled) } }
+                    )
                     SubHeading("Channel Names")
                     SettingsActionRow(
                         title = "Channel Name Cleanup",

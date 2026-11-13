@@ -85,6 +85,7 @@ data class LiveTvUiState(
 @HiltViewModel
 class LiveTvViewModel @Inject constructor(
     private val repository: LiveTvRepository,
+    private val lucid: com.nuvio.tv.livetv.lucid.LucidTvRepository,
     private val prefs: LiveTvPreferences,
     val playback: LiveTvPlaybackController,
     private val session: LiveTvSession,
@@ -104,6 +105,7 @@ class LiveTvViewModel @Inject constructor(
         // Google Drive sync (if connected): pick up a newer setup from another TV.
         driveSync.start()
         addonGuide.ensureLoaded()
+        lucid.ensureLoaded()
     }
 
 
@@ -171,8 +173,17 @@ class LiveTvViewModel @Inject constructor(
     /** Programs with the user's EPG time offset applied. */
     val programs: StateFlow<Map<String, List<EpgProgram>>> = combine(
         repository.programs,
+        lucid.programs,
         settings.map { it.epgOffsetMinutes }.distinctUntilChanged()
-    ) { map, offset ->
+    ) { stored, virtualPrograms, offset ->
+        val map = if (virtualPrograms.isEmpty()) {
+            stored
+        } else {
+            HashMap<String, List<EpgProgram>>(stored.size + virtualPrograms.size).apply {
+                putAll(stored)
+                putAll(virtualPrograms)
+            }
+        }
         if (offset == 0) { shiftedLists.clear(); map } else {
             val shift = offset * 60_000L
             if (shift != shiftedBy) { shiftedLists.clear(); shiftedBy = shift }
@@ -191,8 +202,9 @@ class LiveTvViewModel @Inject constructor(
         }
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    private val hasSources: StateFlow<Boolean> = prefs.playlists.map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    private val hasSources: StateFlow<Boolean> = combine(prefs.playlists, lucid.channels) { playlists, virtual ->
+        playlists.isNotEmpty() || virtual.isNotEmpty()
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     /**
      * Channels with the user's renames and renumbering applied. Worked out once for the whole
