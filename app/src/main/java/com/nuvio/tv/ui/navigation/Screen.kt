@@ -157,6 +157,7 @@ sealed class Screen(val route: String) {
     data object LiveTv : Screen("live_tv")
     data object LiveTvPlayer : Screen("live_tv_player")
     data object LiveTvSettings : Screen("live_tv_settings")
+    data object LucidTvStudio : Screen("lucid_tv_studio")
     data object OnDemand : Screen("on_demand")
     /** Live TV fork: recorded shows. */
     data object Recordings : Screen("recordings")

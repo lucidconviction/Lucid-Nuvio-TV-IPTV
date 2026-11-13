@@ -186,6 +186,7 @@ private fun settingsSectionSpec(category: SettingsCategory): SettingsSectionSpec
 fun SettingsScreen(
     showBuiltInHeader: Boolean = true,
     onNavigateToLiveTv: () -> Unit = {},
+    onNavigateToLucidStudio: () -> Unit = {},
     onNavigateToSportsTeams: () -> Unit = {},
     onNavigateToAddons: () -> Unit = {},
     onNavigateToPlugins: () -> Unit = {},
@@ -684,6 +685,7 @@ fun SettingsScreen(
                                 onNavigateToSupportersContributors = onNavigateToSupportersContributors,
                                 onNavigateToLicensesAttributions = onNavigateToLicensesAttributions,
                                 onNavigateToWatchParty = onNavigateToWatchParty,
+                                onNavigateToLucidStudio = onNavigateToLucidStudio,
                                 onNavigateToSportsTeams = onNavigateToSportsTeams
                             )
                         }
@@ -845,6 +847,7 @@ fun SettingsScreen(
                         onNavigateToSupportersContributors = onNavigateToSupportersContributors,
                         onNavigateToLicensesAttributions = onNavigateToLicensesAttributions,
                         onNavigateToWatchParty = onNavigateToWatchParty,
+                        onNavigateToLucidStudio = onNavigateToLucidStudio,
                         onNavigateToSportsTeams = onNavigateToSportsTeams
                     )
                 }
@@ -876,6 +879,7 @@ private fun SettingsDetailPane(
     onNavigateToSupportersContributors: () -> Unit,
     onNavigateToLicensesAttributions: () -> Unit,
     onNavigateToWatchParty: () -> Unit,
+    onNavigateToLucidStudio: () -> Unit = {},
     onNavigateToSportsTeams: () -> Unit = {}
 ) {
     when (selectedCategory) {
@@ -1018,7 +1022,8 @@ private fun SettingsDetailPane(
                 contentFocusRequesters[SettingsCategory.LIVE_TV]
             } else {
                 null
-            }
+            },
+            onOpenLucidStudio = onNavigateToLucidStudio,
         )
         SettingsCategory.ON_DEMAND -> LiveTvSettingsContent(
             page = LiveTvPage.ON_DEMAND,

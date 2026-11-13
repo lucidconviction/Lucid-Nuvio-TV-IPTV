@@ -146,10 +146,15 @@ private val LocalLiveFlat = androidx.compose.runtime.compositionLocalOf { false 
 @Composable
 fun LiveTvSettingsScreen(
     onBack: () -> Unit = {},
+    onOpenLucidStudio: () -> Unit = {},
     viewModel: LiveTvSettingsViewModel = hiltViewModel()
 ) {
     SettingsStandaloneScaffold(title = LIVE_TV_TITLE, subtitle = LIVE_TV_SUBTITLE) {
-        LiveTvSettingsContent(viewModel = viewModel, page = LiveTvPage.ALL)
+        LiveTvSettingsContent(
+            viewModel = viewModel,
+            page = LiveTvPage.ALL,
+            onOpenLucidStudio = onOpenLucidStudio,
+        )
     }
 }
 
@@ -302,7 +307,8 @@ private fun sourceStatus(enabled: Boolean, updated: Long, error: String?, count:
 internal fun LiveTvSettingsContent(
     viewModel: LiveTvSettingsViewModel = hiltViewModel(),
     initialFocusRequester: FocusRequester? = null,
-    page: LiveTvPage = LiveTvPage.ALL
+    page: LiveTvPage = LiveTvPage.ALL,
+    onOpenLucidStudio: () -> Unit = {}
 ) {
     // HUB: one Live TV page with its own row of tabs; the tab picked is the page shown.
     val hub = page == LiveTvPage.HUB
@@ -556,6 +562,13 @@ internal fun LiveTvSettingsContent(
                         "Turn addon movie catalogs into always-on channels with their own guide. Each catalog becomes a channel that joins the film already in progress.",
                         s.lucidTvEnabled,
                         { update { it.copy(lucidTvEnabled = !it.lucidTvEnabled) } }
+                    )
+                    SettingsActionRow(
+                        title = "Manage Lucid TV Channels",
+                        subtitle = "Create rotating catalog channels, 24/7 series marathons and live channel relays; import or export channel packs.",
+                        value = "Open",
+                        leadingIcon = Icons.Default.LiveTv,
+                        onClick = onOpenLucidStudio,
                     )
                     SubHeading("Channel Names")
                     SettingsActionRow(

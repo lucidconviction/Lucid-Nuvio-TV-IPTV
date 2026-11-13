@@ -1656,7 +1656,14 @@ private fun PlaybackNavHost(
 
         composable(Screen.LiveTvSettings.route) {
             com.nuvio.tv.ui.screens.settings.LiveTvSettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onOpenLucidStudio = { navController.navigate(Screen.LucidTvStudio.route) },
+            )
+        }
+
+        composable(Screen.LucidTvStudio.route) {
+            com.nuvio.tv.livetv.ui.lucid.LucidTvStudioScreen(
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -1664,6 +1671,7 @@ private fun PlaybackNavHost(
             SettingsScreen(
                 showBuiltInHeader = !hideBuiltInHeaders,
                 onNavigateToLiveTv = { navController.navigate(Screen.LiveTvSettings.route) },
+                onNavigateToLucidStudio = { navController.navigate(Screen.LucidTvStudio.route) },
                 onNavigateToSportsTeams = {
                     com.nuvio.tv.livetv.sports.SportsLaunch.openPicker()
                     navController.navigate(Screen.Sports.route) {

@@ -20,6 +20,8 @@ import com.nuvio.tv.livetv.model.LiveUserState
 import com.nuvio.tv.livetv.model.PlaylistSource
 import com.nuvio.tv.livetv.model.Reminder
 import com.nuvio.tv.livetv.model.ZapMode
+import com.nuvio.tv.livetv.lucid.LucidSpecCodec
+import com.nuvio.tv.livetv.lucid.LucidStoredSpec
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +63,7 @@ class LiveTvPreferences @Inject constructor(
         val showInSidebar = booleanPreferencesKey("show_in_sidebar")
         val showImportProgress = booleanPreferencesKey("show_import_progress")
         val lucidTvEnabled = booleanPreferencesKey("lucid_tv_enabled")
+        val lucidChannels = stringPreferencesKey("lucid_channels")
         val showNames = booleanPreferencesKey("show_channel_names")
         val showNumbers = booleanPreferencesKey("show_channel_numbers")
         val markPlaying = booleanPreferencesKey("mark_playing_channel")
@@ -545,6 +548,21 @@ class LiveTvPreferences @Inject constructor(
     }.distinctUntilChanged()
 
     suspend fun currentHiddenEverywhere(): HiddenEverywhere = hiddenEverywhere.first()
+
+    /** Custom Lucid TV channels, saved with the rest of the Live TV setup. */
+    val lucidChannels: Flow<List<LucidStoredSpec>> = store.data
+        .map { LucidSpecCodec.decodeSpecs(it[Keys.lucidChannels]) }
+        .distinctUntilChanged()
+
+    suspend fun setLucidChannels(specs: List<LucidStoredSpec>) {
+        val encoded = LucidSpecCodec.encodeSpecs(specs)
+        store.edit { p -> p[Keys.lucidChannels] = encoded }
+    }
+
+    suspend fun updateLucidChannels(transform: (List<LucidStoredSpec>) -> List<LucidStoredSpec>) {
+        val next = transform(lucidChannels.first())
+        setLucidChannels(next)
+    }
 
     val userState: Flow<LiveUserState> = kotlinx.coroutines.flow.combine(store.data, deviceStore.data, profileManager.activeProfileId) { p0, d, id ->
         userStateMemo.get(p0, d, id) { buildUserState(profileView(p0, id), d) }

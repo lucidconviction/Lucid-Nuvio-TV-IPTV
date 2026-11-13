@@ -73,4 +73,51 @@ class LucidScheduleTest {
         val early = LucidSchedule.joinOffsetMs("vc_a", slot, slot.startMs + 1_000L, 20, true)
         assertEquals(1_000L, early)
     }
+
+    @Test
+    fun loopQueueWrapsAndKeepsRealDurations() {
+        val durations = listOf(20 * 60_000L, 40 * 60_000L, 10 * 60_000L)
+        val anchor = 1_000_000L
+        val cycle = durations.sum()
+        val at = anchor + cycle * 3 + 25 * 60_000L
+        val slot = LucidSchedule.queueAt(at, anchor, durations) ?: error("no slot")
+        assertEquals(1, slot.itemIndex)
+        assertEquals(slot.startMs + durations[1], slot.endMs)
+        assertTrue(at >= slot.startMs && at < slot.endMs)
+        val next = LucidSchedule.queueAt(slot.endMs, anchor, durations) ?: error("no next")
+        assertEquals(2, next.itemIndex)
+        assertEquals(slot.endMs, next.startMs)
+    }
+
+    @Test
+    fun loopScheduleIsContiguousAndCoversTheWindow() {
+        val durations = listOf(30 * 60_000L, 45 * 60_000L, 20 * 60_000L)
+        val anchor = 5_000_000L
+        val from = anchor + durations.sum() * 7 + 10 * 60_000L
+        val to = from + 6 * 60 * 60_000L
+        val slots = LucidSchedule.queueSchedule(anchor, durations, from, to)
+        assertTrue(slots.isNotEmpty())
+        assertTrue(slots.first().startMs <= from)
+        assertTrue(slots.last().endMs >= to)
+        slots.zipWithNext().forEach { (a, b) -> assertEquals(a.endMs, b.startMs) }
+        slots.forEach { assertTrue(it.endMs > it.startMs) }
+    }
+
+    @Test
+    fun specCodecRoundTripsChannelsAndPacks() {
+        val spec = LucidStoredSpec(
+            id = "vc_test",
+            name = "24/7 Test",
+            kind = LucidChannelKind.RELAY_LOOP,
+            group = "My 24/7",
+            relayGroupId = "group-1",
+            relaySegmentMinutes = 30,
+            anchorMs = 123L,
+        )
+        val decoded = LucidSpecCodec.decodeSpecs(LucidSpecCodec.encodeSpecs(listOf(spec)))
+        assertEquals(listOf(spec), decoded)
+        val pack = LucidSpecCodec.decodePack(LucidSpecCodec.encodePack(listOf(spec)))
+        assertEquals(listOf(spec), pack)
+        assertEquals(emptyList<LucidStoredSpec>(), LucidSpecCodec.decodeSpecs("{not json}"))
+    }
 }

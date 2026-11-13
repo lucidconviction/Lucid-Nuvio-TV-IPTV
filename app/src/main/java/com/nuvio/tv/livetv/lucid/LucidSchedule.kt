@@ -49,6 +49,54 @@ object LucidSchedule {
         return floorMod(stableHash(seed).toLong(), poolSize.toLong()).toInt()
     }
 
+    data class QueueSlot(val itemIndex: Int, val startMs: Long, val endMs: Long)
+
+    /**
+     * LOOP playout: the queue is walked from [anchorMs] with real item durations and repeats
+     * forever. Unlike ROTATE there is no hash: the next programme is simply the next item, so
+     * the guide matches the media lengths.
+     */
+    fun queueAt(nowMs: Long, anchorMs: Long, durations: List<Long>): QueueSlot? {
+        val cycle = durations.sum()
+        if (durations.isEmpty() || cycle <= 0L) return null
+        val t = floorMod(nowMs - anchorMs, cycle)
+        var acc = 0L
+        durations.forEachIndexed { index, duration ->
+            if (t < acc + duration) {
+                val start = nowMs - (t - acc)
+                return QueueSlot(index, start, start + duration)
+            }
+            acc += duration
+        }
+        return null
+    }
+
+    /** The whole LOOP queue covering [fromMs, toMs), including the programme already running. */
+    fun queueSchedule(
+        anchorMs: Long,
+        durations: List<Long>,
+        fromMs: Long,
+        toMs: Long,
+    ): List<QueueSlot> {
+        val cycle = durations.sum()
+        if (durations.isEmpty() || cycle <= 0L || toMs <= fromMs) return emptyList()
+        val tFrom = floorMod(fromMs - anchorMs, cycle)
+        var base = fromMs - tFrom
+        val out = ArrayList<QueueSlot>()
+        var guard = 0
+        while (base < toMs && guard++ < 20_000) {
+            var acc = 0L
+            durations.forEachIndexed { index, duration ->
+                val start = base + acc
+                val end = start + duration
+                if (end > fromMs && start < toMs) out += QueueSlot(index, start, end)
+                acc += duration
+            }
+            base += cycle
+        }
+        return out
+    }
+
     /**
      * Where to start inside the current slot, so tuning in feels like joining a broadcast that has
      * already started. A cap keeps the join point away from the end of a short film; the jitter
