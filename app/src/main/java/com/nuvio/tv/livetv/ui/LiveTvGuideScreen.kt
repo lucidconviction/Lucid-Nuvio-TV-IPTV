@@ -386,6 +386,9 @@ private fun LiveTvGuideScreenBody(
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
     var guideGearOpen by remember { mutableStateOf(false) }
     var quickChannelsOpen by remember { mutableStateOf(false) }
+    // The channel picked in Quick Ch Search: its title stays in the preview bar until you move
+    // through the guide again.
+    var quickPlayKey by remember { mutableStateOf<String?>(null) }
     val guideGearFocus = remember { FocusRequester() }
     val quickChannelsFocus = remember { FocusRequester() }
     val groupSearchFocus = remember { FocusRequester() }
@@ -744,8 +747,9 @@ private fun LiveTvGuideScreenBody(
     // it only follows the highlight when you're moving through the channels themselves.
     val browsingGroups = groupsOpen && !gridFocused
     val playingChannel = viewModel.channelByKey(playback.channelKey)
-    val headerChannel = if (browsingGroups && playingChannel != null) playingChannel else focusedChannel
-    val headerBlock = if (browsingGroups && playingChannel != null) {
+    val quickHeader = quickPlayKey != null && playingChannel?.key == quickPlayKey
+    val headerChannel = if ((browsingGroups || quickHeader) && playingChannel != null) playingChannel else focusedChannel
+    val headerBlock = if ((browsingGroups || quickHeader) && playingChannel != null) {
         val headerPrograms = if (playingChannel.key == focusedChannel?.key) focusedPrograms
         else rememberGuidePrograms(playingChannel, programs[playingChannel.key].orEmpty(), now, settings.epgPastHours)
         blockAt(headerPrograms, now)
@@ -770,6 +774,9 @@ private fun LiveTvGuideScreenBody(
         delay(250) // don't look up every show while scrolling quickly
         viewModel.posterFor(p.title, p, headerChannel)?.let { value = it }
     }
+
+    // Moving through the guide takes the preview bar back to the highlighted channel.
+    LaunchedEffect(row, column) { quickPlayKey = null }
 
     fun ensureRowVisible(target: Int) {
         scope.launch {
@@ -803,7 +810,8 @@ private fun LiveTvGuideScreenBody(
         }
     }
 
-    fun playChannel(ch: LiveChannel) {
+    fun playChannel(ch: LiveChannel, fromQuickSearch: Boolean = false) {
+        if (!fromQuickSearch) quickPlayKey = null
         val alreadyPreviewing = playback.channelKey == ch.key && playback.catchupTitle == null
         viewModel.preview(ch)
         if (!settings.showPreview || settings.openFullscreenOnSelect || alreadyPreviewing) goFullscreen()
@@ -1197,7 +1205,10 @@ private fun LiveTvGuideScreenBody(
                         entryFocus = quickSearchFocus,
                         onUp = { runCatching { guideGearFocus.requestFocus() } },
                         onDown = { runCatching { gridFocus.requestFocus() } },
-                        onPlay = { playChannel(it) },
+                        onPlay = { ch ->
+                            quickPlayKey = ch.key
+                            playChannel(ch, fromQuickSearch = true)
+                        },
                     )
                     // ---------------------------------------------------------------- time ruler
                     val channelColWidth = channelColumnWidth(settings)
@@ -1666,13 +1677,6 @@ private fun LiveTvGuideScreenBody(
             aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null,
             pictureShape = pictureShapeNow
         )
-        // The next Lucid channel fades in over this one, which keeps playing underneath.
-        LiveSoftZapSurface(
-            playback = viewModel.playback,
-            modifier = videoModifier,
-            aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null,
-            pictureShape = pictureShapeNow,
-        )
         // Rounded corners for the preview. The video surface can't be clipped to a rounded
         // shape on most TVs, so its four corners are painted over in exactly what's behind
         // them (the background and the theme glow), which looks the same.
@@ -1727,14 +1731,16 @@ private fun LiveTvGuideScreenBody(
         }
         // The preview's own messages, drawn over the video.
         if (!fullscreen && pb != null && rb != null && pb.width > 1f) {
-            val showLoading = rememberDelayedTrue(playback.isBuffering && playback.error == null, 1_200)
+            val showLoading = rememberDelayedTrue(
+                playback.isBuffering && !playback.isPlaying && playback.error == null,
+                250,
+            )
             val recStarting by viewModel.playback.recordingStarting.collectAsStateWithLifecycle()
             val text = when {
                 playback.channelKey == null -> "Press OK on a channel to preview"
                 playback.error != null -> null // shown with its reason below
                 recStarting -> "Starting the recording…"
-                playback.switching -> null // its own spinner above
-                showLoading -> "Loading…"
+                showLoading -> null // its own spinner below
                 else -> null
             }
             with(density) {
@@ -1744,15 +1750,11 @@ private fun LiveTvGuideScreenBody(
                         .size(pb.width.toDp(), pb.height.toDp()),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (playback.switching) {
+                    if (showLoading) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            LoadingSpinner(Modifier.size(26.dp))
-                            Spacer(Modifier.height(8.dp))
-                            LiveText(
-                                "Tuning ${playback.switchingTitle ?: "channel"}…",
-                                color = Color.White,
-                                size = 14.sp
-                            )
+                            LoadingSpinner(Modifier.size(24.dp))
+                            Spacer(Modifier.height(7.dp))
+                            LiveText("Loading…", color = Color.White, size = 14.sp)
                         }
                     } else {
                         text?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp) }
@@ -3296,7 +3298,11 @@ private fun GroupColumn(
                     val isCollapsed = src in collapsed
                     item(key = "header:$src") {
                         PlaylistHeader(
-                            name = playlistNames[src] ?: "Playlist",
+                            name = if (src == com.nuvio.tv.livetv.lucid.LucidTvRepository.SOURCE_ID) {
+                                "Lucid TV Channels"
+                            } else {
+                                playlistNames[src] ?: "Playlist"
+                            },
                             groupCount = inSource.size,
                             collapsed = isCollapsed,
                             // Folded, but its group is the one showing: keep a way back to it.

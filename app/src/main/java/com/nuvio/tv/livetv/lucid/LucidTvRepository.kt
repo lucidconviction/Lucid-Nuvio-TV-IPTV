@@ -620,7 +620,7 @@ class LucidTvRepository @Inject constructor(
         val catalog: CatalogDescriptor,
     )
 
-    private companion object {
+    companion object {
         const val SOURCE_ID = "lucid"
         const val GROUP_NAME = "Lucid TV"
         const val FIRST_CHANNEL_NUMBER = 9000

@@ -51,6 +51,7 @@ object QuickChannelList {
         QuickCategory("ca", "CA", "CBC, CTV, TSN, Sportsnet, Crave, Global"),
         QuickCategory("bay-area", "Bay Area", "KTVU, KPIX, KGO, KRON, NBC Bay Area"),
         QuickCategory("premium", "Premium", "HBO, Cinemax, Showtime, Starz, MGM+"),
+        QuickCategory("paid", "Paid Networks", "Netflix, Prime Video, Hulu, Disney+, Max and more"),
         QuickCategory("sports", "Sports", "ESPN, Fox Sports, CBS Sports, Sky Sports"),
         QuickCategory("news", "News", "CNN, Fox News, MSNBC, BBC, Sky News"),
         QuickCategory("custom", "Custom", "Your own channels"),
@@ -80,7 +81,7 @@ object QuickChannelList {
     val all: List<QuickChannel> get() = combinedChannels()
 
     /** Filter tabs shown by the full Quick Channels dialog. */
-    val filters: List<String> = listOf("All", "US", "UK", "CA", "Premium", "Bay Area", "Sports", "News")
+    val filters: List<String> = listOf("All", "US", "UK", "CA", "Premium", "Paid", "Bay Area", "Sports", "News")
 
     fun getChannelCategories(): List<String> = allCategories().map { it.id }
 
@@ -136,6 +137,7 @@ object QuickChannelList {
                         "ca" -> "CA" in qc.effectiveRegions
                         "bay-area" -> "bay-area" in qc.effectiveRegions
                         "premium" -> "premium" in qc.tags
+                        "paid" -> "paid" in qc.tags
                         "sports" -> "sports" in qc.tags
                         "news" -> "news" in qc.tags
                         else -> false
@@ -236,6 +238,7 @@ object QuickChannelList {
         "UK" -> "UK" in quick.effectiveRegions
         "CA" -> "CA" in quick.effectiveRegions
         "Premium" -> "premium" in quick.tags
+        "Paid" -> "paid" in quick.tags
         "Bay Area" -> "bay-area" in quick.effectiveRegions
         "Sports" -> "sports" in quick.tags
         "News" -> "news" in quick.tags
@@ -354,6 +357,19 @@ object QuickChannelList {
         QuickChannel("MUBI", listOf("MUBI", "MUBI TV", "MUBI HD"), listOf("US", "UK", "EU", "CA"), listOf("premium")),
         QuickChannel("Film4", listOf("Film4", "Film 4", "Film4 HD"), listOf("UK"), listOf("premium")),
         QuickChannel("Great! Movies", listOf("Great! Movies", "Great! Movies Classic", "Great Movies UK", "Good TV Movies"), listOf("UK"), listOf("premium")),
+
+        // ── PAID STREAMING NETWORKS ────────────────────────────────
+        QuickChannel("Netflix", listOf("Netflix", "Netflix US", "Netflix HD", "Netflix 4K", "Netflix Originals"), listOf("US"), listOf("paid")),
+        QuickChannel("Amazon Prime Video", listOf("Amazon Prime Video", "Amazon Prime", "Prime Video", "Prime Video US", "Amazon Prime Video US"), listOf("US"), listOf("paid")),
+        QuickChannel("Hulu", listOf("Hulu", "Hulu US", "Hulu HD", "Hulu Plus", "Hulu + Live TV"), listOf("US"), listOf("paid")),
+        QuickChannel("Disney Plus", listOf("Disney Plus", "Disney+", "Disney Plus US", "Disney+ US", "Disney Plus HD"), listOf("US"), listOf("paid")),
+        QuickChannel("HBO Max", listOf("HBO Max", "HBO Max US", "Max US", "Max HD"), listOf("US"), listOf("paid")),
+        QuickChannel("Apple TV", listOf("Apple TV", "Apple TV+", "Apple TV Plus", "Apple TV Plus US", "Apple TV 4K"), listOf("US"), listOf("paid")),
+        QuickChannel("Peacock", listOf("Peacock", "Peacock TV", "Peacock Premium", "Peacock US", "Peacock HD"), listOf("US"), listOf("paid")),
+        QuickChannel("Paramount Plus", listOf("Paramount Plus", "Paramount+", "Paramount Plus US", "Paramount+ US", "Paramount Plus HD"), listOf("US"), listOf("paid")),
+        QuickChannel("Starz", listOf("Starz", "Starz US", "Starz HD", "Starz Play"), listOf("US"), listOf("paid")),
+        QuickChannel("AMC Plus", listOf("AMC Plus", "AMC+", "AMC Plus US", "AMC+ US", "AMC Premiere"), listOf("US"), listOf("paid")),
+        QuickChannel("MGM Plus", listOf("MGM Plus", "MGM+", "MGM Plus US", "MGM+ US", "MGM Plus HD"), listOf("US"), listOf("paid")),
 
         // ── US BROADCAST & CABLE ───────────────────────────────────
         QuickChannel("US Major Broadcast", listOf("ABC", "ABC US", "CBS", "CBS US", "NBC", "NBC US", "FOX", "FOX US"), listOf("US"), listOf("broadcast")),

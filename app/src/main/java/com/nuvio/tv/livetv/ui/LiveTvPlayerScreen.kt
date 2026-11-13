@@ -802,23 +802,19 @@ fun LiveTvPlayerScreen(
             aspectMode = aspectModeOf(settings.aspectMode),
             pictureShape = pictureShape
         )
-        if (!embedded) LiveSoftZapSurface(
-            playback = viewModel.playback,
-            modifier = Modifier.fillMaxSize(),
-            aspectMode = aspectModeOf(settings.aspectMode),
-            pictureShape = pictureShape,
-        )
 
         // Status in the middle of the screen. "Loading…" only for channels that are actually
         // slow to start (not the moment every channel change takes).
-        val slowLoading = rememberDelayedTrue(playback.isBuffering, 1_200)
+        val slowLoading = rememberDelayedTrue(
+            playback.isBuffering && !playback.isPlaying && playback.error == null,
+            250,
+        )
         val recStarting by viewModel.playback.recordingStarting.collectAsStateWithLifecycle()
         val centerMessage = when {
             current == null -> "Nothing playing"
             playback.error != null -> null // shown with its reason below
             recStarting -> "Starting the recording…"
-            playback.switching -> null // its own spinner below
-            else -> if (slowLoading) "Loading…" else null
+            else -> null
         }
         // A problem: what's happening, and why underneath (wrapped, so it isn't cut off).
         playback.error?.let { reason ->
@@ -829,28 +825,21 @@ fun LiveTvPlayerScreen(
                 modifier = Modifier.align(Alignment.Center)
             )
         }
-        if (playback.switching) {
+        // Loading: a transparent spinner over the video, gone as soon as it starts playing.
+        if (slowLoading) {
             Column(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                modifier = Modifier.align(Alignment.Center),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 LoadingSpinner(Modifier.size(28.dp))
                 Spacer(Modifier.height(10.dp))
-                LiveText("Tuning ${playback.switchingTitle ?: "channel"}…", color = Color.White, size = 18.sp)
+                LiveText("Loading…", color = Color.White, size = 18.sp)
             }
         }
         centerMessage?.let {
             LiveText(
                 it,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                modifier = Modifier.align(Alignment.Center),
                 size = 18.sp
             )
         }

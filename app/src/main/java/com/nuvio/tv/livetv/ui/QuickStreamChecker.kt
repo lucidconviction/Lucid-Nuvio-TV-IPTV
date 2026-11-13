@@ -29,7 +29,7 @@ object QuickStreamChecker {
     private const val TTL_MS = 30 * 60 * 1000L
     private const val TIMEOUT_MS = 8_000L
     private const val RETRY_TIMEOUT_MS = 12_000L
-    private const val MAX_CONCURRENCY = 8
+    private const val MAX_CONCURRENCY = 4
     private const val SAMPLE_SIZE = 4096
 
     private val client: OkHttpClient = ForkHttp.builder()

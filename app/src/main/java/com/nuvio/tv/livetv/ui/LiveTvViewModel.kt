@@ -57,6 +57,9 @@ class LiveTvSession @Inject constructor() {
     /** Overlay mode off: Left in full screen returns to the guide with the groups open. */
     var openGroupsOnReturn = false
     val collapsedPlaylists = MutableStateFlow<Set<String>>(emptySet())
+    /** The playlist folders were folded for this app run (the user can open them again). */
+    var playlistCollapseInitialized = false
+    var knownPlaylistIds: Set<String> = emptySet()
     /** Sleep timer: when playback stops (null = off). Kept while the app is open. */
     val sleepAtMs = MutableStateFlow<Long?>(null)
     /** The "closed while starting" note has been shown (once per app launch). */
@@ -106,6 +109,27 @@ class LiveTvViewModel @Inject constructor(
         driveSync.start()
         addonGuide.ensureLoaded()
         lucid.ensureLoaded()
+        // Playlist folders start collapsed; Lucid TV Channels stays open at the top.
+        viewModelScope.launch {
+            prefs.playlists
+                .map { list -> list.mapTo(HashSet()) { it.id } }
+                .distinctUntilChanged()
+                .collect { ids ->
+                    if (!session.playlistCollapseInitialized) {
+                        session.playlistCollapseInitialized = true
+                        session.knownPlaylistIds = ids
+                        session.collapsedPlaylists.value =
+                            ids - com.nuvio.tv.livetv.lucid.LucidTvRepository.SOURCE_ID
+                    } else {
+                        val added = ids - session.knownPlaylistIds
+                        if (added.isNotEmpty()) {
+                            session.collapsedPlaylists.value = session.collapsedPlaylists.value +
+                                (added - com.nuvio.tv.livetv.lucid.LucidTvRepository.SOURCE_ID)
+                        }
+                        session.knownPlaylistIds = ids
+                    }
+                }
+        }
     }
 
 
@@ -1352,7 +1376,10 @@ class LiveTvViewModel @Inject constructor(
 
     /** Playlist id -> name, for the playlist headings in the group list. */
     val playlistNames: StateFlow<Map<String, String>> = prefs.playlists
-        .map { list -> list.associate { it.id to it.name } }
+        .map { list ->
+            list.associate { it.id to it.name } +
+                (com.nuvio.tv.livetv.lucid.LucidTvRepository.SOURCE_ID to "Lucid TV Channels")
+        }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     /** Playlists folded away in the group list (kept while the app is open). */

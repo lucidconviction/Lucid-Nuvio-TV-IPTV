@@ -53,8 +53,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -691,31 +689,6 @@ internal fun LivePlayerSurface(
     DisposableEffect(Unit) {
         onDispose { viewRef?.player = null }
     }
-}
-
-/**
- * The incoming channel of a Lucid TV soft zap, drawn over the one still playing and faded in by
- * the controller. A TextureView is used here on purpose: unlike a SurfaceView it can be
- * alpha-blended, which is what makes the cross-fade possible.
- */
-@Composable
-internal fun LiveSoftZapSurface(
-    playback: com.nuvio.tv.livetv.player.LiveTvPlaybackController,
-    modifier: Modifier = Modifier,
-    aspectMode: com.nuvio.tv.ui.screens.player.AspectMode? = null,
-    pictureShape: com.nuvio.tv.livetv.player.PictureShape = com.nuvio.tv.livetv.player.PictureShape.AUTO,
-) {
-    val incoming by playback.transitionPlayer.collectAsStateWithLifecycle()
-    val alpha by playback.transitionAlpha.collectAsStateWithLifecycle()
-    val player = incoming ?: return
-    LivePlayerSurface(
-        player = player,
-        modifier = modifier.graphicsLayer { this.alpha = alpha.coerceIn(0f, 1f) },
-        useSurfaceView = false,
-        onAttached = {},
-        aspectMode = aspectMode,
-        pictureShape = pictureShape,
-    )
 }
 
 /** Pauses Live TV when the app goes to the background (Home button) and resumes on return. */

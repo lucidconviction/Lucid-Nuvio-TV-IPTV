@@ -77,6 +77,21 @@ class QuickChannelsLogicTest {
     }
 
     @Test
+    fun paidNetworksSitDirectlyAfterPremium() {
+        val ids = QuickChannelList.defaultCategories.map { it.id }
+        assertEquals(ids.indexOf("premium") + 1, ids.indexOf("paid"))
+        val paid = QuickChannelList.getChannelsForCategory("paid").map { it.displayName }
+        assertEquals(
+            listOf(
+                "Netflix", "Amazon Prime Video", "Hulu", "Disney Plus", "HBO Max",
+                "Apple TV", "Peacock", "Paramount Plus", "Starz", "AMC Plus", "MGM Plus",
+            ),
+            paid,
+        )
+        assertTrue(paid.all { QuickChannelList.matches(QuickChannel(it, emptyList(), emptyList()), channel(it)) })
+    }
+
+    @Test
     fun customRegionsAndChannelsAreSavedAndSearched() {
         QuickChannelList.load(null)
         assertTrue(

@@ -124,13 +124,6 @@ internal fun QuickChSearchBar(
 
     val validation = rememberQuickChannelMatchState(selectedQuick, allChannels)
 
-    // Keep the highlighted chip wholly in view; there is no per-chip focus to scroll it for us.
-    LaunchedEffect(chipIndex, focusLevel, selectedCategory) {
-        runCatching {
-            if (focusLevel) channelRow.animateScrollToItem(chipIndex.coerceAtLeast(0))
-            else regionRow.animateScrollToItem(chipIndex.coerceAtLeast(0))
-        }
-    }
 
     val chips: List<String> = if (!focusLevel) {
         categories.map { it.title } + "Manage"
@@ -139,6 +132,14 @@ internal fun QuickChSearchBar(
     }
     val lastIndex = chips.lastIndex.coerceAtLeast(0)
     LaunchedEffect(chips.size) { chipIndex = chipIndex.coerceIn(0, lastIndex) }
+    // Keep the highlighted chip wholly in view; there is no per-chip focus to scroll it for us.
+    // Instant, clamped scrolling: an unfinished animation on a row that is being replaced was a
+    // crash source on some boxes.
+    LaunchedEffect(chipIndex, focusLevel, selectedCategory, chips.size) {
+        val state = if (focusLevel) channelRow else regionRow
+        val target = chipIndex.coerceIn(0, (chips.size - 1).coerceAtLeast(0))
+        runCatching { state.scrollToItem(target) }
+    }
 
     fun choose(index: Int) {
         if (index == lastIndex) { manageOpen = true; return }
@@ -162,8 +163,9 @@ internal fun QuickChSearchBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .height(42.dp)
+            // The same left/right edges as the EPG and its time ruler.
+            .padding(end = 24.dp, top = 3.dp, bottom = 3.dp)
             .clip(RoundedCornerShape(9.dp))
             .background(NuvioTheme.colors.BackgroundCard.copy(alpha = 0.72f))
             .border(
@@ -211,24 +213,26 @@ internal fun QuickChSearchBar(
                 maxLines = 1,
                 modifier = Modifier.widthIn(max = 126.dp).padding(end = 8.dp)
             )
-            Box(Modifier.weight(1f).fillMaxSize()) {
-                val state = if (focusLevel) channelRow else regionRow
-                LazyRow(
-                    state = state,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    itemsIndexed(chips) { index, label ->
-                        QuickChip(
-                            label = label,
-                            active = if (focusLevel) index == 0 || quickChannels.getOrNull(index - 1)?.displayName == selectedQuick?.displayName
-                            else categories.getOrNull(index)?.id == selectedCategory,
-                            focused = barFocused && index == chipIndex,
-                            onClick = { chipIndex = index; choose(index) },
-                        )
-                    }
-                }
+            // Two separate rows: swapping the LazyListState of one row while it scrolls could
+            // leave the list half-measured on low-end boxes.
+            if (focusLevel) {
+                QuickChipRow(
+                    state = channelRow,
+                    chips = chips,
+                    active = { index -> index == 0 || quickChannels.getOrNull(index - 1)?.displayName == selectedQuick?.displayName },
+                    focusedIndex = if (barFocused) chipIndex else -1,
+                    onClick = { index -> chipIndex = index; choose(index) },
+                    modifier = Modifier.weight(1f).fillMaxSize(),
+                )
+            } else {
+                QuickChipRow(
+                    state = regionRow,
+                    chips = chips,
+                    active = { index -> categories.getOrNull(index)?.id == selectedCategory },
+                    focusedIndex = if (barFocused) chipIndex else -1,
+                    onClick = { index -> chipIndex = index; choose(index) },
+                    modifier = Modifier.weight(1f).fillMaxSize(),
+                )
             }
         }
     }
@@ -310,6 +314,32 @@ internal fun QuickChSearchBar(
 /** Lets a dialog hand focus back once it has closed (the bar must be composed again first). */
 private fun kotlinx.coroutines.CoroutineScope.launchFocus(requester: FocusRequester) {
     launch { delay(80); runCatching { requester.requestFocus() } }
+}
+
+@Composable
+private fun QuickChipRow(
+    state: androidx.compose.foundation.lazy.LazyListState,
+    chips: List<String>,
+    active: (Int) -> Boolean,
+    focusedIndex: Int,
+    onClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyRow(
+        state = state,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier,
+    ) {
+        itemsIndexed(chips) { index, label ->
+            QuickChip(
+                label = label,
+                active = active(index),
+                focused = index == focusedIndex,
+                onClick = { onClick(index) },
+            )
+        }
+    }
 }
 
 @Composable
