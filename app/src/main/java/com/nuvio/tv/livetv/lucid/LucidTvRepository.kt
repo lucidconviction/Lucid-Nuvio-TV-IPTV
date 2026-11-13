@@ -1,5 +1,6 @@
 package com.nuvio.tv.livetv.lucid
 
+import android.content.Context
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.poster.CustomPosterScreen
 import com.nuvio.tv.domain.model.Addon
@@ -12,12 +13,14 @@ import com.nuvio.tv.livetv.data.LiveTvPreferences
 import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.livetv.model.LiveChannel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +35,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -50,6 +58,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class LucidTvRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val addonRepository: AddonRepository,
     private val catalogRepository: CatalogRepository,
     private val metaRepository: MetaRepository,
@@ -57,6 +66,10 @@ class LucidTvRepository @Inject constructor(
     private val prefs: LiveTvPreferences,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val cacheFile = File(File(context.filesDir, "lucid"), "pools.json")
+    @Volatile private var cacheSavedAtMs = 0L
+    private var saveCacheJob: Job? = null
 
     private val _channels = MutableStateFlow<List<LiveChannel>>(emptyList())
     val channels: StateFlow<List<LiveChannel>> = _channels.asStateFlow()
@@ -66,6 +79,7 @@ class LucidTvRepository @Inject constructor(
 
     @Volatile private var specs: List<LucidChannelSpec> = emptyList()
     private val pools = ConcurrentHashMap<String, List<LucidItem>>()
+    private val poolSources = ConcurrentHashMap<String, String>()
     private val generation = AtomicInteger()
     private var started = false
 
@@ -73,6 +87,7 @@ class LucidTvRepository @Inject constructor(
         if (started) return
         started = true
         scope.launch {
+            restorePoolCache()
             combine(
                 addonRepository.getInstalledAddons().debounce(400),
                 prefs.lucidChannels,
@@ -110,6 +125,18 @@ class LucidTvRepository @Inject constructor(
         val spec = specs.firstOrNull { it.channelKey == channelKey } ?: return null
         val pool = pools[spec.id].orEmpty()
         if (pool.isEmpty()) return null
+        if (spec.kind == LucidChannelKind.ADDON_LIVE) {
+            val item = pool.firstOrNull() ?: return null
+            return LucidTune(
+                channelKey = spec.channelKey,
+                slotNumber = atMs,
+                slotStartMs = atMs,
+                slotEndMs = atMs + LIVE_BLOCK_MS,
+                item = item,
+                startOffsetMs = 0L,
+                live = true,
+            )
+        }
         return if (spec.isLoop) tuneLoop(spec, pool, atMs) else tuneRotate(spec, pool, atMs, slotNumber)
     }
 
@@ -185,7 +212,12 @@ class LucidTvRepository @Inject constructor(
         val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() }
         specs = allSpecs
         val liveIds = allSpecs.mapTo(HashSet()) { it.id }
+        val previousSources = HashMap(poolSources)
         pools.keys.retainAll(liveIds)
+        poolSources.keys.retainAll(liveIds)
+        allSpecs.forEach { poolSources[it.id] = sourceKey(it) }
+        // Cached pools make the guide appear immediately; the network catch-up below only
+        // fetches what is missing, stale or changed.
         publish()
 
         val permits = Semaphore(POOL_CONCURRENCY)
@@ -193,10 +225,15 @@ class LucidTvRepository @Inject constructor(
             allSpecs.map { spec ->
                 async {
                     permits.withPermit {
-                        // Catalog/series pools are expensive; keep them while the source is the
-                        // same. Saving a spec or another addon change only loads what's new.
-                        val needsLoad = spec.kind == LucidChannelKind.RELAY_LOOP || !pools.containsKey(spec.id)
+                        val source = sourceKey(spec)
+                        val stale = cacheSavedAtMs > 0L &&
+                            System.currentTimeMillis() - cacheSavedAtMs > POOL_CACHE_TTL_MS
+                        val needsLoad = spec.kind == LucidChannelKind.RELAY_LOOP ||
+                            !pools.containsKey(spec.id) ||
+                            previousSources[spec.id] != source ||
+                            stale
                         if (!needsLoad) return@withPermit
+                        val hadPool = pools.containsKey(spec.id)
                         val items = runCatching {
                             when (spec.kind) {
                                 LucidChannelKind.CATALOG_ROTATE,
@@ -204,16 +241,82 @@ class LucidTvRepository @Inject constructor(
                                 LucidChannelKind.SERIES_LOOP -> loadSeriesPool(spec)
                                 LucidChannelKind.RELAY_LOOP -> buildRelayPool(spec, input.liveChannels)
                                 LucidChannelKind.MANUAL_LOOP -> buildManualPool(spec)
+                                LucidChannelKind.ADDON_LIVE -> buildManualPool(spec)
                             }
                         }.getOrDefault(emptyList())
                         if (run != generation.get()) return@withPermit
-                        if (items.isEmpty()) pools.remove(spec.id) else pools[spec.id] = items
+                        if (items.isEmpty()) {
+                            // A failed refresh never wipes a usable cached pool.
+                            if (!hadPool) pools.remove(spec.id)
+                        } else {
+                            pools[spec.id] = items
+                            scheduleSaveCache()
+                        }
                         publish()
                     }
                 }
             }.awaitAll()
         }
     }
+
+    private fun sourceKey(spec: LucidChannelSpec): String = when (spec.kind) {
+        LucidChannelKind.CATALOG_ROTATE, LucidChannelKind.CATALOG_LOOP ->
+            "catalog|${spec.addonBaseUrl}|${spec.catalogId}|${spec.contentType}"
+        LucidChannelKind.SERIES_LOOP -> "series|${spec.addonBaseUrl}|${spec.seriesId}"
+        LucidChannelKind.MANUAL_LOOP ->
+            "manual|" + spec.manualItems.joinToString(",") { it.id }.hashCode()
+        LucidChannelKind.RELAY_LOOP ->
+            "relay|${spec.relayGroupId}|${spec.relayKeys.joinToString(",")}"
+        LucidChannelKind.ADDON_LIVE ->
+            "live|${spec.manualItems.firstOrNull()?.id}|${spec.manualItems.firstOrNull()?.type}"
+    }
+
+    private fun restorePoolCache() {
+        val cache = runCatching {
+            if (!cacheFile.exists()) return
+            json.decodeFromString<PoolCache>(cacheFile.readText())
+        }.getOrNull() ?: return
+        if (cache.savedAtMs <= 0L || cache.pools.isEmpty()) return
+        pools.clear()
+        pools.putAll(cache.pools)
+        poolSources.clear()
+        poolSources.putAll(cache.sources)
+        cacheSavedAtMs = cache.savedAtMs
+    }
+
+    private fun scheduleSaveCache() {
+        saveCacheJob?.cancel()
+        saveCacheJob = scope.launch {
+            delay(2_000L)
+            savePoolCache()
+        }
+    }
+
+    private fun savePoolCache() {
+        val relayIds = specs.filter { it.kind == LucidChannelKind.RELAY_LOOP }.mapTo(HashSet()) { it.id }
+        val cache = PoolCache(
+            savedAtMs = System.currentTimeMillis(),
+            pools = pools.filterKeys { it !in relayIds },
+            sources = poolSources.filterKeys { it !in relayIds },
+        )
+        runCatching {
+            cacheFile.parentFile?.mkdirs()
+            val tmp = File(cacheFile.parentFile, cacheFile.name + ".tmp")
+            tmp.writeText(json.encodeToString(cache))
+            if (!tmp.renameTo(cacheFile)) {
+                cacheFile.delete()
+                tmp.renameTo(cacheFile)
+            }
+            cacheSavedAtMs = cache.savedAtMs
+        }
+    }
+
+    @Serializable
+    private data class PoolCache(
+        val savedAtMs: Long,
+        val pools: Map<String, List<LucidItem>>,
+        val sources: Map<String, String>,
+    )
 
     private fun discover(addons: List<Addon>, excludedSources: Set<String>): List<Discovered> =
         addons.asSequence()
@@ -448,6 +551,21 @@ class LucidTvRepository @Inject constructor(
         currentSpecs.forEach { spec ->
             val pool = pools[spec.id].orEmpty()
             if (pool.isEmpty()) return@forEach
+            if (spec.kind == LucidChannelKind.ADDON_LIVE) {
+                val item = pool.firstOrNull() ?: return@forEach
+                out[spec.channelKey] = listOf(
+                    EpgProgram(
+                        startMs = from,
+                        stopMs = to,
+                        title = item.title,
+                        description = item.description,
+                        category = "Lucid TV · Live addon",
+                        icon = item.poster,
+                        year = item.year,
+                    ),
+                )
+                return@forEach
+            }
             if (!spec.isLoop) {
                 val slotMs = spec.slotMinutes.coerceAtLeast(1) * 60_000L
                 var slot = LucidSchedule.slotAt(from, spec.id, slotMs)
@@ -513,6 +631,8 @@ class LucidTvRepository @Inject constructor(
         const val EPG_PAST_MS = 2 * 60 * 60_000L
         const val EPG_FUTURE_MS = 3 * 24 * 60 * 60_000L
         const val MAX_PROGRAMS_PER_CHANNEL = 2000
+        const val POOL_CACHE_TTL_MS = 6 * 60 * 60_000L
+        const val LIVE_BLOCK_MS = 12 * 60 * 60_000L
 
         private val HOURS = Regex("(\\d+)\\s*h", RegexOption.IGNORE_CASE)
         private val MINUTES = Regex("(\\d+)\\s*m", RegexOption.IGNORE_CASE)

@@ -255,6 +255,10 @@ fun LiveTvSearchPreview(results: LiveTvSearchResults, modifier: Modifier = Modif
             useSurfaceView = false,
             onAttached = { vm.playback.onSurfaceAttached() }
         )
+        LiveSoftZapSurface(
+            playback = vm.playback,
+            modifier = Modifier.fillMaxSize(),
+        )
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)))
         playback.error?.let {
             PlayerStatusMessage(

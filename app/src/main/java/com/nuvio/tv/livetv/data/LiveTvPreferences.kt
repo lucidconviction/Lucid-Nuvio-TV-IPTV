@@ -64,6 +64,7 @@ class LiveTvPreferences @Inject constructor(
         val showImportProgress = booleanPreferencesKey("show_import_progress")
         val lucidTvEnabled = booleanPreferencesKey("lucid_tv_enabled")
         val lucidChannels = stringPreferencesKey("lucid_channels")
+        val quickChannels = stringPreferencesKey("quick_channels")
         val showNames = booleanPreferencesKey("show_channel_names")
         val showNumbers = booleanPreferencesKey("show_channel_numbers")
         val markPlaying = booleanPreferencesKey("mark_playing_channel")
@@ -550,6 +551,15 @@ class LiveTvPreferences @Inject constructor(
     suspend fun currentHiddenEverywhere(): HiddenEverywhere = hiddenEverywhere.first()
 
     /** Custom Lucid TV channels, saved with the rest of the Live TV setup. */
+    /** The user's own Quick Ch Search regions and channels (this TV). */
+    val quickChannels: Flow<String> = deviceStore.data
+        .map { it[Keys.quickChannels].orEmpty() }
+        .distinctUntilChanged()
+
+    suspend fun saveQuickChannels(json: String) {
+        deviceStore.edit { it[Keys.quickChannels] = json }
+    }
+
     val lucidChannels: Flow<List<LucidStoredSpec>> = store.data
         .map { LucidSpecCodec.decodeSpecs(it[Keys.lucidChannels]) }
         .distinctUntilChanged()

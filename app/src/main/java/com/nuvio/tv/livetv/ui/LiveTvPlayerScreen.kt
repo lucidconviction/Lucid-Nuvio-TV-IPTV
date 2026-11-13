@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -801,6 +802,12 @@ fun LiveTvPlayerScreen(
             aspectMode = aspectModeOf(settings.aspectMode),
             pictureShape = pictureShape
         )
+        if (!embedded) LiveSoftZapSurface(
+            playback = viewModel.playback,
+            modifier = Modifier.fillMaxSize(),
+            aspectMode = aspectModeOf(settings.aspectMode),
+            pictureShape = pictureShape,
+        )
 
         // Status in the middle of the screen. "Loading…" only for channels that are actually
         // slow to start (not the moment every channel change takes).
@@ -810,6 +817,7 @@ fun LiveTvPlayerScreen(
             current == null -> "Nothing playing"
             playback.error != null -> null // shown with its reason below
             recStarting -> "Starting the recording…"
+            playback.switching -> null // its own spinner below
             else -> if (slowLoading) "Loading…" else null
         }
         // A problem: what's happening, and why underneath (wrapped, so it isn't cut off).
@@ -820,6 +828,20 @@ fun LiveTvPlayerScreen(
                 detail = reason,
                 modifier = Modifier.align(Alignment.Center)
             )
+        }
+        if (playback.switching) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                LoadingSpinner(Modifier.size(28.dp))
+                Spacer(Modifier.height(10.dp))
+                LiveText("Tuning ${playback.switchingTitle ?: "channel"}…", color = Color.White, size = 18.sp)
+            }
         }
         centerMessage?.let {
             LiveText(

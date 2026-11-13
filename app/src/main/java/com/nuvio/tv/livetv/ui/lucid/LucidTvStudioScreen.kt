@@ -81,6 +81,9 @@ private enum class StudioMode {
     SERIES_CATALOG,
     SERIES_ITEM,
     MANUAL_ITEM,
+    LIVE_ADDON,
+    LIVE_CATALOG,
+    LIVE_ITEM,
     RELAY_GROUP,
     EDIT,
 }
@@ -114,6 +117,9 @@ fun LucidTvStudioScreen(
     var manualSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var manualLoading by remember { mutableStateOf(false) }
     var manualError by remember { mutableStateOf<String?>(null) }
+    var liveItems by remember { mutableStateOf<List<MetaPreview>>(emptyList()) }
+    var liveLoading by remember { mutableStateOf(false) }
+    var liveError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var nowTick by remember { mutableIntStateOf(0) }
     val firstFocus = remember { FocusRequester() }
@@ -133,21 +139,27 @@ fun LucidTvStudioScreen(
     LaunchedEffect(
         mode, specs.size, addons.size, relayGroups.size, addonPick,
         seriesItems.size, seriesLoading, manualItems.size, manualLoading,
+        liveItems.size, liveLoading,
     ) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
     }
-    BackHandler {
+    fun stepBack() {
         when (mode) {
             StudioMode.LIST -> onBack()
             StudioMode.EDIT -> { draft = null; mode = StudioMode.LIST }
             StudioMode.SERIES_ITEM -> { mode = StudioMode.SERIES_CATALOG; seriesItems = emptyList() }
             StudioMode.MANUAL_ITEM -> { mode = StudioMode.CATALOG_CATALOG; manualItems = emptyList(); manualSelected = emptySet() }
-            StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> { mode = if (mode == StudioMode.CATALOG_CATALOG) StudioMode.CATALOG_ADDON else StudioMode.SERIES_ADDON }
-            StudioMode.CATALOG_ADDON, StudioMode.SERIES_ADDON, StudioMode.RELAY_GROUP -> mode = StudioMode.ADD_MENU
+            StudioMode.LIVE_ITEM -> { mode = StudioMode.LIVE_CATALOG; liveItems = emptyList() }
+            StudioMode.LIVE_CATALOG -> mode = StudioMode.LIVE_ADDON
+            StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> {
+                mode = if (mode == StudioMode.CATALOG_CATALOG) StudioMode.CATALOG_ADDON else StudioMode.SERIES_ADDON
+            }
+            StudioMode.CATALOG_ADDON, StudioMode.SERIES_ADDON, StudioMode.LIVE_ADDON, StudioMode.RELAY_GROUP -> mode = StudioMode.ADD_MENU
             else -> mode = StudioMode.LIST
         }
     }
+    BackHandler { stepBack() }
 
     fun importFromClipboard() {
         val text = clipboard.getText()?.text
@@ -193,7 +205,11 @@ fun LucidTvStudioScreen(
                 Spacer(Modifier.width(5.dp))
                 Text("Export", fontSize = 11.sp)
             }
-            Button(onClick = onBack) { Text("Done") }
+            if (mode == StudioMode.LIST) {
+                Button(onClick = onBack) { Text("Done") }
+            } else {
+                Button(onClick = { stepBack() }) { Text("Back") }
+            }
         }
         notice?.let {
             Text(it, modifier = Modifier.padding(top = 8.dp), style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
@@ -254,6 +270,49 @@ fun LucidTvStudioScreen(
                 forSeries = true,
                 firstFocus = firstFocus,
                 onPick = { addonPick = it; mode = StudioMode.SERIES_CATALOG },
+            )
+            StudioMode.LIVE_ADDON -> AddonList(
+                addons = addons,
+                forLive = true,
+                firstFocus = firstFocus,
+                onPick = { addonPick = it; mode = StudioMode.LIVE_CATALOG },
+            )
+            StudioMode.LIVE_CATALOG -> CatalogList(
+                catalogs = addonPick?.let { viewModel.liveCatalogsFor(it) }.orEmpty(),
+                firstFocus = firstFocus,
+                onPick = { catalog ->
+                    val addon = addonPick ?: return@CatalogList
+                    catalogPick = catalog
+                    liveItems = emptyList()
+                    liveError = null
+                    liveLoading = true
+                    mode = StudioMode.LIVE_ITEM
+                    scope.launch {
+                        viewModel.catalogItems(addon, catalog)
+                            .onSuccess { liveItems = it }
+                            .onFailure { liveError = it.message ?: "The catalog couldn't be loaded." }
+                        liveLoading = false
+                    }
+                },
+            )
+            StudioMode.LIVE_ITEM -> SeriesItemList(
+                items = liveItems,
+                loading = liveLoading,
+                error = liveError,
+                firstFocus = firstFocus,
+                onPick = { item ->
+                    val addon = addonPick ?: return@SeriesItemList
+                    val catalog = catalogPick ?: return@SeriesItemList
+                    draft = viewModel.newSpec(
+                        name = item.name,
+                        kind = LucidChannelKind.ADDON_LIVE,
+                        addon = addon,
+                        catalog = catalog,
+                        poster = item.poster,
+                        manualItems = listOf(viewModel.manualItem(item, addon)),
+                    )
+                    mode = StudioMode.EDIT
+                },
             )
             StudioMode.SERIES_CATALOG -> CatalogList(
                 catalogs = addonPick?.let { viewModel.catalogsFor(it, forSeries = true) }.orEmpty(),
@@ -440,6 +499,7 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
         Triple("Addon catalog · 24/7", "The same catalog as a continuous queue, using each film's real runtime.", LucidChannelKind.CATALOG_LOOP to StudioMode.CATALOG_ADDON),
         Triple("Series marathon · 24/7", "One series, every episode in order, using the episode runtimes.", LucidChannelKind.SERIES_LOOP to StudioMode.SERIES_ADDON),
         Triple("Movie collection · 24/7", "Pick films from a catalog into a hand-made 24/7 marathon.", LucidChannelKind.MANUAL_LOOP to StudioMode.CATALOG_ADDON),
+        Triple("Addon live channel", "One channel from an addon live, TV or sport catalog. Its stream is resolved when tuned.", LucidChannelKind.ADDON_LIVE to StudioMode.LIVE_ADDON),
         Triple("Live channel relay · 24/7", "Relay an existing IPTV group as a Lucid TV channel and switch at segment boundaries.", LucidChannelKind.RELAY_LOOP to StudioMode.RELAY_GROUP),
     )
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -468,20 +528,30 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
 @Composable
 private fun AddonList(
     addons: List<Addon>,
-    forSeries: Boolean,
+    forSeries: Boolean = false,
+    forLive: Boolean = false,
     firstFocus: FocusRequester,
     onPick: (Addon) -> Unit,
 ) {
+    val wanted = when {
+        forLive -> setOf("live", "tv", "sport", "sports")
+        forSeries -> setOf("series")
+        else -> setOf("movie")
+    }
     val choices = addons.filter { addon ->
         addon.enabled && addon.catalogs.any {
-            it.apiType == (if (forSeries) "series" else "movie") &&
+            it.apiType in wanted &&
                 !it.isSearchOnlyCatalog() &&
                 it.extra.none { extra -> extra.isRequired }
         }
     }
     if (choices.isEmpty()) {
         Text(
-            if (forSeries) "No installed addon has a series catalog." else "No installed addon has a movie catalog.",
+            when {
+                forLive -> "No installed addon has a live, TV or sport catalog."
+                forSeries -> "No installed addon has a series catalog."
+                else -> "No installed addon has a movie catalog."
+            },
             color = NuvioTheme.colors.TextSecondary,
         )
         return
@@ -501,7 +571,7 @@ private fun AddonList(
                 ),
             ) {
                 Text(addon.displayName, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                Text("${addon.catalogs.count { it.apiType == (if (forSeries) "series" else "movie") && !it.isSearchOnlyCatalog() && it.extra.none { e -> e.isRequired } }} catalogs", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                Text("${addon.catalogs.count { it.apiType in wanted && !it.isSearchOnlyCatalog() && it.extra.none { e -> e.isRequired } }} catalogs", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
             }
         }
     }
@@ -627,22 +697,21 @@ private fun ManualItemList(
     onCreate: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = onCreate) {
-                Text(if (selected.isEmpty()) "Create channel" else "Create channel (${selected.size})")
-            }
-            Text(
-                "Pick the films for this channel.",
-                style = NuvioTheme.textStyles.metadata,
-                color = NuvioTheme.colors.TextSecondary,
-            )
-        }
+        Text(
+            if (selected.isEmpty()) "Pick films from this catalog, then use Set list." else "${selected.size} film(s) selected. Use Set list to continue.",
+            style = NuvioTheme.textStyles.body,
+            color = NuvioTheme.colors.TextSecondary,
+        )
         Spacer(Modifier.height(10.dp))
         when {
             loading -> Text("Loading the catalog…", color = NuvioTheme.colors.TextSecondary)
             error != null -> Text(error, color = NuvioTheme.colors.Warning)
             items.isEmpty() -> Text("This catalog is empty.", color = NuvioTheme.colors.TextSecondary)
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 30.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(bottom = 8.dp),
+            ) {
                 itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
                     val isSelected = item.id in selected
                     Button(
@@ -682,6 +751,10 @@ private fun ManualItemList(
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onCreate) {
+            Text(if (selected.isEmpty()) "Set list" else "Set list (${selected.size})")
+        }
     }
 }
 
@@ -706,8 +779,9 @@ private fun Editor(
         Text(nowNextLabel(current, next), style = NuvioTheme.textStyles.body, color = NuvioTheme.colors.TextPrimary)
         Spacer(Modifier.height(10.dp))
         LazyColumn(
+            modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 30.dp),
+            contentPadding = PaddingValues(bottom = 8.dp),
         ) {
             item {
                 TextFieldSetting("Name", draft.name) { onChange(draft.copy(name = it)) }
@@ -728,7 +802,7 @@ private fun Editor(
                 item {
                     ChipSetting(
                         "Join films at most",
-                        listOf(0, 10, 20, 30, 50),
+                        listOf(-1, 0, 10, 20, 30, 50),
                         draft.maxStartPercent,
                     ) { onChange(draft.copy(maxStartPercent = it)) }
                 }
@@ -761,10 +835,20 @@ private fun Editor(
                     ) { onChange(draft.copy(relaySegmentMinutes = it)) }
                 }
             }
+            if (draft.kind == LucidChannelKind.ADDON_LIVE) {
+                item {
+                    Text(
+                        "This channel plays one live stream from the addon. The stream is resolved when you tune.",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.TextSecondary,
+                    )
+                }
+            }
             item {
                 Button(
                     onClick = { onChange(draft.copy(enabled = !draft.enabled)) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (draft.kind == LucidChannelKind.ADDON_LIVE) Modifier.focusRequester(firstFocus) else Modifier),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     colors = ButtonDefaults.colors(
                         containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),
@@ -777,20 +861,19 @@ private fun Editor(
                     Text(if (draft.enabled) "On" else "Off", fontSize = 12.sp, color = if (draft.enabled) NuvioTheme.colors.Success else NuvioTheme.colors.TextSecondary)
                 }
             }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onSave) { Text("Save") }
-                    if (existing) {
-                        Button(onClick = onDuplicate) { Text("Duplicate") }
-                        Button(onClick = onDelete) {
-                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(5.dp))
-                            Text("Delete")
-                        }
-                    }
-                    Button(onClick = onCancel) { Text("Cancel") }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSave) { Text("Save channel") }
+            if (existing) {
+                Button(onClick = onDuplicate) { Text("Duplicate") }
+                Button(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Delete")
                 }
             }
+            Button(onClick = onCancel) { Text("Cancel") }
         }
     }
 }
@@ -848,6 +931,7 @@ private fun ChipSetting(
                     shape = ButtonDefaults.shape(RoundedCornerShape(9.dp)),
                 ) {
                     val text = when {
+                        label == "Join films at most" && value < 0 -> "Exact"
                         label == "Join films at most" && value == 0 -> "Start"
                         else -> "$value" + if (label.contains("length", ignoreCase = true) || label.contains("films", ignoreCase = true)) {
                             if (label.contains("films", ignoreCase = true)) "%" else "m"
@@ -893,6 +977,7 @@ private fun kindLabel(kind: LucidChannelKind): String = when (kind) {
     LucidChannelKind.CATALOG_LOOP -> "Addon catalog · 24/7"
     LucidChannelKind.SERIES_LOOP -> "Series marathon · 24/7"
     LucidChannelKind.RELAY_LOOP -> "Live channel relay · 24/7"
+    LucidChannelKind.ADDON_LIVE -> "Addon live channel"
     LucidChannelKind.MANUAL_LOOP -> "Movie collection · 24/7"
 }
 

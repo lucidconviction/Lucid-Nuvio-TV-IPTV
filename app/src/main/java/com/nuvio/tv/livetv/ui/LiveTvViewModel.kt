@@ -1368,11 +1368,33 @@ class LiveTvViewModel @Inject constructor(
         // Reordering by hand means "my order" from now on.
         if (settings.value.groupSort != "custom") viewModelScope.launch { prefs.updateSettings { it.copy(groupSort = "custom") } }
         if (ids.isEmpty()) return
-        viewModelScope.launch { prefs.moveGroup(ids.first(), 0, ids) }
+        // Lucid TV groups stay at the top of every list, in whatever order they were moved.
+        val ordered = ids.filter { com.nuvio.tv.livetv.lucid.isLucidGroupId(it) } +
+            ids.filterNot { com.nuvio.tv.livetv.lucid.isLucidGroupId(it) }
+        viewModelScope.launch { prefs.moveGroup(ordered.first(), 0, ordered) }
+    }
+
+    /** Quick Ch Search: the user's saved regions and channels (this TV). */
+    val quickChannelsJson = prefs.quickChannels
+
+    fun saveQuickChannels(json: String) {
+        viewModelScope.launch { prefs.saveQuickChannels(json) }
     }
 
     fun moveGroup(groupId: String, delta: Int) {
-        viewModelScope.launch { prefs.moveGroup(groupId, delta, uiState.value.orderableGroupIds) }
+        val order = uiState.value.orderableGroupIds.toMutableList()
+        val from = order.indexOf(groupId)
+        if (from < 0) return
+        // Lucid TV groups stay in the block at the top: they may move among themselves, and the
+        // playlist groups may move among themselves below, but neither crosses into the other.
+        val lucidCount = order.count { com.nuvio.tv.livetv.lucid.isLucidGroupId(it) }
+        val lucid = com.nuvio.tv.livetv.lucid.isLucidGroupId(groupId)
+        val first = if (lucid) 0 else lucidCount
+        val last = if (lucid) (lucidCount - 1).coerceAtLeast(0) else order.size - 1
+        val to = (from + delta).coerceIn(first, last.coerceAtLeast(first))
+        if (to == from) return
+        order.add(to, order.removeAt(from))
+        saveGroupOrder(order)
     }
 
     fun createGroupWith(name: String, channel: LiveChannel?) = viewModelScope.launch {
@@ -1790,7 +1812,9 @@ internal fun buildUi(
             result
         }
     }
-    groups += orderedRegular
+    // Lucid TV groups always sit above the playlist groups, even after a Reorder groups pass.
+    val lucidGroups = orderedRegular.filter { com.nuvio.tv.livetv.lucid.isLucidGroupId(it.id) }
+    groups += if (lucidGroups.isEmpty()) orderedRegular else lucidGroups + orderedRegular.filterNot { it in lucidGroups }
 
     val defaultGroupId = when {
         s.showAllChannelsGroup -> ChannelGroup.ALL
@@ -1827,7 +1851,7 @@ internal fun buildUi(
         allVisibleChannels = sortedVisible,
         hasSources = hasSrc,
         searchQuery = query,
-        orderableGroupIds = orderedRegular.map { it.id },
+        orderableGroupIds = groups.filterNot { it.special }.map { it.id },
         customGroups = custom,
         defaultGroupId = defaultGroupId
     )

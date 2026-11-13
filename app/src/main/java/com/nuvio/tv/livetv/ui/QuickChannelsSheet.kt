@@ -57,6 +57,10 @@ fun QuickChannelsSheet(
 ) {
     val user by viewModel.userState.collectAsStateWithLifecycle()
     val channels by viewModel.displayChannels.collectAsStateWithLifecycle()
+    val savedQuick by viewModel.quickChannelsJson.collectAsStateWithLifecycle("")
+    androidx.compose.runtime.LaunchedEffect(savedQuick) {
+        if (savedQuick.isNotBlank()) QuickChannelList.load(savedQuick)
+    }
     val byKey = remember(channels) { channels.associateBy { it.key } }
     val favorites = remember(channels, user.favorites) { user.favorites.mapNotNull { byKey[it] } }
     val recent = remember(channels, user.recent) { user.recent.mapNotNull { byKey[it] } }

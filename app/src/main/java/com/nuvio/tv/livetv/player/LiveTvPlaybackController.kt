@@ -62,6 +62,9 @@ data class LivePlaybackState(
     val pixelRatio: Float = 1f,
     /** Non-null while an archive (catch-up) program is playing instead of the live stream. */
     val catchupTitle: String? = null,
+    /** A new channel is being prepared while the current one keeps playing. */
+    val switching: Boolean = false,
+    val switchingTitle: String? = null,
     /**
      * You paused it (play/pause), as opposed to it just not playing yet: between channels and
      * while reconnecting it isn't playing either, and that must not count as paused.
@@ -690,6 +693,16 @@ class LiveTvPlaybackController @Inject constructor(
 
     private var resolvingVirtualKey: String? = null
     private var virtualResolveToken = 0
+    /** The prepared next channel during a soft zap: it fades in over the one still playing. */
+    private val _transitionPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val transitionPlayer: StateFlow<ExoPlayer?> = _transitionPlayer.asStateFlow()
+    /** How far the incoming channel has faded in (0..1); the outgoing one fades out under it. */
+    private val _transitionAlpha = MutableStateFlow(0f)
+    val transitionAlpha: StateFlow<Float> = _transitionAlpha.asStateFlow()
+    private var softZapToken = 0
+    private var transitionListener: Player.Listener? = null
+    private var softZapOldPlayer: ExoPlayer? = null
+    @Volatile private var softZapFading = false
     /** The Lucid TV slot currently playing, so the next one can start when this film ends. */
     @Volatile private var activeVirtual: LucidTune? = null
     /** Where to seek once the virtual film is ready (join-in-progress). */
@@ -880,18 +893,36 @@ class LiveTvPlaybackController @Inject constructor(
         if (resolvingVirtualKey == channel.key) return
         val token = ++virtualResolveToken
         resolvingVirtualKey = channel.key
-        activeVirtual = null
-        pendingVirtualStartMs = null
-        virtualRelayJob?.cancel()
-        _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        // Another channel is playing: keep it on screen and audible while this one is looked up.
+        val keptPlaying = canSwapInPlace(channel)
+        if (keptPlaying) {
+            // The old relay/queue timer must not tune underneath the incoming channel.
+            virtualRelayJob?.cancel()
+            _state.value = _state.value.copy(
+                switching = true,
+                switchingTitle = channel.name,
+                isBuffering = false,
+                error = null,
+            )
+        } else {
+            activeVirtual = null
+            pendingVirtualStartMs = null
+            virtualRelayJob?.cancel()
+            _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        }
+        fun failed(reason: String) {
+            if (keptPlaying) {
+                _state.value = _state.value.copy(switching = false, switchingTitle = null, isBuffering = false)
+                com.nuvio.tv.livetv.record.LiveTvNotice.show("Couldn't change channel · $reason")
+            } else {
+                _state.value = LivePlaybackState(channelKey = channel.key, error = reason)
+            }
+        }
         scope.launch {
             try {
                 val tune = lucid.tune(channel.key, atMs = atMs ?: System.currentTimeMillis())
                 if (tune == null) {
-                    _state.value = LivePlaybackState(
-                        channelKey = channel.key,
-                        error = "This Lucid TV channel has nothing to play. Check its source.",
-                    )
+                    failed("this Lucid TV channel has nothing to play. Check its source.")
                     return@launch
                 }
                 val item = tune.item
@@ -912,13 +943,12 @@ class LiveTvPlaybackController @Inject constructor(
                 }.filterNotNull().distinctBy { it.first }
                 if (token != virtualResolveToken) return@launch
                 if (resolved.isEmpty()) {
-                    _state.value = LivePlaybackState(
-                        channelKey = channel.key,
-                        error = if (item.season != null) {
-                            "No playable stream was found for ${item.title} S${item.season}E${item.episode}."
+                    failed(
+                        if (item.season != null) {
+                            "no playable stream for ${item.title} S${item.season}E${item.episode}."
                         } else {
-                            "No playable stream was found for ${item.title}."
-                        },
+                            "no playable stream for ${item.title}."
+                        }
                     )
                     return@launch
                 }
@@ -937,12 +967,235 @@ class LiveTvPlaybackController @Inject constructor(
                 )
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
-                _state.value = LivePlaybackState(
-                    channelKey = channel.key,
-                    error = "This Lucid TV channel couldn't be opened.",
-                )
+                failed("this Lucid TV channel couldn't be opened.")
             } finally {
                 if (token == virtualResolveToken) resolvingVirtualKey = null
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- soft zap
+
+    /** Whether the current stream can keep playing while the new channel is prepared. */
+    private fun canSwapInPlace(channel: LiveChannel): Boolean {
+        val p = _player ?: return false
+        val old = currentChannel ?: return false
+        if (old.key == channel.key) return false
+        if (p.playbackState == Player.STATE_IDLE || !p.playWhenReady) return false
+        if (_state.value.catchupTitle != null || _state.value.error != null) return false
+        if (_recordingPlayback.value != null || _shiftStartedAt.value != null) return false
+        // Rewind Anytime records the channel it started on; swapping would leave that buffer behind.
+        if (rewindAlways && timeshiftEnabled && com.nuvio.tv.livetv.ui.LiveTvFullscreen.active.value) return false
+        return true
+    }
+
+    /** Drops the incoming player (if any) and puts the old channel's sound back. */
+    private fun cancelSoftZap() {
+        softZapToken++
+        softZapFading = false
+        _transitionPlayer.value?.let { np ->
+            transitionListener?.let { np.removeListener(it) }
+            runCatching { np.release() }
+        }
+        transitionListener = null
+        _transitionPlayer.value = null
+        _transitionAlpha.value = 0f
+        softZapOldPlayer?.volume = 1f
+        softZapOldPlayer = null
+        if (_state.value.switching) {
+            _state.value = _state.value.copy(switching = false, switchingTitle = null)
+        }
+    }
+
+    /**
+     * Tunes [channel] on a second player while the old one keeps playing. Once the new stream has
+     * pictures (and is at its EPG join point) the pictures and the sound cross-fade, then the old
+     * player is let go. A failure leaves the old channel playing.
+     */
+    private fun startSoftZap(
+        channel: LiveChannel,
+        url: String,
+        tune: LucidTune,
+        fallbacks: List<String>,
+    ) {
+        val old = _player ?: return
+        cancelSoftZap()
+        virtualRelayJob?.cancel()
+        val token = ++softZapToken
+        softZapOldPlayer = old
+        _state.value = _state.value.copy(switching = true, switchingTitle = channel.name, isBuffering = false)
+        val np = buildPlayer(handleAudioFocus = false)
+        _transitionPlayer.value = np
+        np.volume = 0f
+        // The channel's saved audio language and the caption setting, from its first frame.
+        val lang = channelAudio[channel.key]?.split('|')?.getOrNull(0)?.ifBlank { null }
+        val textOff = channelCaptions[channel.key]?.let { it.startsWith("off") } ?: !captionsByDefault
+        np.trackSelectionParameters = np.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            .setPreferredAudioLanguage(lang)
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textOff)
+            .build()
+
+        val urls = ArrayDeque<String>().apply {
+            add(url)
+            fallbacks.forEach { if (it != url) add(it) }
+        }
+        var playingUrl = url
+        var joining = tune.startOffsetMs > 0L && !tune.live
+        var fading = false
+
+        fun fail() {
+            if (token != softZapToken) return
+            cancelSoftZap()
+            com.nuvio.tv.livetv.record.LiveTvNotice.show("Couldn't change channel · ${channel.name}")
+        }
+
+        fun beginFade() {
+            if (fading || token != softZapToken) return
+            fading = true
+            softZapFading = true
+            // Sound follows the picture: the old channel fades out as the new one fades in.
+            scope.launch {
+                val steps = 12
+                for (i in 1..steps) {
+                    if (token != softZapToken) return@launch
+                    val a = i / steps.toFloat()
+                    _transitionAlpha.value = a
+                    runCatching { np.volume = a }
+                    runCatching { old.volume = 1f - a }
+                    delay(28L)
+                }
+                if (token != softZapToken) return@launch
+                promoteSoftZap(token, old, np, channel, playingUrl, tune, fallbacks)
+            }
+        }
+
+        val zapListener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (token != softZapToken || fading) return
+                if (playbackState != Player.STATE_READY) return
+                if (joining) {
+                    joining = false
+                    val duration = np.duration
+                    val target = if (duration > 0L) {
+                        tune.startOffsetMs.coerceIn(0L, (duration - 1_000L).coerceAtLeast(0L))
+                    } else {
+                        tune.startOffsetMs
+                    }
+                    if (target > 0L) {
+                        np.seekTo(target)
+                        // Some streams seek inside what's already buffered without another READY.
+                        scope.launch {
+                            delay(250L)
+                            if (token == softZapToken && !fading && np.playbackState == Player.STATE_READY) beginFade()
+                        }
+                        return
+                    }
+                }
+                beginFade()
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (token != softZapToken) return
+                val next = urls.removeFirstOrNull()
+                if (next != null) {
+                    playingUrl = next
+                    joining = tune.startOffsetMs > 0L && !tune.live
+                    runCatching {
+                        np.setMediaSource(
+                            buildMediaSource(next, channel.headers, isLive = tune.relay || tune.live, channel = channel)
+                        )
+                        np.prepare()
+                        np.playWhenReady = true
+                    }.onFailure { fail() }
+                } else {
+                    fail()
+                }
+            }
+        }
+        transitionListener = zapListener
+        np.addListener(zapListener)
+        np.setMediaSource(buildMediaSource(url, channel.headers, isLive = tune.relay || tune.live, channel = channel))
+        np.prepare()
+        np.playWhenReady = true
+    }
+
+    /** The new channel has faded in: let go of the old player and make the new one current. */
+    private fun promoteSoftZap(
+        token: Int,
+        old: ExoPlayer,
+        np: ExoPlayer,
+        channel: LiveChannel,
+        url: String,
+        tune: LucidTune,
+        fallbacks: List<String>,
+    ) {
+        if (token != softZapToken) return
+        softZapToken++
+        softZapFading = false
+        transitionListener?.let { np.removeListener(it) }
+        transitionListener = null
+        runCatching {
+            old.removeListener(listener)
+            old.stop()
+            old.release()
+        }
+        softZapOldPlayer = null
+        np.volume = 1f
+        np.setAudioAttributes(audioAttributes, true)
+        np.addListener(listener)
+        _player = np
+        _transitionPlayer.value = null
+        _transitionAlpha.value = 0f
+
+        currentChannel = channel
+        LiveWatching.sourceId = channel.sourceId
+        currentUrl = url
+        _ownTimeline.value = false
+        shiftStartPending = false
+        savedRecordingId = null
+        fallbackUrls.clear()
+        fallbacks.forEach { if (it !in fallbackUrls) fallbackUrls += it }
+        archiveStartWallMs = null
+        archiveWallMapped = false
+        archiveExpectWallMs = null
+        archiveStartPending = false
+        alwaysBuffer = false
+        hlsCatchupFailedOn = null
+        activeVirtual = tune
+        pendingVirtualStartMs = null
+        virtualRelayJob?.cancel()
+        if (tune.relay) scheduleVirtualRelayAdvance(channel, tune.slotEndMs)
+        recentStalls.clear()
+        neverStartedCount = 0
+        audioHandled = false
+        audioPrefPending = false
+        captionsHandled = false
+        resetFrameRate()
+        LiveCaptions.reset()
+        captionWatch?.cancel()
+        markStarting(channel.key)
+        val vs = np.videoSize
+        _state.value = LivePlaybackState(
+            channelKey = channel.key,
+            isPlaying = np.isPlaying,
+            videoWidth = vs.width,
+            videoHeight = vs.height,
+            pixelRatio = vs.pixelWidthHeightRatio,
+        )
+        // The new player learned its tracks before the main listener was attached, so the saved
+        // audio language and captions are applied here rather than waiting for a track change.
+        applySavedAudio()
+        val saved = channelCaptions[channel.key]
+        if (saved != null) {
+            captionsHandled = true
+            applySavedCaptions(saved)
+        } else if (captionsByDefault) {
+            captionsHandled = true
+            if (captionsOn()) subtitleTracks().firstOrNull()?.let {
+                selectTrack(C.TRACK_TYPE_TEXT, it)
+                if (it.kind != null) watchCaptions()
             }
         }
     }
@@ -970,6 +1223,12 @@ class LiveTvPlaybackController @Inject constructor(
         }
         if (overrideUrl == null && channel.url.startsWith("addon:")) {
             resolveAndPlayAddon(channel)
+            return
+        }
+        // A Lucid channel while another one plays: prepare it on a second player and fade over
+        // when it has pictures. The old stream keeps playing (and sounding) until then.
+        if (virtualTune != null && canSwapInPlace(channel)) {
+            startSoftZap(channel, overrideUrl ?: channel.url, virtualTune, fallbacks)
             return
         }
         if (virtualTune != null) {
@@ -1086,7 +1345,7 @@ class LiveTvPlaybackController @Inject constructor(
             buildMediaSource(
                 url,
                 channel.headers,
-                isLive = catchupTitle == null && (virtualTune == null || virtualTune.relay),
+                isLive = catchupTitle == null && (virtualTune == null || virtualTune.relay || virtualTune.live),
             )
         )
         p.prepare()
@@ -1312,6 +1571,7 @@ class LiveTvPlaybackController @Inject constructor(
         virtualRelayJob?.cancel()
         virtualResolveToken++
         resolvingVirtualKey = null
+        cancelSoftZap()
         _state.value = LivePlaybackState()
     }
 
@@ -1346,6 +1606,7 @@ class LiveTvPlaybackController @Inject constructor(
         val ch = currentChannel
         // Paused, in the background, nothing playing, or already showing an error: not a stall.
         if (ch == null || !p.playWhenReady || pausedForBackground || _state.value.error != null ||
+            _state.value.switching ||
             p.playbackState == Player.STATE_IDLE || p.playbackState == Player.STATE_ENDED
         ) {
             lastProgressAt = now
@@ -1865,7 +2126,12 @@ class LiveTvPlaybackController @Inject constructor(
         return ((heapMb shl 20) * 3 / 10).coerceIn(32L shl 20, 160L shl 20).toInt()
     }
 
-    private fun buildPlayer(): ExoPlayer {
+    private val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
+        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+
+    private fun buildPlayer(handleAudioFocus: Boolean = true): ExoPlayer {
         val passthrough = audioPassthrough
         val renderers = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
@@ -1911,13 +2177,9 @@ class LiveTvPlaybackController @Inject constructor(
             .setLoadControl(loadControl)
             // Take part in Android's audio focus like other media apps: when something else starts
             // playing sound (another app, a launcher's video wallpaper with sound…), Live TV pauses.
-            .setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                /* handleAudioFocus = */ true
-            )
+            // The incoming player in a soft zap sits this out, so it doesn't pause the one still
+            // playing; it takes focus over once the old one is let go.
+            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ handleAudioFocus)
             .build()
             .apply {
                 playWhenReady = true
@@ -2105,6 +2367,8 @@ class LiveTvPlaybackController @Inject constructor(
             )
             if (playbackState == Player.STATE_READY) _player?.let { applyPendingVirtualStart(it) }
             if (playbackState == Player.STATE_ENDED) {
+                // The old channel ending mid-swap must not queue its next slot over the new pick.
+                if (_state.value.switching) return
                 val tune = activeVirtual
                 if (tune != null) {
                     // A Lucid TV programme finished: move to the next slot or queue item.
@@ -2491,9 +2755,14 @@ class LiveTvPlaybackController @Inject constructor(
         }
     }
 
-    private fun buildMediaSource(url: String, headers: Map<String, String>, isLive: Boolean): androidx.media3.exoplayer.source.MediaSource {
+    private fun buildMediaSource(
+        url: String,
+        headers: Map<String, String>,
+        isLive: Boolean,
+        channel: LiveChannel? = currentChannel,
+    ): androidx.media3.exoplayer.source.MediaSource {
         // Protected (DRM) streams, e.g. MPEG-DASH with a ClearKey or Widevine license.
-        currentChannel?.drm?.let { drm -> buildDrmMediaSource(url, headers, isLive, drm)?.let { return it } }
+        channel?.drm?.let { drm -> buildDrmMediaSource(url, headers, isLive, drm)?.let { return it } }
         val http = com.nuvio.tv.core.vpn.protectHttpFactory(DefaultHttpDataSource.Factory()
             .setUserAgent(headers["User-Agent"] ?: LiveTvRepository.DEFAULT_UA)
             .setDefaultRequestProperties(headers.filterKeys { it != "User-Agent" })
@@ -2674,6 +2943,7 @@ class LiveTvPlaybackController @Inject constructor(
         virtualRelayJob?.cancel()
         virtualResolveToken++
         resolvingVirtualKey = null
+        cancelSoftZap()
         _state.value = LivePlaybackState()
     }
 

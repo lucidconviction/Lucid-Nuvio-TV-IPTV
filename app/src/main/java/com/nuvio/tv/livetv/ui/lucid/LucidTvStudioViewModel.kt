@@ -70,6 +70,17 @@ class LucidTvStudioViewModel @Inject constructor(
                 it.extra.none { extra -> extra.isRequired }
         }
 
+    fun liveCatalogsFor(addon: Addon): List<CatalogDescriptor> =
+        addon.catalogs.filter {
+            it.apiType in LIVE_TYPES &&
+                !it.isSearchOnlyCatalog() &&
+                it.extra.none { extra -> extra.isRequired }
+        }
+
+    private companion object {
+        val LIVE_TYPES = setOf("live", "tv", "sport", "sports")
+    }
+
     suspend fun catalogItems(addon: Addon, catalog: CatalogDescriptor): Result<List<MetaPreview>> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -118,7 +129,7 @@ class LucidTvStudioViewModel @Inject constructor(
             poster = poster,
             description = null,
             slotMinutes = if (series) 45 else 90,
-            maxStartPercent = 20,
+            maxStartPercent = -1,
             jitter = true,
             relayGroupId = relayGroupId,
             relaySegmentMinutes = 30,

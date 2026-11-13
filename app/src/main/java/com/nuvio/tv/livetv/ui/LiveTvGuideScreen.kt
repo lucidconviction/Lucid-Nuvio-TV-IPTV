@@ -389,6 +389,7 @@ private fun LiveTvGuideScreenBody(
     val guideGearFocus = remember { FocusRequester() }
     val quickChannelsFocus = remember { FocusRequester() }
     val groupSearchFocus = remember { FocusRequester() }
+    val quickSearchFocus = remember { FocusRequester() }
     /** Schedule a Recording (long-press menu): the channel it's for. */
     var manualRecordingFor by remember { mutableStateOf<LiveChannel?>(null) }
     var infoTarget by remember { mutableStateOf<MenuTarget?>(null) }
@@ -1189,6 +1190,15 @@ private fun LiveTvGuideScreenBody(
                     }
                 ) }
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    // Quick Ch Search sits directly above the EPG: regions first, then that
+                    // region's channels, then the matching streams (working first, dead hidden).
+                    QuickChSearchBar(
+                        viewModel = viewModel,
+                        entryFocus = quickSearchFocus,
+                        onUp = { runCatching { guideGearFocus.requestFocus() } },
+                        onDown = { runCatching { gridFocus.requestFocus() } },
+                        onPlay = { playChannel(it) },
+                    )
                     // ---------------------------------------------------------------- time ruler
                     val channelColWidth = channelColumnWidth(settings)
                     val programAreaWidth: Dp? = if (gridWidthPx <= 0) null
@@ -1492,28 +1502,10 @@ private fun LiveTvGuideScreenBody(
                                         // Up from the first channel reaches the ⚙ in the top bar.
                                         if (upTopPending) {
                                             // Held at the top: wait for the long press (or the release).
-                                        } else if (row == 0 && channels.size == 1 && !visibilityMode) {
-                                            // Only one channel (a short Favorites or Recent list): there is
-                                            // nowhere to wrap to, so Up goes straight to the ⚙.
-                                            runCatching { guideGearFocus.requestFocus() }
-                                        } else if (row == 0 && event.nativeKeyEvent.repeatCount == 0 && !visibilityMode && channels.size > 1) {
-                                            upTopPending = true
-                                            upTopFired = false
-                                            upTopJob?.cancel()
-                                            upTopJob = scope.launch {
-                                                delay(LONG_PRESS_MS)
-                                                upTopFired = true
-                                                runCatching { guideGearFocus.requestFocus() }
-                                            }
-                                        } else if (row == 0 && event.nativeKeyEvent.repeatCount > 0 && !visibilityMode && channels.size > 1) {
-                                            // Scrolled up to the top while holding: stay there (no wrap-around);
-                                            // held on for another moment, on to the ⚙.
-                                            val nowMs = android.os.SystemClock.uptimeMillis()
-                                            if (heldTopSince == 0L) heldTopSince = nowMs
-                                            else if (heldTopSince > 0L && nowMs - heldTopSince >= 600L) {
-                                                heldTopSince = -1L
-                                                runCatching { guideGearFocus.requestFocus() }
-                                            }
+                                        } else if (row == 0 && !visibilityMode) {
+                                            // Up from the first channel reaches Quick Ch Search (above
+                                            // the EPG); Up again from there reaches the ⚙.
+                                            runCatching { quickSearchFocus.requestFocus() }
                                         } else moveRow(-1)
                                         true
                                     }
@@ -1674,6 +1666,13 @@ private fun LiveTvGuideScreenBody(
             aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null,
             pictureShape = pictureShapeNow
         )
+        // The next Lucid channel fades in over this one, which keeps playing underneath.
+        LiveSoftZapSurface(
+            playback = viewModel.playback,
+            modifier = videoModifier,
+            aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null,
+            pictureShape = pictureShapeNow,
+        )
         // Rounded corners for the preview. The video surface can't be clipped to a rounded
         // shape on most TVs, so its four corners are painted over in exactly what's behind
         // them (the background and the theme glow), which looks the same.
@@ -1734,6 +1733,7 @@ private fun LiveTvGuideScreenBody(
                 playback.channelKey == null -> "Press OK on a channel to preview"
                 playback.error != null -> null // shown with its reason below
                 recStarting -> "Starting the recording…"
+                playback.switching -> null // its own spinner above
                 showLoading -> "Loading…"
                 else -> null
             }
@@ -1744,7 +1744,19 @@ private fun LiveTvGuideScreenBody(
                         .size(pb.width.toDp(), pb.height.toDp()),
                     contentAlignment = Alignment.Center
                 ) {
-                    text?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp) }
+                    if (playback.switching) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            LoadingSpinner(Modifier.size(26.dp))
+                            Spacer(Modifier.height(8.dp))
+                            LiveText(
+                                "Tuning ${playback.switchingTitle ?: "channel"}…",
+                                color = Color.White,
+                                size = 14.sp
+                            )
+                        }
+                    } else {
+                        text?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp) }
+                    }
                     playback.error?.let { PlayerStatusMessage("Reconnecting…", it, compact = true) }
                     playback.catchupTitle?.let {
                         LiveText(
@@ -4377,6 +4389,7 @@ internal fun LiveTextField(
     onDone: () -> Unit = {}
 ) {
     var focused by remember { mutableStateOf(false) }
+    val fieldFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4404,6 +4417,20 @@ internal fun LiveTextField(
                 .fillMaxWidth()
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .onFocusChanged { focused = it.isFocused }
+                // A text field swallows Up/Down while editing. On a TV that traps the highlight
+                // in the first field of a form, so vertical presses move between fields instead
+                // (Back first hides the on-screen keyboard, as usual).
+                .onPreviewKeyEvent { e ->
+                    if (e.type == KeyEventType.KeyDown &&
+                        (e.key == Key.DirectionUp || e.key == Key.DirectionDown)
+                    ) {
+                        fieldFocusManager.moveFocus(
+                            if (e.key == Key.DirectionUp) androidx.compose.ui.focus.FocusDirection.Up
+                            else androidx.compose.ui.focus.FocusDirection.Down
+                        )
+                        true
+                    } else false
+                }
         )
     }
 }

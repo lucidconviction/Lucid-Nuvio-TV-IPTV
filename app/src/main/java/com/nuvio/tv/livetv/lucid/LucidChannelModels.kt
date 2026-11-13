@@ -3,11 +3,13 @@ package com.nuvio.tv.livetv.lucid
 import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.livetv.model.DrmInfo
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** One film, episode or live channel a Lucid TV channel can play. */
+@Serializable
 data class LucidItem(
     /** The addon's own id for the film/episode, or the channel key for a relay. */
     val id: String,
@@ -30,7 +32,7 @@ data class LucidItem(
     /** Relays: the existing live channel this item tunes. */
     val streamUrl: String? = null,
     val headers: Map<String, String> = emptyMap(),
-    val drm: DrmInfo? = null,
+    @Transient val drm: DrmInfo? = null,
 )
 
 @Serializable
@@ -43,6 +45,8 @@ enum class LucidChannelKind {
     SERIES_LOOP,
     /** Existing live channels relayed for fixed segments. */
     RELAY_LOOP,
+    /** One item from an addon live/tv/sport catalog; its stream is resolved when tuned. */
+    ADDON_LIVE,
     /** A hand-picked list of films, 24/7. */
     MANUAL_LOOP,
 }
@@ -65,7 +69,8 @@ data class LucidChannelSpec(
     val number: Int? = null,
     val poster: String? = null,
     val slotMinutes: Int = 90,
-    val maxStartPercent: Int = 20,
+    /** -1 = join at the real EPG position; 0 = start; N = cap the join at N%. */
+    val maxStartPercent: Int = -1,
     val jitter: Boolean = true,
     val order: LucidOrder = LucidOrder.SHUFFLE,
     val anchorMs: Long = 0L,
@@ -99,6 +104,7 @@ data class LucidTune(
     val item: LucidItem,
     val startOffsetMs: Long,
     val relay: Boolean = false,
+    val live: Boolean = false,
 )
 
 /** A stored custom channel, as the studio saves it. */
@@ -121,7 +127,8 @@ data class LucidStoredSpec(
     val poster: String? = null,
     val description: String? = null,
     val slotMinutes: Int = 90,
-    val maxStartPercent: Int = 20,
+    /** -1 = join at the real EPG position; 0 = start; N = cap the join at N%. */
+    val maxStartPercent: Int = -1,
     val jitter: Boolean = true,
     val order: LucidOrder = LucidOrder.SHUFFLE,
     val anchorMs: Long = 0L,
@@ -169,7 +176,9 @@ object LucidSpecCodec {
 
     fun decodeSpecs(raw: String?): List<LucidStoredSpec> =
         if (raw.isNullOrBlank()) emptyList()
-        else runCatching { json.decodeFromString<List<LucidStoredSpec>>(raw) }.getOrDefault(emptyList())
+        else runCatching { json.decodeFromString<List<LucidStoredSpec>>(raw) }
+            .getOrDefault(emptyList())
+            .map(::migrateJoin)
 
     fun encodeSpecs(specs: List<LucidStoredSpec>): String =
         json.encodeToString(specs)
@@ -178,8 +187,15 @@ object LucidSpecCodec {
         json.encodeToString(LucidPack(channels = specs))
 
     fun decodePack(raw: String): List<LucidStoredSpec> =
-        runCatching { json.decodeFromString<LucidPack>(raw).channels }
+        runCatching { json.decodeFromString<LucidPack>(raw).channels.map(::migrateJoin) }
             .getOrElse { decodeSpecs(raw) }
+
+    /**
+     * 20% was the old default for joining a film in progress; it made a movie start up to twelve
+     * minutes off its EPG position. Channels saved with it now join exactly, as the guide says.
+     */
+    private fun migrateJoin(spec: LucidStoredSpec): LucidStoredSpec =
+        if (spec.maxStartPercent == 20) spec.copy(maxStartPercent = -1) else spec
 }
 
 fun LucidItem.toProgram(spec: LucidChannelSpec, startMs: Long, stopMs: Long): EpgProgram {
@@ -204,3 +220,6 @@ fun LucidItem.toProgram(spec: LucidChannelSpec, startMs: Long, stopMs: Long): Ep
         year = year,
     )
 }
+
+/** True for the Lucid TV group and the per-collection Lucid groups. */
+fun isLucidGroupId(id: String): Boolean = id == "virtual:lucid" || id.startsWith("virtual:lucid:")

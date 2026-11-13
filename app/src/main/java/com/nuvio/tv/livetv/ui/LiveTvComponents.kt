@@ -53,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -558,6 +560,8 @@ internal fun LiveDialog(
     minWidth: Dp = 320.dp,
     corner: Dp = 20.dp,
     pad: Dp = 20.dp,
+    /** Solid panel color instead of the see-through glass (for long lists over video). */
+    background: Color? = null,
     content: @Composable () -> Unit
 ) {
     // A dialog opened by a long press appears while OK is still held. Swallow the rest of that
@@ -590,8 +594,17 @@ internal fun LiveDialog(
                 }
                 .widthIn(min = minWidth, max = width)
                 .heightIn(max = 620.dp)
-                // The same dark glass as the play bar and the ⚙ panels.
-                .glass(glassColor(glassLevel), RoundedCornerShape(corner))
+                // The same dark glass as the play bar and the ⚙ panels (or a solid panel for
+                // long lists that sit over moving video and need to stay readable).
+                .then(
+                    if (background != null) {
+                        Modifier
+                            .background(background, RoundedCornerShape(corner))
+                            .border(1.dp, NuvioTheme.colors.Border, RoundedCornerShape(corner))
+                    } else {
+                        Modifier.glass(glassColor(glassLevel), RoundedCornerShape(corner))
+                    }
+                )
                 .padding(pad)
         ) {
             content()
@@ -678,6 +691,31 @@ internal fun LivePlayerSurface(
     DisposableEffect(Unit) {
         onDispose { viewRef?.player = null }
     }
+}
+
+/**
+ * The incoming channel of a Lucid TV soft zap, drawn over the one still playing and faded in by
+ * the controller. A TextureView is used here on purpose: unlike a SurfaceView it can be
+ * alpha-blended, which is what makes the cross-fade possible.
+ */
+@Composable
+internal fun LiveSoftZapSurface(
+    playback: com.nuvio.tv.livetv.player.LiveTvPlaybackController,
+    modifier: Modifier = Modifier,
+    aspectMode: com.nuvio.tv.ui.screens.player.AspectMode? = null,
+    pictureShape: com.nuvio.tv.livetv.player.PictureShape = com.nuvio.tv.livetv.player.PictureShape.AUTO,
+) {
+    val incoming by playback.transitionPlayer.collectAsStateWithLifecycle()
+    val alpha by playback.transitionAlpha.collectAsStateWithLifecycle()
+    val player = incoming ?: return
+    LivePlayerSurface(
+        player = player,
+        modifier = modifier.graphicsLayer { this.alpha = alpha.coerceIn(0f, 1f) },
+        useSurfaceView = false,
+        onAttached = {},
+        aspectMode = aspectMode,
+        pictureShape = pictureShape,
+    )
 }
 
 /** Pauses Live TV when the app goes to the background (Home button) and resumes on return. */
