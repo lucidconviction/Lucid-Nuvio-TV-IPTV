@@ -26,7 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -363,7 +363,9 @@ private fun YouTubeRows(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(row.title, style = NuvioTheme.textStyles.sectionTitle, color = NuvioTheme.colors.TextPrimary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    items(row.items, key = { it.videoId ?: it.title }) { item ->
+                    itemsIndexed(row.items, key = { index, item ->
+                        "${item.videoId ?: item.channelId ?: item.title}#$index"
+                    }) { _, item ->
                         YouTubeCard(item) { openItem(item, viewModel, row.items, onOpenVideo) }
                     }
                     if (row.canLoadMore) {
@@ -395,7 +397,9 @@ private fun YouTubeGrid(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        gridItems(items, key = { it.videoId ?: it.title }) { item ->
+        gridItemsIndexed(items, key = { index, item ->
+            "${item.videoId ?: item.channelId ?: item.title}#$index"
+        }) { _, item ->
             YouTubeCard(item, onClick)
         }
     }

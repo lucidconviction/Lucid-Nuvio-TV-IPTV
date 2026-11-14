@@ -44,8 +44,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -102,7 +100,6 @@ fun LucidTvStudioScreen(
     val relayGroups by viewModel.relayGroups.collectAsStateWithLifecycle()
     val runtimeChannels by viewModel.lucid.channels.collectAsStateWithLifecycle()
     val runtimePrograms by viewModel.lucid.programs.collectAsStateWithLifecycle()
-    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
     var mode by remember { mutableStateOf(StudioMode.LIST) }
@@ -121,6 +118,8 @@ fun LucidTvStudioScreen(
     var liveLoading by remember { mutableStateOf(false) }
     var liveError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var shareOpen by remember { mutableStateOf(false) }
+    var importOpen by remember { mutableStateOf(false) }
     var nowTick by remember { mutableIntStateOf(0) }
     val firstFocus = remember { FocusRequester() }
 
@@ -161,19 +160,6 @@ fun LucidTvStudioScreen(
     }
     BackHandler { stepBack() }
 
-    fun importFromClipboard() {
-        val text = clipboard.getText()?.text
-        if (text.isNullOrBlank()) {
-            notice = "The clipboard is empty."
-            return
-        }
-        scope.launch {
-            viewModel.importJson(text)
-                .onSuccess { notice = "Imported $it channel(s)." }
-                .onFailure { notice = it.message ?: "That pack couldn't be imported." }
-        }
-    }
-
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -189,21 +175,18 @@ fun LucidTvStudioScreen(
                     Text("Add channel", fontSize = 12.sp)
                 }
             }
-            Button(onClick = { importFromClipboard() }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+            Button(onClick = { importOpen = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
                 Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(5.dp))
                 Text("Import", fontSize = 11.sp)
             }
             Button(
-                onClick = {
-                    clipboard.setText(AnnotatedString(viewModel.exportJson()))
-                    notice = "Channel pack copied to the clipboard."
-                },
+                onClick = { shareOpen = true },
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(5.dp))
-                Text("Export", fontSize = 11.sp)
+                Text("Share", fontSize = 11.sp)
             }
             if (mode == StudioMode.LIST) {
                 Button(onClick = onBack) { Text("Done") }
@@ -426,6 +409,22 @@ fun LucidTvStudioScreen(
                 }
             }
         }
+    }
+    if (shareOpen) {
+        LucidShareDialog(
+            specs = specs,
+            onDismiss = { shareOpen = false },
+        )
+    }
+    if (importOpen) {
+        LucidImportDialog(
+            importText = { viewModel.importJson(it) },
+            onImported = { count ->
+                notice = "Imported $count channel${if (count == 1) "" else "s"}."
+                importOpen = false
+            },
+            onDismiss = { importOpen = false },
+        )
     }
 }
 
