@@ -99,7 +99,7 @@
 - Create or join a party with a short code and invite link.
 - Up to three seats with host controls.
 - Synced playback with each member's drift shown.
-- Works with the regular player and Live TV.
+- Works with the regular player.
 
 ### 🧰 Add-ons, plugins, servers and debrid
 - Stremio add-ons: catalogs, metadata and streams.
