@@ -121,7 +121,7 @@
 - Experience modes: Full or Essential.
 - Media3/ExoPlayer with FFmpeg audio, HDR/Dolby Vision MKV support where the device allows it.
 - Subtitles, audio tracks, playback speed, aspect ratio adjustment and stream info.
-- Picture-in-picture, external player support, sleep timer, backup streams and reload.
+- External player support, sleep timer, backup streams and reload.
 - The screen stays awake while the app is open.
 
 ---
@@ -174,7 +174,7 @@ A full remote-control map is in [CONTROLS.md](CONTROLS.md).
 
 - This app does not include any playlists, accounts or paid subscriptions.
 - The ambient/screensaver slideshow is off by default; enable it in Settings if you want it.
-- Picture-in-picture availability depends on the device and system version.
+- Playback, codec and HDR support depend on the device and system version.
 - Recordings are stored locally on the device.
 - Live TV, On Demand, Sports data and EPG belong to their respective providers.
 - The app is built for the big screen: 1080p and 4K TVs are supported.
