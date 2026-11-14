@@ -563,6 +563,12 @@ internal fun LiveTvSettingsContent(
                         s.lucidTvEnabled,
                         { update { it.copy(lucidTvEnabled = !it.lucidTvEnabled) } }
                     )
+                    SettingsToggleRow(
+                        "Auto-add series catalogs",
+                        "Also turn series catalogs into Lucid TV channels. Each channel plays episodes in a queue with their real runtimes. Off: add series channels yourself in the studio.",
+                        s.lucidAutoSeriesCatalogs,
+                        { update { it.copy(lucidAutoSeriesCatalogs = !it.lucidAutoSeriesCatalogs) } }
+                    )
                     SettingsActionRow(
                         title = "Manage Lucid TV Channels",
                         subtitle = "Create rotating catalog channels, 24/7 series marathons and live channel relays; import or export channel packs.",

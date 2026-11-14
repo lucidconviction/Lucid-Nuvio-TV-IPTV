@@ -83,7 +83,13 @@ data class LucidChannelSpec(
     val auto: Boolean = true,
 ) {
     val channelKey: String get() = "virtual:$id"
-    val isLoop: Boolean get() = kind != LucidChannelKind.CATALOG_ROTATE
+
+    /**
+     * Every kind except a single live addon channel is a continuous queue with real media
+     * runtimes. This is what keeps the synthetic guide and the actual stream on the same clock.
+     */
+    val usesQueue: Boolean get() = kind != LucidChannelKind.ADDON_LIVE
+
     val groupId: String get() = if (group.equals("Lucid TV", ignoreCase = true)) {
         "virtual:lucid"
     } else {
@@ -200,10 +206,12 @@ object LucidSpecCodec {
 
 fun LucidItem.toProgram(spec: LucidChannelSpec, startMs: Long, stopMs: Long): EpgProgram {
     val episodeTag = if (season != null) "S${season}E${episode ?: 0}" else null
-    val title = when {
-        spec.kind == LucidChannelKind.SERIES_LOOP && season != null ->
-            listOfNotNull(title, episodeTag, episodeTitle?.takeIf { it.isNotBlank() }).joinToString(" · ")
-        else -> title
+    // A catalog can contain series too (and a series catalog can be expanded into episodes).
+    // Whenever an item is an episode, the guide says which one, not just the show name.
+    val title = if (season != null) {
+        listOfNotNull(title, episodeTag, episodeTitle?.takeIf { it.isNotBlank() }).joinToString(" · ")
+    } else {
+        title
     }
     return EpgProgram(
         startMs = startMs,

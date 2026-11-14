@@ -49,6 +49,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val MAX_SOURCES_TO_RESOLVE = 12
+/** How many broken Lucid TV queue items to skip before giving up on a channel. */
+private const val MAX_VIRTUAL_SKIPS = 3
+/** A media item ending this long before its guide slot is treated as ended early. */
+private const val VIRTUAL_EARLY_END_MS = 30_000L
 
 data class LivePlaybackState(
     val channelKey: String? = null,
@@ -696,8 +700,8 @@ class LiveTvPlaybackController @Inject constructor(
     @Volatile private var activeVirtual: LucidTune? = null
     /** Where to seek once the virtual film is ready (join-in-progress). */
     @Volatile private var pendingVirtualStartMs: Long? = null
-    /** Relays are live streams: switch at the segment boundary instead of waiting for an end. */
-    private var virtualRelayJob: Job? = null
+    /** The synthetic guide's boundary: the next item starts exactly when the guide says it does. */
+    private var virtualAdvanceJob: Job? = null
 
 
     private fun headersFor(url: String, fallback: Map<String, String>): Map<String, String> =
@@ -884,65 +888,93 @@ class LiveTvPlaybackController @Inject constructor(
         resolvingVirtualKey = channel.key
         activeVirtual = null
         pendingVirtualStartMs = null
-        virtualRelayJob?.cancel()
+        virtualAdvanceJob?.cancel()
         _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
         scope.launch {
             try {
-                val tune = lucid.tune(channel.key, atMs = atMs ?: System.currentTimeMillis())
-                if (tune == null) {
-                    _state.value = LivePlaybackState(
-                        channelKey = channel.key,
-                        error = "This Lucid TV channel has nothing to play. Check its source.",
-                    )
-                    return@launch
-                }
-                val item = tune.item
-                // A relay is an existing live channel: no stream search, no joining offset.
-                if (tune.relay && !item.streamUrl.isNullOrBlank()) {
+                var tuneAt = atMs ?: System.currentTimeMillis()
+                var skipped = 0
+                while (true) {
+                    if (token != virtualResolveToken) return@launch
+                    val tune = lucid.tune(channel.key, atMs = tuneAt)
+                    if (tune == null) {
+                        val message = "This Lucid TV channel has nothing to play. Check its source."
+                        lucid.reportError(channel.key, message)
+                        _state.value = LivePlaybackState(channelKey = channel.key, error = message)
+                        return@launch
+                    }
+                    val item = tune.item
+                    // A relay is an existing live channel: no stream search, no joining offset.
+                    if (tune.relay && !item.streamUrl.isNullOrBlank()) {
+                        lucid.clearError(channel.key)
+                        play(
+                            channel = channel.copy(headers = item.headers, drm = item.drm),
+                            overrideUrl = item.streamUrl,
+                            virtualTune = tune,
+                        )
+                        return@launch
+                    }
+                    // A catalog can surface a series as a single item. Without a season/episode
+                    // no stream addon can answer, so skip it instead of asking with a half id.
+                    if (item.type == "series" && (item.season == null || item.episode == null)) {
+                        if (skipped < MAX_VIRTUAL_SKIPS && lucid.markUnplayable(channel.key, item.id)) {
+                            skipped++
+                            tuneAt = System.currentTimeMillis()
+                            continue
+                        }
+                        val message = "No playable episode was found for ${item.title}."
+                        lucid.reportError(channel.key, message)
+                        _state.value = LivePlaybackState(channelKey = channel.key, error = message)
+                        return@launch
+                    }
+                    // The item id is the episode id for series ("tt123:1:1"), which is what
+                    // stream addons need for /stream/series/...json.
+                    val raw = allAddonStreams(item.type, item.id, item.season, item.episode)
+                    val resolved = coroutineScope {
+                        raw.take(MAX_SOURCES_TO_RESOLVE)
+                            .map { stream -> async { resolvedAddonSource(stream) } }
+                            .awaitAll()
+                    }.filterNotNull().distinctBy { it.first }
+                    if (token != virtualResolveToken) return@launch
+                    if (resolved.isEmpty()) {
+                        if (skipped < MAX_VIRTUAL_SKIPS && lucid.markUnplayable(channel.key, item.id)) {
+                            skipped++
+                            tuneAt = System.currentTimeMillis()
+                            continue
+                        }
+                        val message = if (item.season != null) {
+                            "No playable stream was found for ${item.title} S${item.season}E${item.episode}."
+                        } else {
+                            "No playable stream was found for ${item.title}."
+                        }
+                        lucid.reportError(channel.key, message)
+                        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                            "Lucid TV \"${channel.name}\": $message"
+                        )
+                        _state.value = LivePlaybackState(channelKey = channel.key, error = message)
+                        return@launch
+                    }
+                    resolved.forEach { (url, stream) ->
+                        stream.behaviorHints?.proxyHeaders?.request
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { addonSourceHeaders[url] = it }
+                    }
+                    val primary = resolved.first()
+                    val headers = primary.second.behaviorHints?.proxyHeaders?.request.orEmpty()
+                    lucid.clearError(channel.key)
                     play(
-                        channel = channel.copy(headers = item.headers, drm = item.drm),
-                        overrideUrl = item.streamUrl,
+                        channel = channel.copy(headers = headers),
+                        overrideUrl = primary.first,
+                        fallbacks = resolved.drop(1).map { it.first },
                         virtualTune = tune,
                     )
                     return@launch
                 }
-                val raw = allAddonStreams(item.type, item.streamId, item.season, item.episode)
-                val resolved = coroutineScope {
-                    raw.take(MAX_SOURCES_TO_RESOLVE)
-                        .map { stream -> async { resolvedAddonSource(stream) } }
-                        .awaitAll()
-                }.filterNotNull().distinctBy { it.first }
-                if (token != virtualResolveToken) return@launch
-                if (resolved.isEmpty()) {
-                    _state.value = LivePlaybackState(
-                        channelKey = channel.key,
-                        error = if (item.season != null) {
-                            "No playable stream was found for ${item.title} S${item.season}E${item.episode}."
-                        } else {
-                            "No playable stream was found for ${item.title}."
-                        },
-                    )
-                    return@launch
-                }
-                resolved.forEach { (url, stream) ->
-                    stream.behaviorHints?.proxyHeaders?.request
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let { addonSourceHeaders[url] = it }
-                }
-                val primary = resolved.first()
-                val headers = primary.second.behaviorHints?.proxyHeaders?.request.orEmpty()
-                play(
-                    channel = channel.copy(headers = headers),
-                    overrideUrl = primary.first,
-                    fallbacks = resolved.drop(1).map { it.first },
-                    virtualTune = tune,
-                )
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
-                _state.value = LivePlaybackState(
-                    channelKey = channel.key,
-                    error = "This Lucid TV channel couldn't be opened.",
-                )
+                val message = "This Lucid TV channel couldn't be opened."
+                lucid.reportError(channel.key, message)
+                _state.value = LivePlaybackState(channelKey = channel.key, error = message)
             } finally {
                 if (token == virtualResolveToken) resolvingVirtualKey = null
             }
@@ -976,16 +1008,18 @@ class LiveTvPlaybackController @Inject constructor(
         }
         if (virtualTune != null) {
             activeVirtual = virtualTune
-            pendingVirtualStartMs = virtualTune.startOffsetMs
-            if (virtualTune.relay) {
-                scheduleVirtualRelayAdvance(channel, virtualTune.slotEndMs)
+            pendingVirtualStartMs = virtualTune.startOffsetMs.takeIf { it > 0L && !virtualTune.live }
+            // VOD and relay channels share one broadcast clock. Only a single live addon
+            // channel has no next item.
+            if (virtualTune.live) {
+                virtualAdvanceJob?.cancel()
             } else {
-                virtualRelayJob?.cancel()
+                scheduleVirtualAdvance(channel, virtualTune.slotEndMs)
             }
         } else {
             activeVirtual = null
             pendingVirtualStartMs = null
-            virtualRelayJob?.cancel()
+            virtualAdvanceJob?.cancel()
             // A virtual channel that was still resolving must not take over this one.
             virtualResolveToken++
             resolvingVirtualKey = null
@@ -1106,30 +1140,57 @@ class LiveTvPlaybackController @Inject constructor(
     }
 
     /**
-     * A relay is a live stream; it never reports an end. The segment boundary is a wall-clock
-     * timer, then the next relay channel (or segment) is tuned.
+     * The synthetic guide is a broadcast clock. At the advertised boundary the next queue item
+     * is tuned, whether or not the player reported an end (some addon streams look live), and a
+     * paused viewer stays where they are until they resume.
      */
-    private fun scheduleVirtualRelayAdvance(channel: LiveChannel, atMs: Long) {
-        virtualRelayJob?.cancel()
+    private fun scheduleVirtualAdvance(channel: LiveChannel, atMs: Long) {
+        virtualAdvanceJob?.cancel()
         if (atMs <= 0L) return
-        virtualRelayJob = scope.launch {
-            delay((atMs - System.currentTimeMillis()).coerceAtLeast(500L))
-            // A paused relay stays on the segment the viewer paused on; it moves on after resume.
-            while (currentChannel?.key == channel.key && _state.value.userPaused) delay(5_000L)
+        virtualAdvanceJob = scope.launch {
+            while (true) {
+                if (currentChannel?.key != channel.key) return@launch
+                if (_state.value.userPaused) {
+                    delay(5_000L)
+                    continue
+                }
+                val wait = atMs + 500L - System.currentTimeMillis()
+                if (wait > 0L) {
+                    delay(wait)
+                    continue
+                }
+                break
+            }
             if (currentChannel?.key == channel.key) {
                 currentUrl = null
-                resolveAndPlayVirtual(channel, atMs + 500L)
+                // If the boundary passed while paused, join the programme that is on now.
+                resolveAndPlayVirtual(channel, atMs = maxOf(atMs, System.currentTimeMillis()) + 500L)
             }
         }
     }
 
-    /** Seeks once to the joined position of a Lucid TV film, when the player is ready. */
+    /**
+     * Seeks once to the joined position of a Lucid TV film, when the player is ready. The seek
+     * used to be consumed right after prepare(), when the source had no timeline yet, so the
+     * join point was silently lost; keep it until the real timeline arrives.
+     */
     private fun applyPendingVirtualStart(p: ExoPlayer) {
         val start = pendingVirtualStartMs ?: return
+        if (start <= 0L) {
+            pendingVirtualStartMs = null
+            return
+        }
+        if (p.playbackState == Player.STATE_IDLE || p.currentTimeline.isEmpty) return
+        val index = p.currentMediaItemIndex.coerceIn(0, p.currentTimeline.windowCount - 1)
+        val window = p.currentTimeline.getWindow(index, androidx.media3.common.Timeline.Window())
+        if (window.isPlaceholder) return
         pendingVirtualStartMs = null
-        if (start <= 0L) return
         val duration = p.duration
-        val target = if (duration > 0L) start.coerceIn(0L, (duration - 1_000L).coerceAtLeast(0L)) else start
+        val target = if (duration > 0L) {
+            start.coerceIn(0L, (duration - 1_000L).coerceAtLeast(0L))
+        } else {
+            start
+        }
         if (target > 0L) p.seekTo(target)
     }
 
@@ -1320,7 +1381,7 @@ class LiveTvPlaybackController @Inject constructor(
         _ownTimeline.value = false
         activeVirtual = null
         pendingVirtualStartMs = null
-        virtualRelayJob?.cancel()
+        virtualAdvanceJob?.cancel()
         virtualResolveToken++
         resolvingVirtualKey = null
         _state.value = LivePlaybackState()
@@ -1451,10 +1512,14 @@ class LiveTvPlaybackController @Inject constructor(
                 "; reloading · ${redact(currentUrl ?: ch.url)}"
         )
         val url = currentUrl ?: ch.url
-        val resumeAt = if (archive) pos else C_TIME_UNSET
+        // A Lucid TV film is VOD even though it lives in the Live TV player: reload it as VOD
+        // and keep the position, otherwise a hiccup turned the film into a live stream that
+        // never reported an end, and the channel never advanced.
+        val virtualVod = activeVirtual?.let { !it.live && !it.relay } == true
+        val resumeAt = if (archive || virtualVod) pos else C_TIME_UNSET
         p.stop()
         archiveStartPending = false
-        p.setMediaSource(buildMediaSource(url, ch.headers, isLive = !archive))
+        p.setMediaSource(buildMediaSource(url, ch.headers, isLive = !archive && !virtualVod))
         p.prepare()
         if (resumeAt > 0) p.seekTo(resumeAt)
         p.playWhenReady = true
@@ -1467,6 +1532,12 @@ class LiveTvPlaybackController @Inject constructor(
 
     fun retry() {
         val ch = currentChannel ?: return
+        // A Lucid film's current URL is the resolved source, not a channel to replay directly:
+        // resolve the queue item again so the join position and advance clock are restored.
+        if (ch.url.startsWith("virtual:")) {
+            resolveAndPlayVirtual(ch)
+            return
+        }
         val url = currentUrl
         currentUrl = null
         play(ch, url, _state.value.catchupTitle)
@@ -2062,6 +2133,7 @@ class LiveTvPlaybackController @Inject constructor(
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
             updateOwnTimeline()
             checkCatchupClock(timeline)
+            _player?.let { applyPendingVirtualStart(it) }
             if (shiftStartPending && !timeline.isEmpty) {
                 val pl = _player
                 if (pl != null) {
@@ -2121,16 +2193,34 @@ class LiveTvPlaybackController @Inject constructor(
             if (playbackState == Player.STATE_ENDED) {
                 val tune = activeVirtual
                 if (tune != null) {
-                    // A Lucid TV programme finished: move to the next slot or queue item.
+                    // A Lucid TV item finished. The guide is the clock: if the item ended
+                    // before its advertised stop, the scheduled advance starts the next one
+                    // exactly on time; if we are already at/past the boundary (or no timer is
+                    // running), move on now. Never reconnect the finished item as a live stream.
                     val ch = currentChannel
-                    activeVirtual = null
-                    pendingVirtualStartMs = null
-                    virtualRelayJob?.cancel()
-                    if (ch != null) {
+                    val boundary = tune.slotEndMs
+                    val now = System.currentTimeMillis()
+                    val timerRunning = virtualAdvanceJob?.isActive == true
+                    // The file ended well before its guide slot: start the next item now and
+                    // re-anchor the guide, rather than leaving a finished item on screen.
+                    if (ch != null && boundary - now > VIRTUAL_EARLY_END_MS &&
+                        lucid.advanceAfter(ch.key, tune.item.id)
+                    ) {
+                        activeVirtual = null
+                        pendingVirtualStartMs = null
+                        virtualAdvanceJob?.cancel()
                         currentUrl = null
-                        resolveAndPlayVirtual(ch, tune.slotEndMs + 1L)
+                        resolveAndPlayVirtual(ch, atMs = now + 500L)
                         return
                     }
+                    if (ch != null && (!timerRunning || now >= boundary)) {
+                        activeVirtual = null
+                        pendingVirtualStartMs = null
+                        virtualAdvanceJob?.cancel()
+                        currentUrl = null
+                        resolveAndPlayVirtual(ch, atMs = maxOf(boundary, now) + 500L)
+                    }
+                    return
                 }
             }
             if (playbackState == Player.STATE_ENDED && _shiftStartedAt.value != null && timeshift.isRecording) {
@@ -2287,10 +2377,12 @@ class LiveTvPlaybackController @Inject constructor(
                 "Catch-up failed on ${ch?.name} (${error.errorCodeName}); no other links left to try"
             )
             if (activeVirtual != null) {
-                _state.value = _state.value.copy(
-                    error = "This Lucid TV film couldn't be played.",
-                    isBuffering = false,
+                val message = "This Lucid TV film couldn't be played."
+                currentChannel?.let { lucid.reportError(it.key, message) }
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                    "Lucid TV \"${currentChannel?.name}\": ${error.errorCodeName}"
                 )
+                _state.value = _state.value.copy(error = message, isBuffering = false)
                 return
             }
             scheduleReconnect(describe(error), error)
@@ -2685,7 +2777,7 @@ class LiveTvPlaybackController @Inject constructor(
         _ownTimeline.value = false
         activeVirtual = null
         pendingVirtualStartMs = null
-        virtualRelayJob?.cancel()
+        virtualAdvanceJob?.cancel()
         virtualResolveToken++
         resolvingVirtualKey = null
         _state.value = LivePlaybackState()

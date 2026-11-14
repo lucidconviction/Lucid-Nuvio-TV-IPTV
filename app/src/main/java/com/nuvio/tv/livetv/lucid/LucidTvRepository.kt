@@ -1,11 +1,14 @@
 package com.nuvio.tv.livetv.lucid
 
 import android.content.Context
+import android.util.Log
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.poster.CustomPosterScreen
 import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.CatalogDescriptor
 import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.skipStep
+import com.nuvio.tv.domain.model.supportsExtra
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.CatalogRepository
 import com.nuvio.tv.domain.repository.MetaRepository
@@ -49,9 +52,10 @@ import javax.inject.Singleton
  * Lucid TV: addon catalogs, series, hand-picked films and live-channel relays become always-on
  * channels.
  *
- * A channel is a definition plus a lazy pool, never a stream URL. CATALOG_ROTATE uses fixed
- * slots, joined in progress, like Debrify's Stremio TV. The LOOP kinds use a continuous queue
- * with real media runtimes, so a 24/7 marathon advances exactly when each film or episode ends.
+ * A channel is a definition plus a lazy pool, never a stream URL. Every VOD kind is a
+ * continuous queue with real media runtimes, so the guide and the stream run on the same clock
+ * and a programme changes exactly when the film or episode ends. Catalog channels are joined in
+ * progress at their real EPG position.
  *
  * Custom channels are saved by the studio; catalog channels are discovered from the installed
  * addons. Both are merged here, and streams are resolved only when a channel is tuned.
@@ -77,9 +81,20 @@ class LucidTvRepository @Inject constructor(
     private val _programs = MutableStateFlow<Map<String, List<EpgProgram>>>(emptyMap())
     val programs: StateFlow<Map<String, List<EpgProgram>>> = _programs.asStateFlow()
 
+    /** Why a channel has nothing to play, for the studio and the start-up report. */
+    private val _errors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val errors: StateFlow<Map<String, String>> = _errors.asStateFlow()
+
     @Volatile private var specs: List<LucidChannelSpec> = emptyList()
     private val pools = ConcurrentHashMap<String, List<LucidItem>>()
     private val poolSources = ConcurrentHashMap<String, String>()
+    /** item id -> epoch ms until which it is skipped after "no playable stream". */
+    private val unavailable = ConcurrentHashMap<String, Long>()
+    /** Where the current queue starts after skipping a broken item. */
+    private val queueStart = ConcurrentHashMap<String, String>()
+    /** A skipped item re-anchors the queue so the next programme starts at the skip time. */
+    private val scheduleAnchor = ConcurrentHashMap<String, Long>()
+    private val metaPermits = Semaphore(META_CONCURRENCY)
     private val generation = AtomicInteger()
     private var started = false
 
@@ -92,14 +107,19 @@ class LucidTvRepository @Inject constructor(
                 addonRepository.getInstalledAddons().debounce(400),
                 prefs.lucidChannels,
                 prefs.settings.map { it.lucidTvEnabled }.distinctUntilChanged(),
+                prefs.settings.map { it.lucidAutoSeriesCatalogs }.distinctUntilChanged(),
                 liveTvRepository.channels,
-            ) { addons, custom, enabled, liveChannels ->
-                LoadInput(addons, custom, enabled, liveChannels)
+            ) { addons, custom, enabled, autoSeries, liveChannels ->
+                LoadInput(addons, custom, enabled, autoSeries, liveChannels)
             }.collectLatest { input ->
                 if (!input.enabled) {
                     generation.incrementAndGet()
                     specs = emptyList()
                     pools.clear()
+                    queueStart.clear()
+                    scheduleAnchor.clear()
+                    unavailable.clear()
+                    _errors.value = emptyMap()
                     publish()
                     return@collectLatest
                 }
@@ -120,10 +140,9 @@ class LucidTvRepository @Inject constructor(
     fun tune(
         channelKey: String,
         atMs: Long = System.currentTimeMillis(),
-        slotNumber: Long? = null,
     ): LucidTune? {
         val spec = specs.firstOrNull { it.channelKey == channelKey } ?: return null
-        val pool = pools[spec.id].orEmpty()
+        val pool = availablePool(spec, pools[spec.id].orEmpty())
         if (pool.isEmpty()) return null
         if (spec.kind == LucidChannelKind.ADDON_LIVE) {
             val item = pool.firstOrNull() ?: return null
@@ -137,57 +156,21 @@ class LucidTvRepository @Inject constructor(
                 live = true,
             )
         }
-        return if (spec.isLoop) tuneLoop(spec, pool, atMs) else tuneRotate(spec, pool, atMs, slotNumber)
+        return tuneQueue(spec, pool, atMs)
     }
 
-    private fun tuneRotate(
-        spec: LucidChannelSpec,
-        pool: List<LucidItem>,
-        atMs: Long,
-        slotNumber: Long?,
-    ): LucidTune? {
-        val slotMs = spec.slotMinutes.coerceAtLeast(1) * 60_000L
-        val slot = if (slotNumber != null) {
-            LucidSchedule.slotForNumber(slotNumber, spec.id, slotMs)
-        } else {
-            LucidSchedule.slotAt(atMs, spec.id, slotMs)
-        }
-        val item = pool[LucidSchedule.itemIndexFor(spec.id, slot.number, pool.size)]
-        val rawStart = if (slotNumber != null) {
-            0L
-        } else {
-            LucidSchedule.joinOffsetMs(
-                channelId = spec.id,
-                slot = slot,
-                nowMs = atMs,
-                maxStartPercent = spec.maxStartPercent,
-                jitter = spec.jitter,
-            )
-        }
-        val latestUsefulStart = item.runtimeMs?.let { (it - 30_000L).coerceAtLeast(0L) }
-        val start = if (latestUsefulStart != null) rawStart.coerceAtMost(latestUsefulStart) else rawStart
-        return LucidTune(
-            channelKey = spec.channelKey,
-            slotNumber = slot.number,
-            slotStartMs = slot.startMs,
-            slotEndMs = slot.endMs,
-            item = item,
-            startOffsetMs = start,
-        )
-    }
-
-    private fun tuneLoop(spec: LucidChannelSpec, pool: List<LucidItem>, atMs: Long): LucidTune? {
+    /**
+     * Every VOD channel walks a queue of real runtimes from a stable anchor. What the guide says
+     * is on now is therefore exactly the item (and join offset) that tuning starts.
+     */
+    private fun tuneQueue(spec: LucidChannelSpec, pool: List<LucidItem>, atMs: Long): LucidTune? {
         val ordered = orderedPool(spec, pool)
         val durations = durations(spec, ordered)
         val slot = LucidSchedule.queueAt(atMs, anchor(spec), durations) ?: return null
         val item = ordered[slot.itemIndex]
-        val rawStart = (atMs - slot.startMs).coerceAtLeast(0L)
-        val start = if (item.type == "live") {
-            0L
-        } else {
-            val latestUsefulStart = item.runtimeMs?.let { (it - 30_000L).coerceAtLeast(0L) }
-            if (latestUsefulStart != null) rawStart.coerceAtMost(latestUsefulStart) else rawStart
-        }
+        // Exact join-in-progress: the guide's progress and the stream's position agree, even
+        // when tuning in during the last minute of a programme.
+        val start = if (item.type == "live") 0L else (atMs - slot.startMs).coerceAtLeast(0L)
         return LucidTune(
             channelKey = spec.channelKey,
             slotNumber = slot.startMs,
@@ -208,9 +191,10 @@ class LucidTvRepository @Inject constructor(
         }.mapNotNull { spec ->
             spec.addonBaseUrl?.let { base -> catalogSourceKey(base, spec.catalogId.orEmpty(), spec.contentType) }
         }.toSet()
-        val discovered = discover(input.addons, customCatalogSources)
+        val discovered = discover(input.addons, customCatalogSources, input.autoSeries)
         val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() }
         specs = allSpecs
+        Log.d(TAG, "load: ${allSpecs.size} channel(s), ${allSpecs.count { it.auto }} automatic, autoSeries=${input.autoSeries}")
         val liveIds = allSpecs.mapTo(HashSet()) { it.id }
         val previousSources = HashMap(poolSources)
         pools.keys.retainAll(liveIds)
@@ -228,21 +212,30 @@ class LucidTvRepository @Inject constructor(
                         val source = sourceKey(spec)
                         val stale = cacheSavedAtMs > 0L &&
                             System.currentTimeMillis() - cacheSavedAtMs > POOL_CACHE_TTL_MS
+                        val sourceChanged = previousSources[spec.id] != null &&
+                            previousSources[spec.id] != source
                         val needsLoad = spec.kind == LucidChannelKind.RELAY_LOOP ||
                             !pools.containsKey(spec.id) ||
-                            previousSources[spec.id] != source ||
+                            sourceChanged ||
                             stale
                         if (!needsLoad) return@withPermit
+                        if (sourceChanged) {
+                            queueStart.remove(spec.id)
+                            scheduleAnchor.remove(spec.id)
+                            unavailable.keys.removeIf { it.startsWith("${spec.id}|") }
+                        }
                         val hadPool = pools.containsKey(spec.id)
                         val items = runCatching {
                             when (spec.kind) {
                                 LucidChannelKind.CATALOG_ROTATE,
-                                LucidChannelKind.CATALOG_LOOP -> loadCatalogPool(spec)
+                                LucidChannelKind.CATALOG_LOOP -> loadCatalogPool(spec, input.addons)
                                 LucidChannelKind.SERIES_LOOP -> loadSeriesPool(spec)
                                 LucidChannelKind.RELAY_LOOP -> buildRelayPool(spec, input.liveChannels)
                                 LucidChannelKind.MANUAL_LOOP -> buildManualPool(spec)
                                 LucidChannelKind.ADDON_LIVE -> buildManualPool(spec)
                             }
+                        }.onFailure {
+                            Log.w(TAG, "pool load failed for ${spec.name} (${spec.kind})", it)
                         }.getOrDefault(emptyList())
                         if (run != generation.get()) return@withPermit
                         if (items.isEmpty()) {
@@ -256,6 +249,20 @@ class LucidTvRepository @Inject constructor(
                     }
                 }
             }.awaitAll()
+        }
+        _errors.value = allSpecs
+            .filter { pools[it.id].isNullOrEmpty() }
+            .associate { it.channelKey to emptyPoolMessage(it) }
+    }
+
+    private fun emptyPoolMessage(spec: LucidChannelSpec): String = when (spec.kind) {
+        LucidChannelKind.RELAY_LOOP -> "No channels were found in this relay group."
+        LucidChannelKind.ADDON_LIVE -> "This live addon channel is no longer available."
+        LucidChannelKind.MANUAL_LOOP -> "This channel has no items."
+        LucidChannelKind.SERIES_LOOP -> "The series returned no episodes."
+        LucidChannelKind.CATALOG_ROTATE, LucidChannelKind.CATALOG_LOOP -> when {
+            spec.addonBaseUrl.isBlank() -> "The addon behind this channel is missing."
+            else -> "The catalog returned no items."
         }
     }
 
@@ -276,6 +283,10 @@ class LucidTvRepository @Inject constructor(
             if (!cacheFile.exists()) return
             json.decodeFromString<PoolCache>(cacheFile.readText())
         }.getOrNull() ?: return
+        if (cache.version < CACHE_VERSION) {
+            Log.d(TAG, "pool cache is from an older Lucid build; reloading pools")
+            return
+        }
         if (cache.savedAtMs <= 0L || cache.pools.isEmpty()) return
         pools.clear()
         pools.putAll(cache.pools)
@@ -295,6 +306,7 @@ class LucidTvRepository @Inject constructor(
     private fun savePoolCache() {
         val relayIds = specs.filter { it.kind == LucidChannelKind.RELAY_LOOP }.mapTo(HashSet()) { it.id }
         val cache = PoolCache(
+            version = CACHE_VERSION,
             savedAtMs = System.currentTimeMillis(),
             pools = pools.filterKeys { it !in relayIds },
             sources = poolSources.filterKeys { it !in relayIds },
@@ -313,18 +325,25 @@ class LucidTvRepository @Inject constructor(
 
     @Serializable
     private data class PoolCache(
+        /** Bumped when the pool contents change shape (series are now expanded into episodes). */
+        val version: Int = 0,
         val savedAtMs: Long,
         val pools: Map<String, List<LucidItem>>,
         val sources: Map<String, String>,
     )
 
-    private fun discover(addons: List<Addon>, excludedSources: Set<String>): List<Discovered> =
-        addons.asSequence()
+    private fun discover(
+        addons: List<Addon>,
+        excludedSources: Set<String>,
+        includeSeries: Boolean,
+    ): List<Discovered> {
+        val wanted = if (includeSeries) setOf("movie", "series") else setOf("movie")
+        return addons.asSequence()
             .filter { it.enabled }
             .flatMap { addon ->
                 addon.catalogs.asSequence()
                     .filter {
-                        it.apiType == "movie" &&
+                        it.apiType in wanted &&
                             !it.isSearchOnlyCatalog() &&
                             it.extra.none { extra -> extra.isRequired } &&
                             catalogSourceKey(addon.baseUrl, it.id, it.apiType) !in excludedSources
@@ -337,16 +356,27 @@ class LucidTvRepository @Inject constructor(
                 val id = "vc_" + LucidSchedule.stableHash(
                     "${addon.baseUrl}|${addon.id}|${catalog.apiType}|${catalog.id}"
                 ).toString(16)
+                val series = catalog.apiType == "series"
                 Discovered(
                     spec = LucidChannelSpec(
                         id = id,
-                        name = "${addon.displayName} · ${catalog.name}",
+                        // Both Cinemeta movie and series catalogs are called "Popular"; keep the
+                        // series one distinguishable in the guide.
+                        name = if (series) {
+                            "${addon.displayName} · ${catalog.name} · Series"
+                        } else {
+                            "${addon.displayName} · ${catalog.name}"
+                        },
                         catalogName = catalog.name,
                         addonName = addon.displayName,
                         addonBaseUrl = addon.baseUrl,
                         addonId = addon.id,
                         catalogId = catalog.id,
                         contentType = catalog.apiType,
+                        slotMinutes = if (series) 45 else 90,
+                        // The pool is interleaved one episode per series, so this plays a
+                        // sampler of the catalog's shows instead of shuffling episode numbers.
+                        order = if (series) LucidOrder.SEQUENTIAL else LucidOrder.SHUFFLE,
                         auto = true,
                     ),
                     addon = addon,
@@ -355,6 +385,7 @@ class LucidTvRepository @Inject constructor(
             }
             .distinctBy { it.spec.id }
             .toList()
+    }
 
     private fun LucidStoredSpec.toRuntime(): LucidChannelSpec = LucidChannelSpec(
         id = id,
@@ -364,7 +395,7 @@ class LucidTvRepository @Inject constructor(
         addonBaseUrl = addonBaseUrl.orEmpty(),
         addonId = addonId.orEmpty(),
         catalogId = catalogId.orEmpty(),
-        contentType = contentType,
+        contentType = contentType.ifBlank { "movie" },
         kind = kind,
         group = group.ifBlank { GROUP_NAME },
         number = number,
@@ -383,53 +414,135 @@ class LucidTvRepository @Inject constructor(
         auto = false,
     )
 
-    private suspend fun loadCatalogPool(spec: LucidChannelSpec): List<LucidItem> {
-        val result = withTimeoutOrNull(CATALOG_TIMEOUT_MS) {
-            runCatching {
-                catalogRepository.getCatalog(
-                    addonBaseUrl = spec.addonBaseUrl,
-                    addonId = spec.addonId,
-                    addonName = spec.addonName,
-                    catalogId = spec.catalogId,
-                    catalogName = spec.catalogName,
-                    type = spec.contentType,
-                    posterScreen = CustomPosterScreen.HOME,
-                ).first { it !is NetworkResult.Loading }
-            }.getOrNull()
-        } ?: return emptyList()
-        val items = (result as? NetworkResult.Success)?.data?.items.orEmpty()
-        val pool = items.asSequence()
+    private suspend fun loadCatalogPool(
+        spec: LucidChannelSpec,
+        addons: List<Addon>,
+    ): List<LucidItem> {
+        val catalog = findCatalog(addons, spec)
+        val supportsSkip = catalog?.supportsExtra("skip") == true
+        val skipStep = catalog?.skipStep() ?: 100
+        val extraArgs = catalog?.extra.orEmpty()
+            .filterNot { it.name.equals("skip", true) || it.name.equals("search", true) }
+            .mapNotNull { extra ->
+                extra.defaultValue?.takeIf { it.isNotBlank() }?.let { extra.name to it }
+            }
+            .toMap()
+
+        val items = ArrayList<MetaPreview>()
+        // A series catalog is expanded into episodes; there is no point fetching hundreds of
+        // series when only the first few fill the pool.
+        val fetchLimit = if (spec.contentType == "series") MAX_SERIES_TO_EXPAND else MAX_POOL_ITEMS
+        var skip = 0
+        var pages = 0
+        while (items.size < fetchLimit && pages < MAX_CATALOG_PAGES) {
+            val result = withTimeoutOrNull(CATALOG_TIMEOUT_MS) {
+                runCatching {
+                    catalogRepository.getCatalog(
+                        addonBaseUrl = spec.addonBaseUrl,
+                        addonId = spec.addonId,
+                        addonName = spec.addonName,
+                        catalogId = spec.catalogId,
+                        catalogName = spec.catalogName,
+                        type = spec.contentType,
+                        skip = skip,
+                        skipStep = skipStep,
+                        extraArgs = extraArgs,
+                        supportsSkip = supportsSkip,
+                        posterScreen = CustomPosterScreen.HOME,
+                    ).first { it !is NetworkResult.Loading }
+                }.onFailure {
+                    Log.w(TAG, "catalog page failed for ${spec.name} skip=$skip", it)
+                }.getOrNull()
+            }
+            val row = (result as? NetworkResult.Success)?.data ?: break
+            if (row.items.isEmpty()) break
+            items += row.items
+            val next = row.nextSkip
+            if (!row.hasMore || next <= skip || next <= 0) break
+            skip = next
+            pages++
+        }
+        Log.d(
+            TAG,
+            "catalog ${spec.name}: ${items.size} item(s) in ${pages + 1} page(s), " +
+                "supportsSkip=$supportsSkip, type=${spec.contentType}",
+        )
+
+        val filtered = items.asSequence()
             .filter { it.apiType == spec.contentType }
             .filterNot { item -> item.genres.any { genre -> genre.equals("Adult", ignoreCase = true) } }
             .distinctBy { it.id }
-            .take(MAX_POOL_ITEMS)
-            .mapNotNull { it.toLucidItem(spec) }
             .toList()
-        return pool
+
+        val out = ArrayList<LucidItem>()
+        filtered.filter { it.apiType != "series" }
+            .forEach { item -> item.toLucidItem(spec)?.let(out::add) }
+
+        // A catalog can be a list of series (the auto series option) or a mixed list. Expand
+        // those into episodes: the player can only search streams for a series with a season and
+        // episode, and every queue item needs a real runtime.
+        val seriesItems = filtered.filter { it.apiType == "series" }.take(MAX_SERIES_TO_EXPAND)
+        if (seriesItems.isNotEmpty()) {
+            val permits = Semaphore(META_CONCURRENCY)
+            val expanded = coroutineScope {
+                seriesItems.map { item ->
+                    async { permits.withPermit { loadSeriesEpisodes(spec, item) } }
+                }.awaitAll()
+            }
+            // Interleave one episode from each series per round, so a 120-item pool contains
+            // more than the first two or three shows.
+            val rounds = expanded.maxOfOrNull { it.size } ?: 0
+            for (round in 0 until rounds) {
+                expanded.forEach { episodes ->
+                    episodes.getOrNull(round)?.let(out::add)
+                }
+            }
+        }
+
+        return enrichMissingRuntimes(spec, out)
+            .filter { it.type != "series" || (it.season != null && it.episode != null) }
+            .distinctBy { it.id }
+            .take(MAX_POOL_ITEMS)
     }
 
     private suspend fun loadSeriesPool(spec: LucidChannelSpec): List<LucidItem> {
         val seriesId = spec.seriesId?.takeIf { it.isNotBlank() } ?: return emptyList()
-        val result = withTimeoutOrNull(CATALOG_TIMEOUT_MS) {
-            runCatching {
-                metaRepository.getMetaFromAllAddons(
-                    type = "series",
-                    id = seriesId,
-                    sourceAddonBaseUrl = spec.addonBaseUrl.takeIf { it.isNotBlank() },
-                ).first { it !is NetworkResult.Loading }
-            }.getOrNull()
-        } ?: return emptyList()
-        val meta = (result as? NetworkResult.Success)?.data ?: return emptyList()
+        val meta = fetchMeta("series", seriesId, spec.addonBaseUrl) ?: return emptyList()
+        return metaEpisodes(spec, meta, spec.poster)
+            .take(MAX_POOL_ITEMS)
+    }
+
+    private suspend fun loadSeriesEpisodes(
+        spec: LucidChannelSpec,
+        preview: MetaPreview,
+    ): List<LucidItem> {
+        val meta = fetchMeta("series", preview.id, spec.addonBaseUrl) ?: return emptyList()
+        return metaEpisodes(
+            spec = spec,
+            meta = meta,
+            posterOverride = preview.poster ?: preview.landscapePoster ?: preview.background,
+        ).take(MAX_EPISODES_PER_SERIES)
+    }
+
+    private fun metaEpisodes(
+        spec: LucidChannelSpec,
+        meta: com.nuvio.tv.domain.model.Meta,
+        posterOverride: String?,
+    ): List<LucidItem> {
         val fallback = spec.slotMinutes.coerceAtLeast(1) * 60_000L
-        val episodes = meta.watchableEpisodes()
+        return meta.watchableEpisodes()
             .filter { it.season != null && it.episode != null }
             .map { video ->
+                val episodeId = video.id.takeIf { it.isNotBlank() }
+                    ?: "${meta.id}:${video.season}:${video.episode}"
                 LucidItem(
-                    id = "${meta.id}:${video.season}:${video.episode}",
-                    streamId = meta.id,
+                    // The stream search id is the episode id ("tt123:1:1"), not the series id:
+                    // addons build /stream/series/tt123:1:1.json from it.
+                    id = episodeId,
+                    streamId = episodeId,
                     type = "series",
                     title = meta.name,
-                    poster = video.thumbnail ?: spec.poster ?: meta.poster,
+                    poster = video.thumbnail ?: posterOverride ?: spec.poster ?: meta.poster,
                     backdrop = meta.backdropUrl,
                     description = video.overview ?: meta.description,
                     year = parseYear(meta.releaseInfo),
@@ -445,7 +558,71 @@ class LucidTvRepository @Inject constructor(
                     episodeTitle = video.title,
                 )
             }
-        return episodes.sortedWith(compareBy({ it.season }, { it.episode }))
+            .sortedWith(compareBy({ it.season }, { it.episode }))
+    }
+
+    private suspend fun fetchMeta(
+        type: String,
+        id: String,
+        addonBaseUrl: String,
+    ): com.nuvio.tv.domain.model.Meta? = metaPermits.withPermit {
+        val result = withTimeoutOrNull(META_TIMEOUT_MS) {
+            runCatching {
+                metaRepository.getMetaFromAllAddons(
+                    type = type,
+                    id = id,
+                    sourceAddonBaseUrl = addonBaseUrl.takeIf { it.isNotBlank() },
+                ).first { it !is NetworkResult.Loading }
+            }.onFailure {
+                Log.w(TAG, "meta lookup failed for $type/$id", it)
+            }.getOrNull()
+        } ?: return@withPermit null
+        (result as? NetworkResult.Success)?.data
+    }
+
+    private suspend fun fetchRuntimeMs(spec: LucidChannelSpec, item: LucidItem): Long? {
+        val meta = fetchMeta(
+            type = item.type,
+            id = item.id,
+            addonBaseUrl = item.addonBaseUrl.ifBlank { spec.addonBaseUrl },
+        ) ?: return null
+        return parseRuntimeMs(meta.runtime)
+    }
+
+    /**
+     * Catalog lists often carry a runtime, but not always. Fill the missing ones so the guide
+     * does not fall back to a guessed slot for films whose length is knowable. Lookups are
+     * bounded: a broken/slow addon must not hold the whole channel for minutes.
+     */
+    private suspend fun enrichMissingRuntimes(
+        spec: LucidChannelSpec,
+        items: List<LucidItem>,
+    ): List<LucidItem> {
+        val budget = AtomicInteger(MAX_RUNTIME_LOOKUPS)
+        if (items.none { it.runtimeMs == null && it.type != "live" }) return items
+        val permits = Semaphore(META_CONCURRENCY)
+        return coroutineScope {
+            items.map { item ->
+                async {
+                    if (item.runtimeMs != null || item.type == "live" || item.type == "series" ||
+                        budget.getAndDecrement() <= 0
+                    ) {
+                        return@async item
+                    }
+                    val runtime = permits.withPermit { fetchRuntimeMs(spec, item) }
+                    if (runtime != null) item.copy(runtimeMs = runtime) else item
+                }
+            }.awaitAll()
+        }
+    }
+
+    private fun findCatalog(addons: List<Addon>, spec: LucidChannelSpec): CatalogDescriptor? {
+        val addon = addons.firstOrNull { it.baseUrl == spec.addonBaseUrl }
+            ?: addons.firstOrNull { spec.addonId.isNotBlank() && it.id == spec.addonId }
+            ?: return null
+        return addon.catalogs.firstOrNull {
+            it.id == spec.catalogId && it.apiType == spec.contentType
+        } ?: addon.catalogs.firstOrNull { it.id == spec.catalogId }
     }
 
     private fun buildRelayPool(spec: LucidChannelSpec, liveChannels: List<LiveChannel>): List<LucidItem> {
@@ -478,20 +655,21 @@ class LucidTvRepository @Inject constructor(
 
     private fun buildManualPool(spec: LucidChannelSpec): List<LucidItem> =
         spec.manualItems.map { item ->
-                LucidItem(
-                    id = item.id,
-                    type = item.type,
-                    title = item.title,
-                    poster = item.poster,
-                    backdrop = item.backdrop,
-                    description = item.description,
-                    year = item.year,
-                    runtimeMs = item.runtimeMs,
-                    addonId = item.addonId,
-                    addonName = item.addonName,
-                    addonBaseUrl = item.addonBaseUrl,
-                    season = item.season,
-                    episode = item.episode,
+            LucidItem(
+                id = item.id,
+                streamId = item.id,
+                type = item.type,
+                title = item.title,
+                poster = item.poster,
+                backdrop = item.backdrop,
+                description = item.description,
+                year = item.year,
+                runtimeMs = item.runtimeMs,
+                addonId = item.addonId,
+                addonName = item.addonName,
+                addonBaseUrl = item.addonBaseUrl,
+                season = item.season,
+                episode = item.episode,
                 episodeTitle = item.episodeTitle,
             )
         }
@@ -509,6 +687,7 @@ class LucidTvRepository @Inject constructor(
         val name = name.takeIf { it.isNotBlank() } ?: return null
         return LucidItem(
             id = videoId,
+            streamId = videoId,
             type = apiType,
             title = name,
             poster = poster ?: landscapePoster ?: background,
@@ -523,6 +702,66 @@ class LucidTvRepository @Inject constructor(
         )
     }
 
+    /**
+     * The current item has no playable stream: skip it and start the queue at the next item now.
+     * The synthetic guide is regenerated from that point, so the guide and the player stay in
+     * step instead of quietly drifting apart.
+     *
+     * @return true when another item is available and the channel can be tuned again.
+     */
+    fun markUnplayable(channelKey: String, itemId: String): Boolean {
+        val spec = specs.firstOrNull { it.channelKey == channelKey } ?: return false
+        val pool = availablePool(spec, pools[spec.id].orEmpty())
+        if (pool.size <= 1) return false
+        val ordered = orderedPool(spec, pool)
+        val failedIndex = ordered.indexOfFirst { it.id == itemId }
+        val next = ordered.drop((failedIndex + 1).coerceAtLeast(0))
+            .firstOrNull { it.id != itemId }
+            ?: ordered.firstOrNull { it.id != itemId }
+            ?: return false
+        unavailable["${spec.id}|$itemId"] = System.currentTimeMillis() + UNPLAYABLE_TTL_MS
+        moveQueueStart(spec, next.id)
+        _errors.value = _errors.value - channelKey
+        Log.d(TAG, "skip ${spec.name}: no stream for ${itemId.take(80)}; next ${next.id.take(80)}")
+        publish()
+        return true
+    }
+
+    /**
+     * A media item ended early (a shorter file than its metadata said, or a dead source that
+     * played nothing). Move the queue's clock to the item after [itemId] and start it now, so
+     * the guide immediately says the next programme is on instead of freezing on a finished
+     * item until the old boundary.
+     */
+    fun advanceAfter(channelKey: String, itemId: String): Boolean {
+        val spec = specs.firstOrNull { it.channelKey == channelKey } ?: return false
+        val pool = availablePool(spec, pools[spec.id].orEmpty())
+        if (pool.size <= 1) return false
+        val ordered = orderedPool(spec, pool)
+        val index = ordered.indexOfFirst { it.id == itemId }
+        if (index < 0) return false
+        val next = ordered[(index + 1) % ordered.size]
+        if (next.id == itemId) return false
+        moveQueueStart(spec, next.id)
+        Log.d(TAG, "advance ${spec.name}: ${itemId.take(60)} ended early; next ${next.id.take(60)}")
+        publish()
+        return true
+    }
+
+    private fun moveQueueStart(spec: LucidChannelSpec, itemId: String) {
+        queueStart[spec.id] = itemId
+        scheduleAnchor[spec.id] = System.currentTimeMillis()
+    }
+
+    fun reportError(channelKey: String, message: String) {
+        _errors.value = _errors.value + (channelKey to message)
+        Log.w(TAG, "$channelKey: $message")
+    }
+
+    fun clearError(channelKey: String) {
+        if (channelKey in _errors.value) _errors.value = _errors.value - channelKey
+    }
+
     private fun publish() {
         val currentSpecs = specs
         _channels.value = currentSpecs.mapIndexed { index, spec ->
@@ -533,7 +772,7 @@ class LucidTvRepository @Inject constructor(
                 name = spec.name,
                 tvgId = null,
                 tvgName = null,
-                logo = spec.poster ?: pools[spec.id]?.firstOrNull()?.poster,
+                logo = spec.poster ?: availablePool(spec, pools[spec.id].orEmpty()).firstOrNull()?.poster,
                 groupId = spec.groupId,
                 group = spec.group,
                 number = spec.number ?: (FIRST_CHANNEL_NUMBER + index),
@@ -549,7 +788,7 @@ class LucidTvRepository @Inject constructor(
         val to = now + EPG_FUTURE_MS
         val out = HashMap<String, List<EpgProgram>>()
         currentSpecs.forEach { spec ->
-            val pool = pools[spec.id].orEmpty()
+            val pool = availablePool(spec, pools[spec.id].orEmpty())
             if (pool.isEmpty()) return@forEach
             if (spec.kind == LucidChannelKind.ADDON_LIVE) {
                 val item = pool.firstOrNull() ?: return@forEach
@@ -566,43 +805,51 @@ class LucidTvRepository @Inject constructor(
                 )
                 return@forEach
             }
-            if (!spec.isLoop) {
-                val slotMs = spec.slotMinutes.coerceAtLeast(1) * 60_000L
-                var slot = LucidSchedule.slotAt(from, spec.id, slotMs)
-                val list = ArrayList<EpgProgram>()
-                var guard = 0
-                while (slot.startMs < to && guard++ < MAX_PROGRAMS_PER_CHANNEL) {
-                    val index = LucidSchedule.itemIndexFor(spec.id, slot.number, pool.size)
-                    list += pool[index].toProgram(spec, slot.startMs, slot.endMs)
-                    slot = LucidSchedule.slotForNumber(slot.number + 1, spec.id, slotMs)
-                }
-                out[spec.channelKey] = list
-            } else {
-                val ordered = orderedPool(spec, pool)
-                val durations = durations(spec, ordered)
-                val slots = LucidSchedule.queueSchedule(anchor(spec), durations, from, to)
-                out[spec.channelKey] = slots.map { slot ->
-                    ordered[slot.itemIndex].toProgram(spec, slot.startMs, slot.endMs)
-                }
+            val ordered = orderedPool(spec, pool)
+            val durations = durations(spec, ordered)
+            val slots = LucidSchedule.queueSchedule(anchor(spec), durations, from, to)
+            out[spec.channelKey] = slots.map { slot ->
+                ordered[slot.itemIndex].toProgram(spec, slot.startMs, slot.endMs)
             }
         }
         _programs.value = out
     }
 
-    /** Catalog rotation uses the slot hash; 24/7 queues apply the chosen order at use time. */
-    private fun orderedPool(spec: LucidChannelSpec, pool: List<LucidItem>): List<LucidItem> =
-        if (spec.kind == LucidChannelKind.CATALOG_ROTATE) pool else applyOrder(spec, pool)
+    /**
+     * The chosen order, then rotated so a failed item's successor starts the queue after a skip.
+     * This keeps the guide's now/next on exactly what the player will tune.
+     */
+    private fun orderedPool(spec: LucidChannelSpec, pool: List<LucidItem>): List<LucidItem> {
+        val ordered = applyOrder(spec, pool)
+        val startId = queueStart[spec.id] ?: return ordered
+        val index = ordered.indexOfFirst { it.id == startId }
+        return if (index <= 0) ordered else ordered.drop(index) + ordered.take(index)
+    }
 
     private fun durations(spec: LucidChannelSpec, pool: List<LucidItem>): List<Long> {
         val fallback = when (spec.kind) {
             LucidChannelKind.RELAY_LOOP -> spec.relaySegmentMinutes.coerceAtLeast(1) * 60_000L
-            LucidChannelKind.SERIES_LOOP -> spec.slotMinutes.coerceAtLeast(1) * 60_000L
             else -> spec.slotMinutes.coerceAtLeast(1) * 60_000L
         }
         return pool.map { it.runtimeMs?.takeIf { d -> d > 0L } ?: fallback }
     }
 
-    private fun anchor(spec: LucidChannelSpec): Long = spec.anchorMs.takeIf { it > 0L } ?: 0L
+    private fun anchor(spec: LucidChannelSpec): Long =
+        scheduleAnchor[spec.id] ?: spec.anchorMs.takeIf { it > 0L } ?: 0L
+
+    /** Items skipped after "no playable stream", until the retry window expires. */
+    private fun availablePool(spec: LucidChannelSpec, pool: List<LucidItem>): List<LucidItem> {
+        if (pool.isEmpty()) return pool
+        val now = System.currentTimeMillis()
+        val keyPrefix = "${spec.id}|"
+        unavailable.keys.removeIf { key ->
+            key.startsWith(keyPrefix) && (unavailable[key] ?: 0L) <= now
+        }
+        return pool.filter { item ->
+            val until = unavailable["${spec.id}|${item.id}"]
+            until == null || until <= now
+        }
+    }
 
     private fun catalogSourceKey(baseUrl: String, catalogId: String, type: String): String =
         "$baseUrl|$catalogId|$type"
@@ -611,6 +858,7 @@ class LucidTvRepository @Inject constructor(
         val addons: List<Addon>,
         val custom: List<LucidStoredSpec>,
         val enabled: Boolean,
+        val autoSeries: Boolean,
         val liveChannels: List<LiveChannel>,
     )
 
@@ -621,18 +869,27 @@ class LucidTvRepository @Inject constructor(
     )
 
     companion object {
+        const val TAG = "LucidTv"
         const val SOURCE_ID = "lucid"
         const val GROUP_NAME = "Lucid TV"
         const val FIRST_CHANNEL_NUMBER = 9000
         const val MAX_AUTO_CHANNELS = 60
         const val MAX_POOL_ITEMS = 120
-        const val POOL_CONCURRENCY = 2
+        const val POOL_CONCURRENCY = 4
         const val CATALOG_TIMEOUT_MS = 20_000L
         const val EPG_PAST_MS = 2 * 60 * 60_000L
         const val EPG_FUTURE_MS = 3 * 24 * 60 * 60_000L
         const val MAX_PROGRAMS_PER_CHANNEL = 2000
         const val POOL_CACHE_TTL_MS = 6 * 60 * 60_000L
+        const val CACHE_VERSION = 2
         const val LIVE_BLOCK_MS = 12 * 60 * 60_000L
+        const val MAX_CATALOG_PAGES = 6
+        const val MAX_SERIES_TO_EXPAND = 8
+        const val MAX_EPISODES_PER_SERIES = 40
+        const val MAX_RUNTIME_LOOKUPS = 24
+        const val META_CONCURRENCY = 3
+        const val META_TIMEOUT_MS = 12_000L
+        const val UNPLAYABLE_TTL_MS = 60 * 60_000L
 
         private val HOURS = Regex("(\\d+)\\s*h", RegexOption.IGNORE_CASE)
         private val MINUTES = Regex("(\\d+)\\s*m", RegexOption.IGNORE_CASE)

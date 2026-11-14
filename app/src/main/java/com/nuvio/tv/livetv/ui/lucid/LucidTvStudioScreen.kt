@@ -100,6 +100,7 @@ fun LucidTvStudioScreen(
     val relayGroups by viewModel.relayGroups.collectAsStateWithLifecycle()
     val runtimeChannels by viewModel.lucid.channels.collectAsStateWithLifecycle()
     val runtimePrograms by viewModel.lucid.programs.collectAsStateWithLifecycle()
+    val errors by viewModel.lucid.errors.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var mode by remember { mutableStateOf(StudioMode.LIST) }
@@ -204,6 +205,7 @@ fun LucidTvStudioScreen(
                 specs = specs,
                 runtimeChannels = runtimeChannels.map { it.key }.toSet(),
                 programs = runtimePrograms,
+                errors = errors,
                 nowMs = remember(nowTick) { System.currentTimeMillis() },
                 firstFocus = firstFocus,
                 onAdd = { mode = StudioMode.ADD_MENU },
@@ -433,6 +435,7 @@ private fun StudioList(
     specs: List<LucidStoredSpec>,
     runtimeChannels: Set<String>,
     programs: Map<String, List<EpgProgram>>,
+    errors: Map<String, String>,
     nowMs: Long,
     firstFocus: FocusRequester,
     onAdd: () -> Unit,
@@ -485,6 +488,15 @@ private fun StudioList(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    errors[spec.channelKey]?.let { message ->
+                        Text(
+                            message,
+                            style = NuvioTheme.textStyles.metadata,
+                            color = NuvioTheme.colors.TextSecondary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -494,7 +506,7 @@ private fun StudioList(
 @Composable
 private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, StudioMode) -> Unit) {
     val items = listOf(
-        Triple("Addon catalog · rotating", "Films from an addon catalog, joined in progress in 90-minute slots.", LucidChannelKind.CATALOG_ROTATE to StudioMode.CATALOG_ADDON),
+        Triple("Addon catalog · rotating", "Films from an addon catalog, shuffled into a 24/7 queue using each film's real runtime.", LucidChannelKind.CATALOG_ROTATE to StudioMode.CATALOG_ADDON),
         Triple("Addon catalog · 24/7", "The same catalog as a continuous queue, using each film's real runtime.", LucidChannelKind.CATALOG_LOOP to StudioMode.CATALOG_ADDON),
         Triple("Series marathon · 24/7", "One series, every episode in order, using the episode runtimes.", LucidChannelKind.SERIES_LOOP to StudioMode.SERIES_ADDON),
         Triple("Movie collection · 24/7", "Pick films from a catalog into a hand-made 24/7 marathon.", LucidChannelKind.MANUAL_LOOP to StudioMode.CATALOG_ADDON),
@@ -791,7 +803,7 @@ private fun Editor(
             if (draft.kind == LucidChannelKind.CATALOG_ROTATE) {
                 item {
                     ChipSetting(
-                        "Slot length",
+                        "Fallback minutes",
                         listOf(30, 45, 60, 90, 120),
                         draft.slotMinutes,
                         first = true,
@@ -799,19 +811,24 @@ private fun Editor(
                     ) { onChange(draft.copy(slotMinutes = it)) }
                 }
                 item {
-                    ChipSetting(
-                        "Join films at most",
-                        listOf(-1, 0, 10, 20, 30, 50),
-                        draft.maxStartPercent,
-                    ) { onChange(draft.copy(maxStartPercent = it)) }
+                    Text(
+                        "The guide uses each film's real runtime. This length is only used when an " +
+                            "item has no runtime; the channel always joins at the guide position.",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.TextSecondary,
+                    )
                 }
             }
-            if (draft.kind == LucidChannelKind.CATALOG_LOOP ||
+            if (draft.kind == LucidChannelKind.CATALOG_ROTATE ||
+                draft.kind == LucidChannelKind.CATALOG_LOOP ||
                 draft.kind == LucidChannelKind.SERIES_LOOP ||
                 draft.kind == LucidChannelKind.MANUAL_LOOP
             ) {
                 item {
-                    OrderSetting(draft.order, firstFocus) { onChange(draft.copy(order = it)) }
+                    OrderSetting(
+                        draft.order,
+                        if (draft.kind == LucidChannelKind.CATALOG_ROTATE) null else firstFocus,
+                    ) { onChange(draft.copy(order = it)) }
                 }
             }
             if (draft.kind == LucidChannelKind.MANUAL_LOOP) {
@@ -944,7 +961,7 @@ private fun ChipSetting(
 }
 
 @Composable
-private fun OrderSetting(selected: LucidOrder, firstFocus: FocusRequester, onSelect: (LucidOrder) -> Unit) {
+private fun OrderSetting(selected: LucidOrder, firstFocus: FocusRequester?, onSelect: (LucidOrder) -> Unit) {
     val choices = listOf(LucidOrder.SHUFFLE, LucidOrder.AIR, LucidOrder.RELEASE, LucidOrder.SEQUENTIAL, LucidOrder.MANUAL)
     Column(Modifier.fillMaxWidth()) {
         Text("Order", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
@@ -954,7 +971,9 @@ private fun OrderSetting(selected: LucidOrder, firstFocus: FocusRequester, onSel
                 val isSelected = order == selected
                 Button(
                     onClick = { onSelect(order) },
-                    modifier = Modifier.then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    modifier = Modifier.then(
+                        if (index == 0 && firstFocus != null) Modifier.focusRequester(firstFocus) else Modifier
+                    ),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
                     colors = ButtonDefaults.colors(
                         containerColor = if (isSelected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),

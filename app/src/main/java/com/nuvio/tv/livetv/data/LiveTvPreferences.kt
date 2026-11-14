@@ -63,6 +63,7 @@ class LiveTvPreferences @Inject constructor(
         val showInSidebar = booleanPreferencesKey("show_in_sidebar")
         val showImportProgress = booleanPreferencesKey("show_import_progress")
         val lucidTvEnabled = booleanPreferencesKey("lucid_tv_enabled")
+        val lucidAutoSeries = booleanPreferencesKey("lucid_auto_series")
         val lucidChannels = stringPreferencesKey("lucid_channels")
         val quickChannels = stringPreferencesKey("quick_channels")
         val showNames = booleanPreferencesKey("show_channel_names")
@@ -521,7 +522,8 @@ class LiveTvPreferences @Inject constructor(
             guideInfoHidden = p[Keys.guideInfoHidden] ?: d.guideInfoHidden,
             launcherRows = p[Keys.launcherRows] ?: d.launcherRows,
             showImportProgress = p[Keys.showImportProgress] ?: d.showImportProgress,
-            lucidTvEnabled = p[Keys.lucidTvEnabled] ?: d.lucidTvEnabled
+            lucidTvEnabled = p[Keys.lucidTvEnabled] ?: d.lucidTvEnabled,
+            lucidAutoSeriesCatalogs = p[Keys.lucidAutoSeries] ?: d.lucidAutoSeriesCatalogs
         )
     }
 
@@ -880,6 +882,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.launcherRows] = s.launcherRows
         p[Keys.showImportProgress] = s.showImportProgress
         p[Keys.lucidTvEnabled] = s.lucidTvEnabled
+        p[Keys.lucidAutoSeries] = s.lucidAutoSeriesCatalogs
     }
 
     // ---------- channel management ----------
