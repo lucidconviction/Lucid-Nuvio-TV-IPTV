@@ -456,6 +456,9 @@ private fun YouTubeCard(item: YtItem, onClick: (YtItem) -> Unit) {
                 item.title,
                 style = NuvioTheme.textStyles.cardTitle,
                 color = NuvioTheme.colors.TextPrimary,
+                // Reserve the same two-line title area on every card, so rows and grids keep a
+                // single thumbnail/card size.
+                minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),

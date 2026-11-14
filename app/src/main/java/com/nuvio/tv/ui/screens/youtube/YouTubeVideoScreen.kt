@@ -84,7 +84,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.Button
@@ -194,6 +196,31 @@ fun YouTubeVideoScreen(
     val scope = rememberCoroutineScope()
     val rootFocus = remember { FocusRequester() }
     var controlIndex by remember { mutableIntStateOf(YT_INFO_CONTROL) }
+
+    /** Saves where this video is, for the Home row and the resume position on this device. */
+    fun persistProgress(
+        p: ExoPlayer?,
+        entry: YouTubePlaybackSession.Entry = playingEntry,
+    ) {
+        val player = p ?: return
+        val duration = player.duration.coerceAtLeast(0L)
+        if (duration <= 0L) return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        if (position <= 0L) return
+        viewModel.history.record(entry.videoId, entry.title.ifBlank { title }, position, duration)
+        YouTubeProgress.record(
+            context,
+            YouTubeProgress.ID_PREFIX + entry.videoId,
+            position,
+            duration,
+        )
+    }
+
+    // Going to the TV launcher does not dispose this screen; save before the process can go
+    // away, so the timestamp is still there when the video is opened again later.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        persistProgress(player)
+    }
 
     fun touchControls() {
         showControls = true
@@ -335,7 +362,10 @@ fun YouTubeVideoScreen(
     fun activateControl(index: Int) {
         touchControls()
         when (index) {
-            0 -> onBack()
+            0 -> {
+                persistProgress(player)
+                onBack()
+            }
             1 -> player?.let { if (it.isPlaying) it.pause() else it.play() }
             YT_LAST_VIDEO_CONTROL -> goPrevious()
             YT_SUBSCRIBE_CONTROL -> toggleSubscription()
@@ -379,13 +409,9 @@ fun YouTubeVideoScreen(
 
     LaunchedEffect(resolved) {
         val stream = resolved?.getOrNull() ?: return@LaunchedEffect
+        val watchedEntry = current
         error = null
         val created = MusicPlaybackFactory.create(context, stream, audioOnly = false)
-        created.addListener(object : Player.Listener {
-            override fun onPlayerError(playerError: androidx.media3.common.PlaybackException) {
-                error = playerError.message ?: "Couldn't play this video."
-            }
-        })
         // Pick up where this video was left, on this device first and then from the account.
         val resumeMs = if (!YouTubeSettings.resumePlayback(context)) {
             0L
@@ -401,6 +427,31 @@ fun YouTubeVideoScreen(
                 }
             }
         }
+        var pendingResumeMs = resumeMs
+        created.addListener(object : Player.Listener {
+            override fun onPlayerError(playerError: androidx.media3.common.PlaybackException) {
+                error = playerError.message ?: "Couldn't play this video."
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // A seek made before the timeline exists can be ignored (the same problem as
+                // the Live TV join seek). Apply it once the player is really ready.
+                if (playbackState == Player.STATE_READY && pendingResumeMs > 0L) {
+                    val target = pendingResumeMs
+                    pendingResumeMs = 0L
+                    if (created.currentPosition < target - 1_000L) created.seekTo(target)
+                    positionMs = target
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // Pausing is "stop watching" for most viewers; save at once instead of waiting
+                // for the next five-second tick.
+                if (!isPlaying && created.playbackState == Player.STATE_READY) {
+                    persistProgress(created, watchedEntry)
+                }
+            }
+        })
         created.prepare()
         if (resumeMs > 0L) created.seekTo(resumeMs)
         created.play()
@@ -426,18 +477,7 @@ fun YouTubeVideoScreen(
             }
             if (++saveTick >= 12 && durationMs > 0L) {
                 saveTick = 0
-                viewModel.history.record(
-                    playingEntry.videoId,
-                    playingEntry.title.ifBlank { title },
-                    positionMs,
-                    durationMs,
-                )
-                YouTubeProgress.record(
-                    context,
-                    YouTubeProgress.ID_PREFIX + playingEntry.videoId,
-                    positionMs,
-                    durationMs,
-                )
+                persistProgress(currentPlayer, playingEntry)
             }
             if (currentPlayer.playbackState == Player.STATE_ENDED && !endHandled) {
                 endHandled = true
@@ -451,17 +491,7 @@ fun YouTubeVideoScreen(
     DisposableEffect(currentPlayer) {
         onDispose {
             currentPlayer?.let { p ->
-                val duration = p.duration.coerceAtLeast(0L)
-                val position = p.currentPosition.coerceAtLeast(0L)
-                if (duration > 0L) {
-                    viewModel.history.record(playingEntry.videoId, playingEntry.title.ifBlank { title }, position, duration)
-                    YouTubeProgress.record(
-                        context,
-                        YouTubeProgress.ID_PREFIX + playingEntry.videoId,
-                        position,
-                        duration,
-                    )
-                }
+                persistProgress(p, playingEntry)
                 p.release()
             }
             if (player === currentPlayer) player = null
@@ -484,7 +514,14 @@ fun YouTubeVideoScreen(
     }
 
     BackHandler {
-        if (panel != null) panel = null else onBack()
+        if (panel != null) {
+            panel = null
+        } else {
+            // Save before leaving the route; onDispose also does it, but doing it here means the
+            // Home row and resume position are up to date even if the player is released first.
+            persistProgress(player)
+            onBack()
+        }
     }
 
     Box(

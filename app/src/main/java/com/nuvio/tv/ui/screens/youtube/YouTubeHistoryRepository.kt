@@ -42,21 +42,29 @@ class YouTubeHistoryRepository @Inject constructor(
     init {
         _entries.value = runCatching {
             prefs.getString(KEY, null)?.let { json.decodeFromString<List<YouTubeHistoryEntry>>(it) }
-        }.getOrNull().orEmpty()
+        }.getOrNull().orEmpty().map { it.copy(thumbnail = sixteenByNineThumbnail(it.thumbnail)) }
     }
 
+    /**
+     * YouTube's hqdefault.jpg is 4:3 with black bars; the Home row and the YouTube cards are
+     * 16:9, so use the 16:9 frame everywhere. Old saved entries are normalized too.
+     */
+    private fun sixteenByNineThumbnail(url: String?): String? = url
+        ?.replace("/hqdefault.jpg", "/mqdefault.jpg")
+        ?.replace("/default.jpg", "/mqdefault.jpg")
+        ?.takeIf { it.isNotBlank() }
+
     fun record(videoId: String, title: String, positionMs: Long, durationMs: Long) {
-        if (videoId.isBlank() || durationMs <= 0L || positionMs < 3_000L) return
-        // Near the end counts as finished: don't keep a card that has nothing left to play.
-        if (positionMs >= durationMs - 5_000L) {
-            remove(videoId)
+        if (videoId.isBlank()) return
+        if (!youtubeShouldKeepHistory(positionMs, durationMs)) {
+            if (durationMs > 0L && positionMs >= 3_000L) remove(videoId)
             return
         }
         val entry = YouTubeHistoryEntry(
             videoId = videoId,
             title = title.ifBlank { "YouTube video" },
             channel = "YouTube",
-            thumbnail = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+            thumbnail = "https://i.ytimg.com/vi/$videoId/mqdefault.jpg",
             positionMs = positionMs,
             durationMs = durationMs,
             updatedAtMs = System.currentTimeMillis(),
@@ -75,9 +83,7 @@ class YouTubeHistoryRepository @Inject constructor(
     /** Where to start [videoId] again, or 0 when it was never part-watched. */
     fun resumePositionFor(videoId: String): Long {
         val entry = _entries.value.firstOrNull { it.videoId == videoId } ?: return 0L
-        if (entry.durationMs <= 0L) return 0L
-        val percent = entry.positionMs * 100 / entry.durationMs
-        return if (percent in 3..94) entry.positionMs else 0L
+        return youtubeResumePosition(entry.positionMs, entry.durationMs)
     }
 
     fun clear() {
@@ -94,6 +100,23 @@ class YouTubeHistoryRepository @Inject constructor(
         const val KEY = "history"
         const val MAX_ENTRIES = 20
     }
+}
+
+/**
+ * A part-watched video belongs in the Continue watching row only when there is enough progress
+ * to be useful and not so much that it is effectively finished. The same 3/95 boundaries are
+ * used for resuming, so a card never opens a video that starts from the beginning anyway.
+ */
+internal fun youtubeShouldKeepHistory(positionMs: Long, durationMs: Long): Boolean {
+    if (durationMs <= 0L || positionMs < 3_000L) return false
+    val percent = positionMs * 100L / durationMs
+    return percent in 3L..94L && positionMs < durationMs - 5_000L
+}
+
+internal fun youtubeResumePosition(positionMs: Long, durationMs: Long): Long {
+    if (durationMs <= 0L || positionMs <= 0L) return 0L
+    val percent = positionMs * 100L / durationMs
+    return if (percent in 3L..94L) positionMs else 0L
 }
 
 @HiltViewModel

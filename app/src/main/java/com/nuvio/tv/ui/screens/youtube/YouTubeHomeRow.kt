@@ -75,8 +75,10 @@ fun YouTubeHomeRow(
                                 .background(NuvioTheme.colors.BackgroundCard),
                         ) {
                             AsyncImage(
-                                model = entry.thumbnail?.takeIf { it.isNotBlank() }
-                                    ?: "https://i.ytimg.com/vi/${entry.videoId}/hqdefault.jpg",
+                                model = entry.thumbnail
+                                    ?.replace("/hqdefault.jpg", "/mqdefault.jpg")
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: "https://i.ytimg.com/vi/${entry.videoId}/mqdefault.jpg",
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxWidth().height(169.dp),
@@ -91,11 +93,26 @@ fun YouTubeHomeRow(
                                         .background(NuvioTheme.colors.TextPrimary),
                                 )
                             }
+                            if (entry.positionMs > 0L) {
+                                Text(
+                                    formatHomeTime(entry.positionMs),
+                                    style = NuvioTheme.textStyles.badge,
+                                    color = Color.White,
+                                    modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd)
+                                        .padding(6.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color.Black.copy(alpha = 0.75f))
+                                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                                )
+                            }
                         }
                         Text(
                             entry.title,
                             style = NuvioTheme.textStyles.cardTitle,
                             color = NuvioTheme.colors.TextPrimary,
+                            // Reserve two lines on every card, so one- and two-line titles make
+                            // the same card size instead of a ragged row of thumbnails.
+                            minLines = 2,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),
@@ -104,11 +121,25 @@ fun YouTubeHomeRow(
                             entry.channel,
                             style = NuvioTheme.textStyles.metadata,
                             color = NuvioTheme.colors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 2.dp, start = 2.dp, end = 2.dp, bottom = 6.dp),
                         )
                     }
                 }
             }
         }
+    }
+}
+
+private fun formatHomeTime(ms: Long): String {
+    val totalSeconds = (ms / 1_000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+    } else {
+        "$minutes:${seconds.toString().padStart(2, '0')}"
     }
 }
