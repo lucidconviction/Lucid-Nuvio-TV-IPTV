@@ -1,7 +1,5 @@
-package com.nuvio.tv.livetv.ui
+package com.nuvio.tv.livetv.data
 
-import com.nuvio.tv.livetv.data.ForkHttp
-import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.model.LiveChannel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -61,20 +59,28 @@ object QuickStreamChecker {
     private val cacheLock = Mutex()
 
     /** Probes each distinct URL and reports every result as it lands. Cached results are instant. */
+    private val permits = Semaphore(MAX_CONCURRENCY)
+
     suspend fun checkBatch(
         channels: List<LiveChannel>,
         forceRefresh: Boolean = false,
+        /** A slow or unreachable provider is kept when true (Quick Ch Search); hidden when false. */
+        assumeAliveOnUnknown: Boolean = true,
+        /** Per-attempt timeout; Sports uses a shorter one so its page opens quickly. */
+        timeoutMs: Long = TIMEOUT_MS,
+        retryTimeoutMs: Long = RETRY_TIMEOUT_MS,
         onResult: (url: String, alive: Boolean) -> Unit = { _, _ -> },
     ): Map<String, Boolean> {
         val unique = channels.filter { it.url.isNotBlank() }.distinctBy { it.url }
         if (unique.isEmpty()) return emptyMap()
         val results = HashMap<String, Boolean>()
         val resultsLock = Mutex()
-        val permits = Semaphore(MAX_CONCURRENCY)
         coroutineScope {
             unique.forEach { channel ->
                 launch {
-                    val alive = permits.withPermit { checkChannel(channel, forceRefresh) }
+                    val alive = permits.withPermit {
+                        checkChannel(channel, forceRefresh, assumeAliveOnUnknown, timeoutMs, retryTimeoutMs)
+                    }
                     resultsLock.withLock { results[channel.url] = alive }
                     onResult(channel.url, alive)
                 }
@@ -83,7 +89,13 @@ object QuickStreamChecker {
         return results
     }
 
-    private suspend fun checkChannel(channel: LiveChannel, forceRefresh: Boolean): Boolean {
+    private suspend fun checkChannel(
+        channel: LiveChannel,
+        forceRefresh: Boolean,
+        assumeAliveOnUnknown: Boolean,
+        timeoutMs: Long,
+        retryTimeoutMs: Long,
+    ): Boolean {
         // Addon-backed and other resolved-at-play-time channels have no direct address to probe.
         // Keep them (they are not dead), rather than hiding a channel the player can still open.
         if (!channel.url.startsWith("http", ignoreCase = true)) return true
@@ -91,25 +103,31 @@ object QuickStreamChecker {
         val now = System.currentTimeMillis()
         val cached = cacheLock.withLock { cache[key] }
         if (!forceRefresh && cached != null && now - cached.checkedAt < TTL_MS) return cached.alive
-        val alive = probe(channel)
+        val alive = probe(channel, assumeAliveOnUnknown, timeoutMs, retryTimeoutMs)
         cacheLock.withLock { cache[key] = Entry(alive, now) }
         return alive
     }
 
-    private suspend fun probe(channel: LiveChannel): Boolean {
+    private suspend fun probe(
+        channel: LiveChannel,
+        assumeAliveOnUnknown: Boolean,
+        timeoutMs: Long,
+        retryTimeoutMs: Long,
+    ): Boolean {
         val headers = requestHeaders(channel)
-        val ranged = probeOnce(channel.url, headers, "bytes=0-${SAMPLE_SIZE - 1}", TIMEOUT_MS)
+        val ranged = probeOnce(channel.url, headers, "bytes=0-${SAMPLE_SIZE - 1}", timeoutMs)
         when (ranged?.let(::verdictOf)) {
             Verdict.Alive -> return true
             Verdict.Dead -> return false
             Verdict.Unknown, null -> Unit
         }
-        val plain = probeOnce(channel.url, headers, null, RETRY_TIMEOUT_MS)
+        val plain = probeOnce(channel.url, headers, null, retryTimeoutMs)
         return when (plain?.let(::verdictOf)) {
             Verdict.Alive -> true
             Verdict.Dead -> false
-            // Inconclusive twice: a slow or temporarily unreachable provider may still play.
-            Verdict.Unknown, null -> true
+            // Inconclusive twice: keep it in Quick Ch Search, hide it where the caller needs
+            // only streams that answered (Sports).
+            Verdict.Unknown, null -> assumeAliveOnUnknown
         }
     }
 

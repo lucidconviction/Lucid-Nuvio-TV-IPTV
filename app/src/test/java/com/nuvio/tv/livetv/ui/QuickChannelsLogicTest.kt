@@ -1,5 +1,6 @@
 package com.nuvio.tv.livetv.ui
 
+import com.nuvio.tv.livetv.data.QuickStreamChecker
 import com.nuvio.tv.livetv.model.LiveChannel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

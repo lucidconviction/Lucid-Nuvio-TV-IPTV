@@ -2,6 +2,7 @@
 
 package com.nuvio.tv.livetv.ui
 
+import com.nuvio.tv.livetv.data.QuickStreamChecker
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable

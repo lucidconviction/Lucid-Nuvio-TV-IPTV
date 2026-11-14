@@ -8,6 +8,7 @@ import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.CatalogDescriptor
 import com.nuvio.tv.domain.model.enabledAddons
 import com.nuvio.tv.domain.repository.AddonRepository
+import com.nuvio.tv.livetv.data.QuickStreamChecker
 import com.nuvio.tv.livetv.model.LiveChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.async
@@ -110,7 +111,7 @@ class SportsAddonSource @Inject constructor(
                 )
             }
         }
-        return out.take(MAX_STREAMS)
+        return onlyWorking(out).take(MAX_STREAMS)
     }
 
     // ------------------------------------------------------------------ replays and highlights
@@ -162,7 +163,23 @@ class SportsAddonSource @Inject constructor(
                 )
             }
         }
-        return out
+        return onlyWorking(out)
+    }
+
+    /**
+     * Sports addons often list several links and some are dead. Probe them before the game page
+     * offers them, and drop anything that did not answer. Inconclusive links are dropped here
+     * (unlike Quick Ch Search, where keeping a slow channel is safer).
+     */
+    private suspend fun onlyWorking(matches: List<ChannelMatch>): List<ChannelMatch> {
+        if (matches.isEmpty()) return matches
+        val status = QuickStreamChecker.checkBatch(
+            channels = matches.map { it.channel },
+            assumeAliveOnUnknown = false,
+            timeoutMs = 4_000L,
+            retryTimeoutMs = 6_000L,
+        )
+        return matches.filter { status[it.channel.url] == true }
     }
 
     /** Every dated game on this page is from well before [ev]: older pages won't have it either. */
