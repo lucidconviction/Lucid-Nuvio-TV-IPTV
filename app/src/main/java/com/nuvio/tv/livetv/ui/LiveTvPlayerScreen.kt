@@ -806,7 +806,7 @@ fun LiveTvPlayerScreen(
         // Status in the middle of the screen. "Loading…" only for channels that are actually
         // slow to start (not the moment every channel change takes).
         val slowLoading = rememberDelayedTrue(
-            playback.isBuffering && !playback.isPlaying && playback.error == null,
+            playback.channelKey != null && !playback.hasPicture && playback.error == null,
             250,
         )
         val recStarting by viewModel.playback.recordingStarting.collectAsStateWithLifecycle()

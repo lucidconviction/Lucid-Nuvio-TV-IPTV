@@ -626,7 +626,7 @@ class LucidTvRepository @Inject constructor(
         const val FIRST_CHANNEL_NUMBER = 9000
         const val MAX_AUTO_CHANNELS = 60
         const val MAX_POOL_ITEMS = 120
-        const val POOL_CONCURRENCY = 4
+        const val POOL_CONCURRENCY = 2
         const val CATALOG_TIMEOUT_MS = 20_000L
         const val EPG_PAST_MS = 2 * 60 * 60_000L
         const val EPG_FUTURE_MS = 3 * 24 * 60 * 60_000L

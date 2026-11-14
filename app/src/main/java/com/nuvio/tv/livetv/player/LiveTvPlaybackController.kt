@@ -62,6 +62,8 @@ data class LivePlaybackState(
     val pixelRatio: Float = 1f,
     /** Non-null while an archive (catch-up) program is playing instead of the live stream. */
     val catchupTitle: String? = null,
+    /** A picture from the current stream has been rendered (the real end of "Loading…"). */
+    val hasPicture: Boolean = false,
     /**
      * You paused it (play/pause), as opposed to it just not playing yet: between channels and
      * while reconnecting it isn't playing either, and that must not count as paused.
@@ -494,7 +496,7 @@ class LiveTvPlaybackController @Inject constructor(
             // Wait until the first part is saved (a few seconds). Never left stuck: if the
             // channel couldn't be recorded (the provider refused, the recording stopped), it goes
             // back to live and says so, instead of staying paused.
-            _state.value = _state.value.copy(isBuffering = true)
+            _state.value = _state.value.copy(isBuffering = true, hasPicture = false)
             var waited = 0
             val f = java.io.File(session.playUri.path ?: "")
             // Up to 25 s: a provider that allows one connection can take a while to let go of
@@ -993,7 +995,8 @@ class LiveTvPlaybackController @Inject constructor(
         resumeAfterBackground = null
         // Picked by you (not a switch to the next channel for a game): start the game's list afresh.
         if (!switchingForGame) gameTried.clear()
-        if (currentChannel?.key != channel.key) recentStalls.clear()
+        val changedChannel = currentChannel?.key != channel.key
+        if (changedChannel) recentStalls.clear()
         shiftStartPending = false
         savedRecordingId = null
         _ownTimeline.value = false
@@ -1082,6 +1085,14 @@ class LiveTvPlaybackController @Inject constructor(
             !url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) && startReplayCache(channel, url)
         ) return
         archiveStartPending = catchupTitle != null
+        // Let go of the old channel's decoders and buffers before building the next source:
+        // zapping through several channels no longer needs the old and new pipeline at once.
+        if (changedChannel) {
+            runCatching {
+                p.stop()
+                p.clearMediaItems()
+            }
+        }
         p.setMediaSource(
             buildMediaSource(
                 url,
@@ -2012,6 +2023,10 @@ class LiveTvPlaybackController @Inject constructor(
 
         override fun onRenderedFirstFrame() {
             awaitingFrame = false
+            // The picture is on screen: whatever the buffering flags say next, "Loading…" is over.
+            if (!_state.value.hasPicture) {
+                _state.value = _state.value.copy(hasPicture = true, isBuffering = false)
+            }
             // Playing fine for a while: no longer counts as "the app closed while this was starting".
             currentChannel?.key?.let { key ->
                 scope.launch {

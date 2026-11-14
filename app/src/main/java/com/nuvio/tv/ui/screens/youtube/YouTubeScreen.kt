@@ -102,6 +102,15 @@ fun YouTubeScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showAccount by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    // The search box starts folded away: the header stays one compact row until it's needed.
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(searchOpen) {
+        if (searchOpen) {
+            delay(80)
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
 
     val openVideoFrom: (YtItem, List<YtItem>) -> Unit = { item, list ->
         val id = item.videoId
@@ -116,7 +125,10 @@ fun YouTubeScreen(
     }
 
     LaunchedEffect(Unit) { accountViewModel.refresh() }
-    BackHandler(enabled = !showSettings) { if (!viewModel.back()) onBack() }
+    BackHandler(enabled = !showSettings) {
+        if (searchOpen) searchOpen = false
+        else if (!viewModel.back()) onBack()
+    }
 
     Box(Modifier.fillMaxSize().background(NuvioTheme.colors.Background)) {
         Box(
@@ -166,6 +178,16 @@ fun YouTubeScreen(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
                     ) { Text(if (account.signedIn) "Account" else "Sign in", fontSize = 11.sp) }
                     Button(
+                        onClick = { searchOpen = !searchOpen },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = if (searchOpen) "Close search" else "Search YouTube",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Button(
                         onClick = { showSettings = true },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
                     ) {
@@ -176,7 +198,7 @@ fun YouTubeScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     contentPadding = PaddingValues(vertical = 2.dp),
@@ -189,39 +211,46 @@ fun YouTubeScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        singleLine = true,
-                        textStyle = TextStyle(color = NuvioTheme.colors.TextPrimary, fontSize = 13.sp),
-                        cursorBrush = SolidColor(NuvioTheme.colors.TextPrimary),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { viewModel.search(query) }),
-                        modifier = Modifier.weight(1f).height(36.dp),
-                    ) { inner ->
-                        Row(
-                            Modifier.fillMaxSize()
-                                .glassSurface(RoundedCornerShape(10.dp), strength = 0.55f)
-                                .padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp), tint = NuvioTheme.colors.TextSecondary)
-                            Spacer(Modifier.width(8.dp))
-                            Box(Modifier.weight(1f)) {
-                                if (query.isEmpty()) {
-                                    Text("Search YouTube", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                if (searchOpen) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = TextStyle(color = NuvioTheme.colors.TextPrimary, fontSize = 12.sp),
+                            cursorBrush = SolidColor(NuvioTheme.colors.TextPrimary),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { viewModel.search(query) }),
+                            modifier = Modifier.weight(1f).height(30.dp).focusRequester(searchFocus),
+                        ) { inner ->
+                            Row(
+                                Modifier.fillMaxSize()
+                                    .glassSurface(RoundedCornerShape(8.dp), strength = 0.55f)
+                                    .padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp), tint = NuvioTheme.colors.TextSecondary)
+                                Spacer(Modifier.width(6.dp))
+                                Box(Modifier.weight(1f)) {
+                                    if (query.isEmpty()) {
+                                        Text("Search YouTube", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                                    }
+                                    inner()
                                 }
-                                inner()
                             }
                         }
+                        Button(
+                            onClick = { viewModel.search(query) },
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp),
+                        ) { Text("Search", fontSize = 10.sp) }
+                        Button(
+                            onClick = { searchOpen = false },
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp),
+                        ) { Text("Close", fontSize = 10.sp) }
                     }
-                    Button(
-                        onClick = { viewModel.search(query) },
-                        modifier = Modifier.height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
-                    ) { Text("Search", fontSize = 11.sp) }
                 }
                 if (state.subTitle != null) {
                     Spacer(Modifier.height(8.dp))

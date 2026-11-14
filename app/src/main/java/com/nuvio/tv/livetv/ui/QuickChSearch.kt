@@ -433,7 +433,7 @@ private fun QuickChResultsDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
             ) {
-                itemsIndexed(visible, key = { _, c -> c.key }) { index, channel ->
+                itemsIndexed(visible, key = { index, c -> "${c.key}#$index" }) { index, channel ->
                     LiveFocusRow(
                         modifier = Modifier.fillMaxWidth().then(
                             if (index == 0) Modifier.focusRequester(first) else Modifier
@@ -514,12 +514,12 @@ private fun QuickChManageDialog(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.heightIn(max = 430.dp)) {
             item { MenuHeader("Regions", first = true) }
             item { MenuItem("+ Add region", Modifier.focusRequester(first), onAddRegion) }
-            items(regions, key = { "r:" + it.id }) { region ->
+            itemsIndexed(regions, key = { index, r -> "r:$index:${r.id}" }) { _, region ->
                 MenuItem("${region.title} · edit or delete", onClick = { actionRegion = region })
             }
             item { MenuHeader("Channels") }
             item { MenuItem("+ Add channel", onClick = onAddChannel) }
-            items(channels, key = { "c:" + it.displayName }) { channel ->
+            itemsIndexed(channels, key = { index, c -> "c:$index:${c.displayName}" }) { _, channel ->
                 MenuItem("${channel.displayName} · edit or delete", onClick = { actionChannel = channel })
             }
         }

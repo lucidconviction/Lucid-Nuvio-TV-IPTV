@@ -218,6 +218,37 @@ internal fun GuideGearButton(modifier: Modifier = Modifier, onOpen: () -> Unit, 
     }
 }
 
+/** Takes the preview to full screen. Same size and look as the guide's three small buttons. */
+@Composable
+internal fun GuideFullScreenButton(modifier: Modifier = Modifier, onOpen: () -> Unit, onDown: () -> Unit) {
+    var focused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val cell = liveCellColors(focused, Color.White.copy(alpha = 0.10f))
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        modifier = modifier
+            .width(114.dp)
+            .height(34.dp)
+            .clip(shape)
+            .background(cell.background)
+            .border(if (focused) 2.dp else 1.dp, if (focused) cell.border else GuideGlassEdge, shape)
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { e ->
+                if (e.key == Key.DirectionDown) {
+                    if (e.type == KeyEventType.KeyDown) onDown()
+                    true
+                } else false
+            }
+            .combinedClickable(
+                interactionSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = onOpen
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        LiveText("Full Screen", color = focusedTextColor(focused), size = 12.sp, maxLines = 1)
+    }
+}
+
 /** The multi-view grid, beside the guide's ⚙. */
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)

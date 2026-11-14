@@ -775,9 +775,6 @@ private fun LiveTvGuideScreenBody(
         viewModel.posterFor(p.title, p, headerChannel)?.let { value = it }
     }
 
-    // Moving through the guide takes the preview bar back to the highlighted channel.
-    LaunchedEffect(row, column) { quickPlayKey = null }
-
     fun ensureRowVisible(target: Int) {
         scope.launch {
             val info = listState.layoutInfo
@@ -834,6 +831,7 @@ private fun LiveTvGuideScreenBody(
 
     fun moveRow(delta: Int) {
         if (channels.isEmpty()) return
+        quickPlayKey = null
         row = when {
             // One step past the end wraps around; paging stops at the ends.
             delta == 1 && row == channels.lastIndex -> 0
@@ -847,6 +845,7 @@ private fun LiveTvGuideScreenBody(
     // (the guide keeps following the clock); "PROGRAM" means browsing ahead or back in time.
     fun moveRight() {
         if (focusedChannel == null) return
+        quickPlayKey = null
         if (column == GuideColumn.CHANNEL) {
             column = GuideColumn.PROGRAM
             cursorMs = now
@@ -877,6 +876,7 @@ private fun LiveTvGuideScreenBody(
      * catch-up channel goes back into earlier shows; once you're there, each Left steps back.
      */
     fun moveLeft(held: Boolean = false) {
+        quickPlayKey = null
         val ch = focusedChannel ?: return
         val from = if (column == GuideColumn.CHANNEL) now else cursorMs
         val block = blockAt(focusedPrograms, from)
@@ -1041,13 +1041,14 @@ private fun LiveTvGuideScreenBody(
                 },
                 onRecordings = onOpenRecordings,
                 onMultiView = onOpenMultiView,
+                onFullScreen = { goFullscreen() },
                 playlistName = if (settings.showPlaylistInInfo) headerChannel?.sourceId?.let { playlistNames[it] } else null,
                 settings = settings,
                 now = now,
                 showPreview = settings.showPreview,
                 player = viewModel.playback.player,
                 playingKey = playback.channelKey,
-                playbackBuffering = playback.isBuffering,
+                playbackBuffering = playback.channelKey != null && !playback.hasPicture,
                 playbackError = playback.error,
                 catchupTitle = playback.catchupTitle,
                 status = status.message.takeIf { settings.showImportProgress && status.loading }
@@ -1732,7 +1733,7 @@ private fun LiveTvGuideScreenBody(
         // The preview's own messages, drawn over the video.
         if (!fullscreen && pb != null && rb != null && pb.width > 1f) {
             val showLoading = rememberDelayedTrue(
-                playback.isBuffering && !playback.isPlaying && playback.error == null,
+                playback.channelKey != null && !playback.hasPicture && playback.error == null,
                 250,
             )
             val recStarting by viewModel.playback.recordingStarting.collectAsStateWithLifecycle()
@@ -2385,6 +2386,8 @@ private fun GuideHeader(
     onRecordings: () -> Unit = {},
     /** Opens the six-channel Multi-view grid. */
     onMultiView: () -> Unit = {},
+    /** Takes the preview (or the last channel) to full screen. */
+    onFullScreen: () -> Unit = {},
 ) {
     if (!settings.showProgramDetails && !showPreview) {
         Row(
@@ -2550,14 +2553,38 @@ private fun GuideHeader(
         }
         // Multi-view with Quick channels directly under it, Recordings (●) and the ⚙ for the
         // guide's display settings, in the corner.
-        Row {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                GuideMultiViewButton(onOpen = onMultiView, onDown = onGearDown)
+        // The three small buttons, with Full Screen directly under them at the bottom of the
+        // preview, the same width as the row above.
+        val fullScreenFocus = remember { FocusRequester() }
+        Column(
+            modifier = Modifier.fillMaxHeight(),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.End,
+        ) {
+            Row {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    GuideMultiViewButton(
+                        onOpen = onMultiView,
+                        onDown = { runCatching { fullScreenFocus.requestFocus() } },
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                GuideRecordingsButton(
+                    onOpen = onRecordings,
+                    onDown = { runCatching { fullScreenFocus.requestFocus() } },
+                )
+                Spacer(Modifier.width(6.dp))
+                GuideGearButton(
+                    Modifier.focusRequester(gearFocus),
+                    onOpen = onGear,
+                    onDown = { runCatching { fullScreenFocus.requestFocus() } },
+                )
             }
-            Spacer(Modifier.width(6.dp))
-            GuideRecordingsButton(onOpen = onRecordings, onDown = onGearDown)
-            Spacer(Modifier.width(6.dp))
-            GuideGearButton(Modifier.focusRequester(gearFocus), onOpen = onGear, onDown = onGearDown)
+            GuideFullScreenButton(
+                modifier = Modifier.focusRequester(fullScreenFocus),
+                onOpen = onFullScreen,
+                onDown = onGearDown,
+            )
         }
         // Preview only (info panel off): keep it at the right, as usual.
         if (showPreview) {
