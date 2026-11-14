@@ -2,7 +2,7 @@
 
 <img src="assets/brand/app_logo_wordmark.png" alt="Lucid Nuvio TV IPTV" width="360" />
 
-**Nuvio's library, Live TV, Sports, YouTube and Music in one leanback interface built for a remote.**
+**Nuvio's library, Live TV, Sports and YouTube in one leanback interface built for a remote.**
 
 [![Latest release](https://img.shields.io/github/v/release/lucidconviction/Lucid-Nuvio-TV-IPTV?style=for-the-badge)](https://github.com/lucidconviction/Lucid-Nuvio-TV-IPTV/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Android%20TV%207.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/lucidconviction/Lucid-Nuvio-TV-IPTV/releases/latest)
@@ -23,8 +23,8 @@
 | <img src="screenshots/home.png" width="420" alt="Home with featured movie and catalog rows"> | <img src="screenshots/live-tv.png" width="420" alt="Live TV guide with channel groups and EPG"> |
 | **Sports** | **Multi-view** |
 | <img src="screenshots/sports.png" width="420" alt="Live scores, schedules and league tables"> | <img src="screenshots/multi-view.png" width="420" alt="Four channels in one multi-view layout"> |
-| **YouTube player** | **Music** |
-| <img src="screenshots/youtube-player.png" width="420" alt="YouTube player with Info, More videos and Comments"> | <img src="screenshots/music.png" width="420" alt="Music discovery and player"> |
+| **YouTube player** | **Settings** |
+| <img src="screenshots/youtube-player.png" width="420" alt="YouTube player with Info, More videos and Comments"> | <img src="screenshots/settings.png" width="420" alt="Settings for profiles, appearance, playback, integrations, Live TV, Sports and VPN"> |
 
 </div>
 
@@ -88,13 +88,6 @@
 - Remote seeking: press Down to focus the progress bar, then Left/Right to jump 10 seconds.
 - Continue Watching on Home with thumbnails and progress.
 
-### 🎵 Music
-- Deezer-powered discovery: trending tracks, artists, albums, playlists and genres.
-- Official music videos resolved through YouTube and played in the built-in player.
-- Synced lyrics.
-- A personal music library, playlists and downloads for offline listening.
-- Music player with artwork, queue and remote-friendly controls.
-
 ### 👥 Watch party
 - Create or join a party with a short code and invite link.
 - Up to three seats with host controls.
@@ -130,10 +123,6 @@
 - Subtitles, audio tracks, playback speed, aspect ratio adjustment and stream info.
 - Picture-in-picture, external player support, sleep timer, backup streams and reload.
 - The screen stays awake while the app is open.
-
-<div align="center">
-<img src="screenshots/settings.png" width="720" alt="Settings for profiles, watch party, appearance, layout, playback, integrations, Live TV, Sports and VPN">
-</div>
 
 ---
 
