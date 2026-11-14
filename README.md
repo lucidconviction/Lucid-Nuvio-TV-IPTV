@@ -131,6 +131,10 @@
 - Picture-in-picture, external player support, sleep timer, backup streams and reload.
 - The screen stays awake while the app is open.
 
+<div align="center">
+<img src="screenshots/settings.png" width="720" alt="Settings for profiles, watch party, appearance, layout, playback, integrations, Live TV, Sports and VPN">
+</div>
+
 ---
 
 ## 📦 Install
