@@ -36,4 +36,4 @@ internal fun Modifier.playerControlsBrightness(factor: Float): Modifier {
     }
 }
 
-private val LAYER_OVERFLOW = 48.dp
+private val LAYER_OVERFLOW = 160.dp

@@ -765,6 +765,17 @@ open class YouTubeViewModel (private val context: Context, autoSelect: Boolean =
         }
     }
 
+    /** The storyboard sprite sheets behind the player's seek-preview thumbnails. */
+    suspend fun storyboard(videoId: String): Result<YtStoryboard> = withContext(Dispatchers.IO) {
+        val id = videoId.trim()
+        if (id.isEmpty()) return@withContext Result.failure(IllegalStateException("No video id"))
+        runCatching {
+            val found = service.mediaItemService.getStoryboard(id)
+                ?: error("No storyboard for this video.")
+            YtStoryboard(found)
+        }
+    }
+
     /** What plays after the video that's on now: the rest of the list it was picked from, then YouTube's pick. */
     private var playQueue: List<YtItem> = emptyList()
     private val played = HashSet<String>()

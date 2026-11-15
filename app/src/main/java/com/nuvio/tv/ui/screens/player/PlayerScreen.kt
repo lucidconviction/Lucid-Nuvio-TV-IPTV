@@ -7,6 +7,7 @@ package com.nuvio.tv.ui.screens.player
 
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.layout.boundsInWindow
+import android.graphics.Bitmap
 import android.graphics.RectF
 import com.nuvio.tv.ui.screens.detail.formatPlaybackTime
 import com.nuvio.tv.ui.theme.NuvioMotion
@@ -32,6 +33,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -98,9 +100,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -128,6 +132,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil3.compose.AsyncImage
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.Tracks
@@ -1812,7 +1817,7 @@ fun PlayerScreen(
                 .reportSubtitleClearance(subtitleClearanceGapPx) { seekClearancePx = it }
                 .then(playerControlsDim)
         ) {
-            SeekOverlayHost(viewModel = viewModel, chapters = uiState.chapters)
+            SeekOverlayHost(viewModel = viewModel, chapters = uiState.chapters, backdrop = uiState.backdrop)
         }
 
         // Chapters side panel (slides in from right, over a scrim)
@@ -2975,7 +2980,9 @@ private fun PlayerControlsOverlay(
                             downFocusRequester = playPauseFocusRequester,
                             onUpKey = onHideControls,
                             onFocused = onResetHideTimer,
-                            onClick = onPlayPause
+                            onClick = onPlayPause,
+                            previewSeekPosition = uiState.pendingPreviewSeekPosition,
+                            backdrop = uiState.backdrop
                         )
                     }
                 }
@@ -3233,29 +3240,76 @@ private fun PlayerControlsProgressBarHost(
     downFocusRequester: FocusRequester? = null,
     onUpKey: (() -> Unit)? = null,
     onFocused: (() -> Unit)? = null,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    /** Non-null while the D-pad is previewing a seek target. */
+    previewSeekPosition: Long? = null,
+    /** Artwork shown until the stream frame is ready (or when it can't be read). */
+    backdrop: String? = null,
 ) {
     val playbackTimeline by viewModel.playbackTimeline.collectAsState()
+    val streamUrl = viewModel.getCurrentStreamUrl()
+    val headers = remember(streamUrl) { viewModel.getCurrentHeaders() }
+    // Keep the preview up briefly after the seek commits, so the frame can be read.
+    var previewVisible by remember { mutableStateOf(false) }
+    var barFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(previewSeekPosition) {
+        if (previewSeekPosition != null) {
+            previewVisible = true
+        } else {
+            delay(1_100)
+            previewVisible = false
+        }
+    }
+    val showPreview = (previewVisible || barFocused) &&
+        playbackTimeline.duration > 0L &&
+        !playbackTimeline.isLive &&
+        streamUrl.isNotBlank()
 
-    ChapterTitle(chapters = chapters, positionMs = playbackTimeline.currentPosition)
-    ProgressBar(
-        chapters = chapters,
-        currentPosition = playbackTimeline.currentPosition,
-        duration = playbackTimeline.duration,
-        onSeekPreview = { delta ->
-            viewModel.onEvent(PlayerEvent.OnPreviewSeekBy(delta))
-        },
-        onSeekCommit = {
-            viewModel.onEvent(PlayerEvent.OnCommitPreviewSeek)
-        },
-        focusRequester = focusRequester,
-        upFocusRequester = upFocusRequester,
-        downFocusRequester = downFocusRequester,
-        onUpKey = onUpKey,
-        onFocused = onFocused,
-        onClick = onClick,
-        bufferedPosition = playbackTimeline.bufferedPosition
-    )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val previewWidth = 208.dp
+        val fraction = if (playbackTimeline.duration > 0L) {
+            (playbackTimeline.currentPosition.toFloat() / playbackTimeline.duration.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        val previewX = ((maxWidth - previewWidth) * fraction)
+            .coerceIn(0.dp, (maxWidth - previewWidth).coerceAtLeast(0.dp))
+        Column {
+            ChapterTitle(chapters = chapters, positionMs = playbackTimeline.currentPosition)
+            ProgressBar(
+                chapters = chapters,
+                currentPosition = playbackTimeline.currentPosition,
+                duration = playbackTimeline.duration,
+                onSeekPreview = { delta ->
+                    viewModel.onEvent(PlayerEvent.OnPreviewSeekBy(delta))
+                },
+                onSeekCommit = {
+                    viewModel.onEvent(PlayerEvent.OnCommitPreviewSeek)
+                },
+                focusRequester = focusRequester,
+                upFocusRequester = upFocusRequester,
+                downFocusRequester = downFocusRequester,
+                onUpKey = onUpKey,
+                onFocused = onFocused,
+                onFocusChanged = { barFocused = it },
+                onClick = onClick,
+                bufferedPosition = playbackTimeline.bufferedPosition
+            )
+        }
+        if (showPreview) {
+            SeekPreviewThumbnail(
+                url = streamUrl,
+                headers = headers,
+                positionMs = playbackTimeline.currentPosition,
+                fallbackUrl = backdrop,
+                extractFrame = previewVisible,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = previewX, y = (-132).dp)
+                    .width(previewWidth),
+            )
+        }
+    }
 }
 
 @Composable
@@ -3406,6 +3460,8 @@ private fun ProgressBar(
     downFocusRequester: FocusRequester? = null,
     onUpKey: (() -> Unit)? = null,
     onFocused: (() -> Unit)? = null,
+    /** Focus changes are also reported here, for previews that follow the bar itself. */
+    onFocusChanged: ((Boolean) -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     /** Position (ms) up to which content is buffered. Pass 0 to skip the overlay. */
     bufferedPosition: Long = 0L,
@@ -3454,6 +3510,7 @@ private fun ProgressBar(
             )
             .onFocusChanged {
                 isFocused = it.isFocused
+                onFocusChanged?.invoke(it.isFocused)
                 if (it.isFocused) onFocused?.invoke()
             }
             .focusable()
@@ -3593,11 +3650,70 @@ private fun ChapterTitle(chapters: List<PlayerChapter>, positionMs: Long) {
 }
 
 @Composable
+private fun SeekPreviewThumbnail(
+    url: String,
+    headers: Map<String, String>,
+    positionMs: Long,
+    fallbackUrl: String? = null,
+    /** Off while the bar is only focused: the artwork stays, frames are only decoded for a seek. */
+    extractFrame: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
+    // One frame per 10s bucket, matching the loader's cache key. While a new bucket is decoded
+    // the previous frame stays on screen, so scrubbing never flashes a blank.
+    LaunchedEffect(url, positionMs.coerceAtLeast(0L) / 10_000L, extractFrame) {
+        if (url.isBlank() || !extractFrame) return@LaunchedEffect
+        delay(140)
+        SeekPreviewThumbnails.frame(context, url, headers, positionMs)?.let { bitmap = it }
+    }
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.94f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(8.dp)),
+    ) {
+        bitmap?.let { frame ->
+            Image(
+                bitmap = frame.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } ?: fallbackUrl?.takeIf { it.isNotBlank() }?.let { art ->
+            AsyncImage(
+                model = art,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Text(
+            formatTime(positionMs),
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 5.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = 0.72f))
+                .padding(horizontal = 7.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
 private fun SeekOverlay(
     currentPosition: Long,
     duration: Long,
     bufferedPosition: Long = 0L,
-    chapters: List<PlayerChapter> = emptyList()
+    chapters: List<PlayerChapter> = emptyList(),
+    streamUrl: String = "",
+    headers: Map<String, String> = emptyMap(),
+    showPreview: Boolean = false,
+    backdrop: String? = null,
 ) {
     Column(
         modifier = Modifier
@@ -3606,14 +3722,36 @@ private fun SeekOverlay(
     ) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
             ChapterTitle(chapters = chapters, positionMs = currentPosition)
-            ProgressBar(
-                currentPosition = currentPosition,
-                duration = duration,
-                onSeekPreview = {},
-                onSeekCommit = {},
-                bufferedPosition = bufferedPosition,
-                chapters = chapters
-            )
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val previewWidth = 208.dp
+                val fraction = if (duration > 0L) {
+                    (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                val previewX = ((maxWidth - previewWidth) * fraction)
+                    .coerceIn(0.dp, (maxWidth - previewWidth).coerceAtLeast(0.dp))
+                ProgressBar(
+                    currentPosition = currentPosition,
+                    duration = duration,
+                    onSeekPreview = {},
+                    onSeekCommit = {},
+                    bufferedPosition = bufferedPosition,
+                    chapters = chapters
+                )
+                if (showPreview && streamUrl.isNotBlank()) {
+                    SeekPreviewThumbnail(
+                        url = streamUrl,
+                        headers = headers,
+                        positionMs = currentPosition,
+                        fallbackUrl = backdrop,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .offset(x = previewX, y = (-132).dp)
+                            .width(previewWidth),
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
 
@@ -3633,14 +3771,24 @@ private fun SeekOverlay(
 }
 
 @Composable
-private fun SeekOverlayHost(viewModel: PlayerViewModel, chapters: List<PlayerChapter>) {
+private fun SeekOverlayHost(
+    viewModel: PlayerViewModel,
+    chapters: List<PlayerChapter>,
+    backdrop: String? = null,
+) {
     val playbackTimeline by viewModel.playbackTimeline.collectAsState()
+    val streamUrl = viewModel.getCurrentStreamUrl()
+    val headers = remember(streamUrl) { viewModel.getCurrentHeaders() }
 
     SeekOverlay(
         currentPosition = playbackTimeline.currentPosition,
         duration = playbackTimeline.duration,
         bufferedPosition = playbackTimeline.bufferedPosition,
-        chapters = chapters
+        chapters = chapters,
+        streamUrl = streamUrl,
+        headers = headers,
+        showPreview = playbackTimeline.duration > 0L && !playbackTimeline.isLive,
+        backdrop = backdrop,
     )
 }
 

@@ -4,6 +4,7 @@ import com.nuvio.tv.youtube.YouTubeEngine
 import com.nuvio.tv.youtube.YouTubePlaybackSession
 import com.nuvio.tv.youtube.YtCommentPage
 import com.nuvio.tv.youtube.YtPlaylist
+import com.nuvio.tv.youtube.YtStoryboard
 import com.nuvio.tv.youtube.YtVideoInfo
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,6 +34,9 @@ class YouTubeMusicService @Inject constructor(
 
     suspend fun videoInfo(videoId: String): Result<YtVideoInfo> =
         engine.videoInfo(videoId)
+
+    suspend fun storyboard(videoId: String): Result<YtStoryboard> =
+        engine.storyboard(videoId)
 
     suspend fun comments(videoId: String): Result<YtCommentPage> =
         engine.comments(videoId)

@@ -41,6 +41,9 @@ class YouTubeEngine @Inject constructor(
 
     suspend fun videoInfo(videoId: String): Result<YtVideoInfo> = viewModel.videoInfo(videoId)
 
+    /** Seek-preview sprite sheets for the player's progress bar. */
+    suspend fun storyboard(videoId: String): Result<YtStoryboard> = viewModel.storyboard(videoId)
+
     suspend fun comments(videoId: String): Result<YtCommentPage> = viewModel.videoComments(videoId)
 
     suspend fun replies(key: String): Result<YtCommentPage> = viewModel.commentReplies(key)

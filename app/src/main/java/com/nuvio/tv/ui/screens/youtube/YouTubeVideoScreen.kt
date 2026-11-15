@@ -2,8 +2,10 @@
 
 package com.nuvio.tv.ui.screens.youtube
 
+import android.graphics.Bitmap
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +13,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -70,7 +74,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -81,6 +87,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -94,6 +102,11 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.size.Size
+import coil3.toBitmap
 import com.nuvio.tv.livetv.ui.KeepScreenAwake
 import com.nuvio.tv.livetv.ui.LivePlayerSurface
 import com.nuvio.tv.music.MusicPlaybackFactory
@@ -104,6 +117,7 @@ import com.nuvio.tv.ui.util.LocalPictureInPicture
 import com.nuvio.tv.youtube.YtComment
 import com.nuvio.tv.youtube.YtCommentPage
 import com.nuvio.tv.youtube.YtPlaylist
+import com.nuvio.tv.youtube.YtStoryboard
 import com.nuvio.tv.youtube.YtVideoInfo
 import com.nuvio.tv.youtube.YouTubePlaybackSession
 import com.nuvio.tv.youtube.YouTubeProgress
@@ -192,6 +206,10 @@ fun YouTubeVideoScreen(
     var endHandled by remember { mutableStateOf(false) }
     var nextBusy by remember { mutableStateOf(false) }
     var extraHistory by remember { mutableStateOf<List<YouTubePlaybackSession.Entry>>(emptyList()) }
+    var storyboard by remember(current.videoId) { mutableStateOf<YtStoryboard?>(null) }
+    LaunchedEffect(current.videoId) {
+        storyboard = viewModel.youtube.storyboard(current.videoId).getOrNull()
+    }
     var notice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val rootFocus = remember { FocusRequester() }
@@ -748,37 +766,56 @@ fun YouTubeVideoScreen(
                 if (durationMs > 0L) {
                     val fraction = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
                     val seekFocused = controlIndex == YT_SEEK_CONTROL
-                    Box(
-                        Modifier.fillMaxWidth()
-                            .height(if (seekFocused) 10.dp else 6.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(Color.White.copy(alpha = if (seekFocused) 0.35f else 0.25f))
-                            .then(
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val previewWidth = 190.dp
+                        val previewX = ((maxWidth - previewWidth) * fraction)
+                            .coerceIn(0.dp, (maxWidth - previewWidth).coerceAtLeast(0.dp))
+                        Column {
+                            Box(
+                                Modifier.fillMaxWidth()
+                                    .height(if (seekFocused) 10.dp else 6.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Color.White.copy(alpha = if (seekFocused) 0.35f else 0.25f))
+                                    .then(
+                                        if (seekFocused) {
+                                            Modifier.border(2.dp, NuvioTheme.colors.TextPrimary, RoundedCornerShape(50))
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            ) {
+                                Box(
+                                    Modifier.fillMaxWidth(fraction).fillMaxHeight()
+                                        .background(NuvioTheme.colors.TextPrimary, RoundedCornerShape(50)),
+                                )
+                            }
+                            Spacer(Modifier.height(if (seekFocused) 8.dp else 4.dp))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                                    style = NuvioTheme.textStyles.metadata,
+                                    color = if (seekFocused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
+                                )
+                                Spacer(Modifier.weight(1f))
                                 if (seekFocused) {
-                                    Modifier.border(2.dp, NuvioTheme.colors.TextPrimary, RoundedCornerShape(50))
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    ) {
-                        Box(
-                            Modifier.fillMaxWidth(fraction).fillMaxHeight()
-                                .background(NuvioTheme.colors.TextPrimary, RoundedCornerShape(50)),
-                        )
-                    }
-                    Spacer(Modifier.height(if (seekFocused) 8.dp else 4.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${formatTime(positionMs)} / ${formatTime(durationMs)}",
-                            style = NuvioTheme.textStyles.metadata,
-                            color = if (seekFocused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
-                        )
-                        Spacer(Modifier.weight(1f))
+                                    Text(
+                                        "◀  10s      ▶  10s",
+                                        style = NuvioTheme.textStyles.metadata,
+                                        color = NuvioTheme.colors.TextPrimary,
+                                    )
+                                }
+                            }
+                        }
+                        val sheet = storyboard
                         if (seekFocused) {
-                            Text(
-                                "◀  10s      ▶  10s",
-                                style = NuvioTheme.textStyles.metadata,
-                                color = NuvioTheme.colors.TextPrimary,
+                            YtSeekPreview(
+                                storyboard = sheet,
+                                positionMs = positionMs,
+                                fallbackUrl = current.poster,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .offset(x = previewX, y = (-124).dp)
+                                    .width(previewWidth),
                             )
                         }
                     }
@@ -803,6 +840,72 @@ fun YouTubeVideoScreen(
                 onPick = { switchTo(it) },
             )
         }
+    }
+}
+
+@Composable
+private fun YtSeekPreview(
+    storyboard: YtStoryboard?,
+    positionMs: Long,
+    fallbackUrl: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    val frame = storyboard?.frameAt(positionMs)
+    val context = LocalContext.current
+    // One sprite sheet serves a whole run of positions, so Coil (and its memory cache) is asked
+    // for the same URL while the user scrubs inside it.
+    val sheet by produceState<Bitmap?>(initialValue = null, frame?.url) {
+        val url = frame?.url ?: return@produceState
+        value = runCatching {
+            val request = ImageRequest.Builder(context)
+                .data(url)
+                .size(Size.ORIGINAL)
+                .build()
+            val result = context.imageLoader.execute(request)
+            (result as? SuccessResult)?.image?.toBitmap()
+        }.getOrNull()
+    }
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.92f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(8.dp)),
+    ) {
+        val image = sheet
+        if (image != null && frame != null) {
+            Canvas(Modifier.fillMaxSize()) {
+                val bitmap = image.asImageBitmap()
+                val cellWidth = (bitmap.width.toFloat() / frame.columns).toInt().coerceAtLeast(1)
+                val cellHeight = (bitmap.height.toFloat() / frame.rows).toInt().coerceAtLeast(1)
+                drawImage(
+                    image = bitmap,
+                    srcOffset = IntOffset(frame.column * cellWidth, frame.row * cellHeight),
+                    srcSize = IntSize(cellWidth, cellHeight),
+                    dstOffset = IntOffset.Zero,
+                    dstSize = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1)),
+                    filterQuality = FilterQuality.Medium,
+                )
+            }
+        } else if (!fallbackUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = fallbackUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Text(
+            formatTime(frame?.startMs ?: positionMs),
+            style = NuvioTheme.textStyles.metadata,
+            color = NuvioTheme.colors.TextPrimary,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 5.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = 0.72f))
+                .padding(horizontal = 7.dp, vertical = 2.dp),
+        )
     }
 }
 
