@@ -75,7 +75,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.translate
@@ -389,6 +391,11 @@ private fun LiveTvGuideScreenBody(
     // The channel picked in Quick Ch Search: its title stays in the preview bar until you move
     // through the guide again.
     var quickPlayKey by remember { mutableStateOf<String?>(null) }
+    // Quick Ch Search results: owned here so they can slide in over the preview bar, which sits
+    // above the search strip. A null selection means the overlay is closed.
+    var quickSelected by remember { mutableStateOf<QuickChannel?>(null) }
+    val quickSearchChannels by viewModel.displayChannels.collectAsStateWithLifecycle()
+    val quickSearchState = rememberQuickChannelMatchState(quickSelected, quickSearchChannels)
     val guideGearFocus = remember { FocusRequester() }
     val quickChannelsFocus = remember { FocusRequester() }
     val groupSearchFocus = remember { FocusRequester() }
@@ -593,6 +600,8 @@ private fun LiveTvGuideScreenBody(
         runCatching { gridFocus.requestFocus() }
     }
     LaunchedEffect(fullscreen) { LiveTvFullscreen.active.value = fullscreen }
+    // Full screen takes over the whole picture: the search strip and its results are guide-only.
+    LaunchedEffect(fullscreen) { if (fullscreen) quickSelected = null }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             LiveTvFullscreen.active.value = false
@@ -1042,6 +1051,20 @@ private fun LiveTvGuideScreenBody(
                 onRecordings = onOpenRecordings,
                 onMultiView = onOpenMultiView,
                 onFullScreen = { goFullscreen() },
+                // Quick Ch Search results slide in over the preview bar; with both the info panel
+                // and the preview off there is no bar, so the search strip keeps its dialog.
+                quickSearch = quickSelected.takeIf { settings.showProgramDetails || settings.showPreview },
+                quickSearchState = quickSearchState,
+                onQuickPlay = { ch ->
+                    quickSelected = null
+                    quickPlayKey = ch.key
+                    playChannel(ch, fromQuickSearch = true)
+                    scope.launch { delay(140); runCatching { quickSearchFocus.requestFocus() } }
+                },
+                onQuickDismiss = {
+                    quickSelected = null
+                    scope.launch { delay(100); runCatching { quickSearchFocus.requestFocus() } }
+                },
                 playlistName = if (settings.showPlaylistInInfo) headerChannel?.sourceId?.let { playlistNames[it] } else null,
                 settings = settings,
                 now = now,
@@ -1210,6 +1233,10 @@ private fun LiveTvGuideScreenBody(
                             quickPlayKey = ch.key
                             playChannel(ch, fromQuickSearch = true)
                         },
+                        selectedQuick = quickSelected,
+                        onSelectQuick = { quickSelected = it },
+                        validation = quickSearchState,
+                        showResultsDialog = !settings.showProgramDetails && !settings.showPreview,
                     )
                     // ---------------------------------------------------------------- time ruler
                     val channelColWidth = channelColumnWidth(settings)
@@ -2388,6 +2415,11 @@ private fun GuideHeader(
     onMultiView: () -> Unit = {},
     /** Takes the preview (or the last channel) to full screen. */
     onFullScreen: () -> Unit = {},
+    /** The quick channel whose matches are shown over the bar (null: closed). */
+    quickSearch: QuickChannel? = null,
+    quickSearchState: QuickChannelMatchState = QuickChannelMatchState(),
+    onQuickPlay: (LiveChannel) -> Unit = {},
+    onQuickDismiss: () -> Unit = {},
 ) {
     if (!settings.showProgramDetails && !showPreview) {
         Row(
@@ -2418,16 +2450,35 @@ private fun GuideHeader(
     }
     // Standard or small ("Small info & preview"): the small one leaves room for more channels.
     val small = settings.smallHeader
-    Row(
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    // Where the corner buttons begin: the quick-search overlay runs from the bar's left edge up
+    // to here, leaving Multi-view, Recordings, the gear and Full Screen uncovered.
+    var quickOverlayWidth by remember { mutableStateOf(0.dp) }
+    // AnimatedVisibility keeps drawing while it slides out, so hold the last results until the
+    // next search replaces them.
+    var lastQuick by remember { mutableStateOf<QuickChannel?>(null) }
+    var lastQuickState by remember { mutableStateOf(QuickChannelMatchState()) }
+    LaunchedEffect(quickSearch, quickSearchState) {
+        if (quickSearch != null) {
+            lastQuick = quickSearch
+            lastQuickState = quickSearchState
+        }
+    }
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(if (small) 116.dp else 176.dp)
             .padding(start = 56.dp, end = 24.dp, top = if (small) 12.dp else 20.dp, bottom = if (small) 4.dp else 6.dp)
-            .onGloballyPositioned { onGlassBounds(it.boundsInRoot()) }
-            .glass(guideInfoGlass(settings.guideInfoBackground), RoundedCornerShape(if (small) 16.dp else 20.dp))
-            .padding(horizontal = 18.dp, vertical = if (small) 8.dp else 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(if (small) 16.dp else 20.dp)
+            .clipToBounds()
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { onGlassBounds(it.boundsInRoot()) }
+                .glass(guideInfoGlass(settings.guideInfoBackground), RoundedCornerShape(if (small) 16.dp else 20.dp))
+                .padding(horizontal = 18.dp, vertical = if (small) 8.dp else 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (small) 16.dp else 20.dp)
+        ) {
         // Posters off: just the channel logo, in a logo-shaped space (not a poster box).
         if (settings.showProgramDetails && channel != null && !settings.showPosters) {
             Box(
@@ -2557,7 +2608,11 @@ private fun GuideHeader(
         // preview, the same width as the row above.
         val fullScreenFocus = remember { FocusRequester() }
         Column(
-            modifier = Modifier.fillMaxHeight(),
+            modifier = Modifier
+                .fillMaxHeight()
+                .onGloballyPositioned {
+                    quickOverlayWidth = with(density) { it.positionInParent().x.toDp() }
+                },
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.End,
         ) {
@@ -2621,6 +2676,46 @@ private fun GuideHeader(
                 }
             }
         }
+    }
+    // Quick Ch Search results: a full-height panel over the info side of the bar, sliding in
+    // from its left edge and stopping just before the corner buttons.
+    val quickOverlayShape = RoundedCornerShape(
+        topStart = if (small) 16.dp else 20.dp,
+        bottomStart = if (small) 16.dp else 20.dp,
+        topEnd = 12.dp,
+        bottomEnd = 12.dp,
+    )
+    AnimatedVisibility(
+        visible = quickSearch != null,
+        enter = slideInHorizontally(
+            animationSpec = androidx.compose.animation.core.tween(260),
+            initialOffsetX = { -it }
+        ) + fadeIn(animationSpec = androidx.compose.animation.core.tween(180)),
+        exit = slideOutHorizontally(
+            animationSpec = androidx.compose.animation.core.tween(200),
+            targetOffsetX = { -it }
+        ) + fadeOut(animationSpec = androidx.compose.animation.core.tween(160)),
+        modifier = Modifier
+            .align(Alignment.CenterStart)
+            .fillMaxHeight()
+            .width(quickOverlayWidth)
+            // Opaque base so the poster/info under it can't show through: the panel is the
+            // preview bar's own colour, then the same glass edge on top.
+            .clip(quickOverlayShape)
+            .background(guideInfoBase())
+            .glass(guideInfoGlass(settings.guideInfoBackground), quickOverlayShape)
+    ) {
+        val shownQuick = quickSearch ?: lastQuick
+        if (shownQuick != null) {
+            QuickChResultsOverlay(
+                quick = shownQuick,
+                state = if (quickSearch != null) quickSearchState else lastQuickState,
+                compact = small,
+                onPlay = onQuickPlay,
+                onDismiss = onQuickDismiss,
+            )
+        }
+    }
     }
 }
 

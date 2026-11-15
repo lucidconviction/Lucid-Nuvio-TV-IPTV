@@ -149,9 +149,15 @@ internal fun glassColor(level: String): Color {
 /** The info bar above the guide: "Standard" is exactly as dark as the guide's own tiles. */
 @Composable
 internal fun guideInfoGlass(level: String): Color {
-    val c = NuvioTheme.colors.Background
-    val base = if (c.luminance() < 0.003f) Color(0xFF0E0E12) else c
+    val base = guideInfoBase()
     return base.copy(alpha = when (level) { "solid" -> 0.97f; "darker" -> 0.86f; else -> 0.66f })
+}
+
+/** The bar's solid base colour: what shows through the glass, and behind the quick-search panel. */
+@Composable
+internal fun guideInfoBase(): Color {
+    val c = NuvioTheme.colors.Background
+    return if (c.luminance() < 0.003f) Color(0xFF0E0E12) else c
 }
 
 internal val GLASS_SHAPE = RoundedCornerShape(22.dp)

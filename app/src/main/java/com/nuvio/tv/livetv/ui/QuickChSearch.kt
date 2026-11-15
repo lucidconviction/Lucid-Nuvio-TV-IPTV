@@ -2,7 +2,6 @@
 
 package com.nuvio.tv.livetv.ui
 
-import com.nuvio.tv.livetv.data.QuickStreamChecker
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -22,7 +21,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,7 +45,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,14 +66,18 @@ internal fun QuickChSearchBar(
     onUp: () -> Unit,
     onDown: () -> Unit,
     onPlay: (LiveChannel) -> Unit,
+    /** The picked channel is owned by the guide: its results slide in over the preview bar. */
+    selectedQuick: QuickChannel?,
+    onSelectQuick: (QuickChannel?) -> Unit,
+    validation: QuickChannelMatchState,
+    /** Off when the guide has no preview bar to put the results in (the compact header). */
+    showResultsDialog: Boolean,
 ) {
-    val allChannels by viewModel.displayChannels.collectAsStateWithLifecycle()
     val savedJson by viewModel.quickChannelsJson.collectAsStateWithLifecycle("")
     var version by remember { mutableIntStateOf(0) }
     var focusLevel by remember { mutableStateOf(false) } // false = regions, true = channels
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var chipIndex by remember { mutableIntStateOf(0) }
-    var selectedQuick by remember { mutableStateOf<QuickChannel?>(null) }
     var manageOpen by remember { mutableStateOf(false) }
     var addRegionOpen by remember { mutableStateOf(false) }
     var addChannelOpen by remember { mutableStateOf(false) }
@@ -123,9 +124,6 @@ internal fun QuickChSearchBar(
         }
     }
 
-    val validation = rememberQuickChannelMatchState(selectedQuick, allChannels)
-
-
     val chips: List<String> = if (!focusLevel) {
         categories.map { it.title } + "Manage"
     } else {
@@ -157,7 +155,7 @@ internal fun QuickChSearchBar(
             chipIndex = 0
             refocusBarSoon()
         } else {
-            quickChannels.getOrNull(index - 1)?.let { selectedQuick = it }
+            quickChannels.getOrNull(index - 1)?.let { onSelectQuick(it) }
         }
     }
 
@@ -238,21 +236,24 @@ internal fun QuickChSearchBar(
         }
     }
 
-    // Results: the search and the stream checks. Opens as soon as a channel is picked.
-    selectedQuick?.let { quick ->
-        QuickChResultsDialog(
-            quick = quick,
-            state = validation,
-            onPlay = {
-                selectedQuick = null
-                onPlay(it)
-                focusBarLater()
-            },
-            onDismiss = {
-                selectedQuick = null
-                focusBarLater()
-            },
-        )
+    // Results: the search and the stream checks. The guide normally slides them in over the
+    // preview bar; the compact header has no bar, so it keeps the dialog.
+    if (showResultsDialog) {
+        selectedQuick?.let { quick ->
+            QuickChResultsDialog(
+                quick = quick,
+                state = validation,
+                onPlay = {
+                    onSelectQuick(null)
+                    onPlay(it)
+                    focusBarLater()
+                },
+                onDismiss = {
+                    onSelectQuick(null)
+                    focusBarLater()
+                },
+            )
+        }
     }
 
     if (manageOpen) {
@@ -380,6 +381,168 @@ private fun QuickChip(
     }
 }
 
+/**
+ * The picked quick channel's matches, laid over the preview bar: a short list that takes D-pad
+ * focus as soon as it slides in. Back (or the last row's Down) returns to the search strip.
+ */
+@Composable
+internal fun QuickChResultsOverlay(
+    quick: QuickChannel,
+    state: QuickChannelMatchState,
+    compact: Boolean,
+    onPlay: (LiveChannel) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val first = remember { FocusRequester() }
+    val root = remember { FocusRequester() }
+    val visible = state.visibleMatches
+    var focusedOnce by remember(quick.displayName) { mutableStateOf(false) }
+    // Check results arrive after the overlay opens; only the opening should move the highlight.
+    // With no matches yet (or none at all) the panel itself takes focus, so Back still closes it.
+    LaunchedEffect(quick.displayName, visible.size) {
+        if (visible.isEmpty()) focusedOnce = false
+        val target = if (visible.isNotEmpty() && !focusedOnce) first else if (visible.isEmpty()) root else null
+        if (target == null) return@LaunchedEffect
+        // The panel is measured after its slide-in starts; try again until it can take focus.
+        repeat(6) {
+            delay(80)
+            if (runCatching { target.requestFocus() }.isSuccess) {
+                if (target === first) focusedOnce = true
+                return@LaunchedEffect
+            }
+        }
+    }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = if (compact) 6.dp else 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LiveText(
+                quick.displayName,
+                size = if (compact) 15.sp else 19.sp,
+                weight = FontWeight.Bold,
+                maxLines = 1,
+                marquee = true,
+                modifier = Modifier.weight(1f),
+            )
+            if (state.isChecking) {
+                LoadingSpinner(Modifier.size(if (compact) 14.dp else 18.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            LiveText(
+                when {
+                    state.matches.isEmpty() -> "No channel matches this name"
+                    state.isChecking -> "${state.checkedCount}/${state.matches.size} checked · ${state.workingCount} working"
+                    state.workingCount == 0 -> "No working streams found"
+                    else -> "${state.workingCount} working · dead streams hidden"
+                },
+                color = NuvioTheme.colors.TextSecondary,
+                size = if (compact) 11.sp else 12.sp,
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(12.dp))
+            LiveText("Back to close", color = NuvioTheme.colors.TextTertiary, size = 11.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(if (compact) 4.dp else 7.dp))
+        if (visible.isEmpty()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .focusRequester(root)
+                    .focusable(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                LiveText(
+                    if (state.isChecking) "Searching your playlists…" else "Nothing playable here.",
+                    color = NuvioTheme.colors.TextSecondary,
+                    size = if (compact) 13.sp else 15.sp,
+                )
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            ) {
+                itemsIndexed(visible, key = { _, c -> c.key }) { index, channel ->
+                    QuickChResultRow(
+                        channel = channel,
+                        status = state.statuses[channel.url],
+                        compact = compact,
+                        modifier = Modifier.fillMaxWidth().then(
+                            if (index == 0) Modifier.focusRequester(first) else Modifier
+                        ),
+                        onClick = { onPlay(channel) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One stream match: logo, channel name and where it comes from, and whether it probes alive. */
+@Composable
+private fun QuickChResultRow(
+    channel: LiveChannel,
+    status: Boolean?,
+    compact: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LiveFocusRow(
+        modifier = modifier,
+        onClick = onClick,
+        horizontalPadding = if (compact) 8.dp else 10.dp,
+        verticalPadding = if (compact) 4.dp else 7.dp,
+    ) { f ->
+        ChannelLogo(channel.logo, if (compact) 22.dp else 30.dp)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            LiveText(
+                channel.name,
+                size = if (compact) 14.sp else 16.sp,
+                weight = FontWeight.SemiBold,
+                color = focusedTextColor(f),
+                maxLines = 1,
+                marquee = true,
+            )
+            LiveText(
+                listOfNotNull(channel.group.takeIf { it.isNotBlank() }, channel.sourceName.takeIf { it.isNotBlank() })
+                    .joinToString("  ·  "),
+                size = if (compact) 11.sp else 12.sp,
+                color = focusedSecondaryTextColor(f),
+                maxLines = 1,
+            )
+        }
+        val probeable = channel.url.startsWith("http", ignoreCase = true)
+        LiveText(
+            when {
+                !probeable -> "Addon"
+                status == true -> "✓ Live"
+                status == null -> "Checking…"
+                else -> ""
+            },
+            size = if (compact) 11.sp else 12.sp,
+            weight = FontWeight.Bold,
+            color = when {
+                !probeable -> NuvioTheme.colors.TextSecondary
+                status == true -> NuvioTheme.colors.Success
+                else -> NuvioTheme.colors.TextTertiary
+            },
+        )
+    }
+}
+
 @Composable
 private fun QuickChResultsDialog(
     quick: QuickChannel,
@@ -434,52 +597,16 @@ private fun QuickChResultsDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
             ) {
-                itemsIndexed(visible, key = { index, c -> "${c.key}#$index" }) { index, channel ->
-                    LiveFocusRow(
+                itemsIndexed(visible, key = { _, c -> c.key }) { index, channel ->
+                    QuickChResultRow(
+                        channel = channel,
+                        status = state.statuses[channel.url],
+                        compact = false,
                         modifier = Modifier.fillMaxWidth().then(
                             if (index == 0) Modifier.focusRequester(first) else Modifier
                         ),
                         onClick = { onPlay(channel) },
-                        horizontalPadding = 10.dp,
-                        verticalPadding = 7.dp,
-                    ) { f ->
-                        ChannelLogo(channel.logo, 30.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            LiveText(
-                                channel.name,
-                                size = 16.sp,
-                                weight = FontWeight.SemiBold,
-                                color = focusedTextColor(f),
-                                maxLines = 1,
-                                marquee = true,
-                            )
-                            LiveText(
-                                listOfNotNull(channel.group.takeIf { it.isNotBlank() }, channel.sourceName.takeIf { it.isNotBlank() })
-                                    .joinToString("  ·  "),
-                                size = 12.sp,
-                                color = focusedSecondaryTextColor(f),
-                                maxLines = 1,
-                            )
-                        }
-                        val status = state.statuses[channel.url]
-                        val probeable = channel.url.startsWith("http", ignoreCase = true)
-                        LiveText(
-                            when {
-                                !probeable -> "Addon"
-                                status == true -> "✓ Live"
-                                status == null -> "Checking…"
-                                else -> ""
-                            },
-                            size = 12.sp,
-                            weight = FontWeight.Bold,
-                            color = when {
-                                !probeable -> NuvioTheme.colors.TextSecondary
-                                status == true -> NuvioTheme.colors.Success
-                                else -> NuvioTheme.colors.TextTertiary
-                            },
-                        )
-                    }
+                    )
                 }
             }
         }
