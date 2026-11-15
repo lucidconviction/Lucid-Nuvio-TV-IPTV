@@ -171,6 +171,7 @@ fun SportsScreen(
     val bkfcEvents by viewModel.bkfcEvents.collectAsStateWithLifecycle()
     val known by viewModel.known.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
+    val checkingStreams by viewModel.checkingStreams.collectAsStateWithLifecycle()
     val follows by viewModel.follows.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val now by viewModel.now.collectAsStateWithLifecycle()
@@ -360,6 +361,7 @@ fun SportsScreen(
                 now = now,
                 use24h = use24h,
                 matching = matching,
+                checkingStreams = checkingStreams[opened.id] == true,
                 hasChannels = hasChannels,
                 videoOn = videoOn,
                 playingKey = playingKey,
@@ -1287,6 +1289,8 @@ private fun GamePage(
     now: Long,
     use24h: Boolean,
     matching: Boolean,
+    /** This game's own channels are still being probed: only ones that answered are shown. */
+    checkingStreams: Boolean,
     hasChannels: Boolean,
     videoOn: Boolean,
     playingKey: String?,
@@ -1487,6 +1491,7 @@ private fun GamePage(
                 }
             }
             matching -> LiveText("Looking through your channels…", color = SportsLook.Dim, size = 12.sp)
+            checkingStreams && hasChannels -> LiveText("Checking streams…", color = SportsLook.Dim, size = 12.sp)
             !hasChannels -> LiveText("Add a playlist in Live TV settings to watch from here.", color = SportsLook.Dim, size = 12.sp)
             // Too far off to have been looked for yet: say when it will be.
             ev.startMs - System.currentTimeMillis() > SportsMatcher.AHEAD_MS -> LiveText(
@@ -1497,9 +1502,17 @@ private fun GamePage(
                 color = SportsLook.Dim, size = 12.sp, maxLines = 3
             )
             else -> LiveText(
-                "Not in your channels' guides right now. Guides update during the day, so check back closer to the start. " +
-                    "Know where it's on? Pick a channel and it's remembered.",
+                "No working stream for this game in your channels right now. Guides update during the day, " +
+                    "so check back closer to the start. Know where it's on? Pick a channel and it's remembered.",
                 color = SportsLook.Dim, size = 12.sp, maxLines = 3
+            )
+        }
+        if (checkingStreams && hasChannels && matches.isNotEmpty()) {
+            LiveText(
+                "Checking more streams…",
+                color = SportsLook.Dim,
+                size = 11.sp,
+                modifier = Modifier.padding(start = 6.dp, top = 2.dp)
             )
         }
         Spacer(Modifier.height(10.dp))

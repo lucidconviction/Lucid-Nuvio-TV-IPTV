@@ -6,6 +6,7 @@ import com.nuvio.tv.livetv.data.EpgDatabase
 import com.nuvio.tv.livetv.data.LiveTvChannelStore
 import com.nuvio.tv.livetv.data.LiveTvPreferences
 import com.nuvio.tv.livetv.data.LiveTvRepository
+import com.nuvio.tv.livetv.data.QuickStreamChecker
 import com.nuvio.tv.livetv.model.LiveChannel
 import com.nuvio.tv.livetv.model.LiveTvLoadReport
 import com.nuvio.tv.livetv.parental.ParentalControls
@@ -324,16 +325,35 @@ class SportsRepository @Inject constructor(
     private val _matches = MutableStateFlow<Map<String, List<ChannelMatch>>>(emptyMap())
     private val _addonLive = MutableStateFlow<Map<String, List<ChannelMatch>>>(emptyMap())
     /**
+     * Event id -> the keys of its manually matched channels whose streams answered a probe.
+     * A game page fills this while it's open, so its "Watch on your channels" list only offers
+     * links that actually work. Entries stay for the session: the same dead channel shouldn't
+     * come back on the hub's cards or the player's backups after the page closes.
+     */
+    private val _workingStreams = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+    /** Event id -> its guide channels are still being probed (the game page shows "Checking…"). */
+    private val _checkingStreams = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    /** Event ids whose guide channels have finished a probe round: their working set is final. */
+    private val _streamCheckDone = MutableStateFlow<Set<String>>(emptySet())
+    val checkingStreams: StateFlow<Map<String, Boolean>> = _checkingStreams.asStateFlow()
+    /**
      * Event id -> the channels showing it, best first, with your "Channels from" region's
      * channels moved up. That's done here, on what's already matched, so changing the region
      * never searches the guide again (with no region chosen this is the list as it was).
+     *
+     * A game whose page has been opened only shows the channels that passed its stream check;
+     * the streams from your sports addons have already been probed before they get here.
      */
     val matches: StateFlow<Map<String, List<ChannelMatch>>> = combine(
         _matches,
         settings.map { it.channelRegion }.distinctUntilChanged(),
-        _addonLive
-    ) { m0, region, addon ->
-        val m = if (region.isBlank()) m0 else m0.mapValues { (_, list) -> ChannelRegions.regionFirst(list, region) }
+        _addonLive,
+        _workingStreams
+    ) { m0, region, addon, working ->
+        val m = m0.mapValues { (id, list) ->
+            val gated = working[id]?.let { allowed -> list.filter { it.channel.key in allowed } } ?: list
+            if (region.isBlank()) gated else ChannelRegions.regionFirst(gated, region)
+        }
         // Streams from your sports addons (HighFly…) go after your own channels.
         if (addon.isEmpty()) m else {
             val out = HashMap(m)
@@ -351,6 +371,7 @@ class SportsRepository @Inject constructor(
     /** Finished games, once looked for: event id -> names of your addons that offer replays at all (empty: none). */
     val vodAddons: StateFlow<Map<String, List<String>>> = _vodAddons.asStateFlow()
     private val addonJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    private val streamCheckJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     /**
      * A game page opened: look for it in your sports addons (live streams, or for a finished game its
@@ -376,11 +397,74 @@ class SportsRepository @Inject constructor(
                 delay(90_000L)
             }
         }
+        streamCheckJobs.remove(ev.id)?.cancel()
+        // A page opened before keeps its working set: the list shows what already passed straight
+        // away, then this checks the rest (and anything new the guide finds while the page is open).
+        _workingStreams.update { if (ev.id in it) it else it + (ev.id to emptySet()) }
+        _checkingStreams.update { it + (ev.id to true) }
+        streamCheckJobs[ev.id] = scope.launch {
+            val checked = HashSet<String>()
+            try {
+                while (isActive) {
+                    val current = _matches.value[ev.id].orEmpty()
+                    val toCheck = current.filter { it.channel.key + "\n" + it.channel.url !in checked }
+                    if (toCheck.isNotEmpty()) {
+                        _workingStreams.update { if (ev.id in it) it else it + (ev.id to emptySet()) }
+                        _checkingStreams.update { it + (ev.id to true) }
+                        val byUrl = toCheck.groupBy { it.channel.url }
+                        val status = QuickStreamChecker.checkBatch(
+                            channels = toCheck.map { it.channel },
+                            assumeAliveOnUnknown = false,
+                            timeoutMs = 4_000L,
+                            retryTimeoutMs = 6_000L,
+                            onResult = { url, alive ->
+                                if (alive) {
+                                    val keys = byUrl[url].orEmpty().mapTo(HashSet()) { it.channel.key }
+                                    if (keys.isNotEmpty()) {
+                                        _workingStreams.update { prev ->
+                                            prev + (ev.id to (prev[ev.id].orEmpty() + keys))
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                        val done = toCheck.mapTo(HashSet()) { it.channel.key + "\n" + it.channel.url }
+                        val checkedKeys = toCheck.mapTo(HashSet()) { it.channel.key }
+                        val alive = toCheck.filter { status[it.channel.url] == true }
+                            .mapTo(HashSet()) { it.channel.key }
+                        checked += done
+                        _workingStreams.update { prev ->
+                            prev + (ev.id to ((prev[ev.id].orEmpty() - checkedKeys) + alive))
+                        }
+                        _streamCheckDone.update { it + ev.id }
+                        _checkingStreams.update { it + (ev.id to false) }
+                    } else if (current.isEmpty() && !matching.value) {
+                        // The guide search has finished and found nothing for this game yet.
+                        _checkingStreams.update { it + (ev.id to false) }
+                        // No round has run for this game: don't leave an empty gate that would
+                        // hide channels when the guide finds them later.
+                        if (ev.id !in _streamCheckDone.value) {
+                            _workingStreams.update { it - ev.id }
+                        }
+                    }
+                    delay(1_500L)
+                }
+            } finally {
+                _checkingStreams.update { it - ev.id }
+            }
+        }
     }
 
-    /** The game page was closed: stop looking. */
+    /** The game page was closed: stop looking. Its working set stays, so dead links stay hidden. */
     fun closeGame(eventId: String) {
         addonJobs.remove(eventId)?.cancel()
+        streamCheckJobs.remove(eventId)?.cancel()
+        // Closed before its first probe round finished: leave the list exactly as it was, rather
+        // than hiding every channel behind an empty "working" set.
+        if (eventId !in _streamCheckDone.value) {
+            _workingStreams.update { it - eventId }
+        }
+        _checkingStreams.update { it - eventId }
     }
 
     /** Live TV's "Switch to a backup channel" setting: also covers moving to another channel showing the game. */
