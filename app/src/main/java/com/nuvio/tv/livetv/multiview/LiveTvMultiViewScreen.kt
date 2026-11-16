@@ -51,8 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -62,6 +62,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,8 +79,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -130,26 +129,26 @@ fun LiveTvMultiViewScreen(
     var fullscreenId by remember { mutableStateOf<String?>(null) }
     var paneMenuFor by remember { mutableStateOf<MultiViewStream?>(null) }
     var confirmExit by remember { mutableStateOf(false) }
-    // The last window with the remote: when the bar auto-hides, focus goes back to it.
-    var lastPaneId by remember { mutableStateOf<String?>(null) }
+    // The window the remote is on inside the player area. The player area itself is the focus
+    // target: panes are picked explicitly instead of each owning a focus target under the bar.
+    var selectedId by remember { mutableStateOf<String?>(null) }
     val volumes = remember { mutableStateMapOf<String, Int>() }
     val refreshTicks = remember { mutableStateMapOf<String, Int>() }
-    val paneFocuses = remember { mutableMapOf<String, FocusRequester>() }
-    // The first window is the control bar's Down target: the bar floats over the players, so the
-    // TV's spatial focus search can't reliably find a pane behind it.
-    val firstPaneFocus = remember(streams.firstOrNull()?.id) {
-        streams.firstOrNull()?.let { paneFocuses.getOrPut(it.id) { FocusRequester() } }
-    }
-    val fullscreenFocus = remember { FocusRequester() }
     val controlsFocus = remember { FocusRequester() }
     val rootFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val paneSelectTracker = rememberLongPressKeyTracker()
+    var lastSelectAt by remember { mutableLongStateOf(0L) }
     var showControls by remember { mutableStateOf(true) }
     var controlsTick by remember { mutableIntStateOf(0) }
-    // Whether the shortcut that revealed the bar also moves focus into it. OK on a window keeps
-    // the remote on that window (double-OK is fullscreen); any other key brings the bar up.
-    var focusBarOnShow by remember { mutableStateOf(true) }
-    // True while the remote is on one of the floating bar's buttons.
-    var barHasFocus by remember { mutableStateOf(false) }
+    // Set when Up reveals the bar, so the remote follows it once the buttons exist.
+    var focusBarNext by remember { mutableStateOf(false) }
+    // Whether the players (rather than the floating bar) have the remote, for the window ring.
+    var playersHaveFocus by remember { mutableStateOf(false) }
+    // Down from the bar moves focus to the players, and the same key is then delivered to the
+    // player area. Skip that second delivery so the selection does not also move a row.
+    var skipDirection by remember { mutableStateOf(false) }
+    val neighbors = paneNeighbours(streams, layout)
 
     // Windows fill the screen after five seconds without a key; any key brings the bars back.
     LaunchedEffect(showControls, controlsTick, showPicker, showLayouts, showSavedLayouts, paneMenuFor, swapMode) {
@@ -158,56 +157,51 @@ fun LiveTvMultiViewScreen(
             showControls = false
         }
     }
-    // Showing the bar puts the remote on its first control. (It must not run when a pane gains
-    // focus while the bar is already open, or it would pull the remote back to the bar.)
-    LaunchedEffect(showControls, focusBarOnShow) {
-        if (showControls && focusBarOnShow && !showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
-            delay(80)
-            runCatching { controlsFocus.requestFocus() }
-        }
+    // Keep the selection on a window that still exists.
+    LaunchedEffect(streams) {
+        if (streams.none { it.id == selectedId }) selectedId = streams.firstOrNull()?.id
     }
-    // Hidden: back to the window the remote was on (the first one if there wasn't one), not the
-    // root, so the players stay usable, including double-OK for fullscreen.
-    LaunchedEffect(showControls, lastPaneId, fullscreenId) {
+    // Hidden: the remote stays in the player area, so the players remain usable (double-OK for
+    // fullscreen, long-OK for the window menu).
+    LaunchedEffect(showControls) {
         if (showControls) return@LaunchedEffect
         delay(30)
-        val target = if (fullscreenId != null) {
-            fullscreenFocus
-        } else {
-            lastPaneId?.let { paneFocuses[it] } ?: firstPaneFocus
-        }
-        if (target == null || runCatching { target.requestFocus() }.isFailure) {
-            runCatching { rootFocus.requestFocus() }
+        runCatching { rootFocus.requestFocus(FocusDirection.Enter) }
+    }
+    // Fullscreen follows the window that was opened.
+    LaunchedEffect(fullscreenId) {
+        if (fullscreenId != null) selectedId = fullscreenId
+    }
+    // If the key is not delivered again, don't leave the one-shot skip armed.
+    LaunchedEffect(skipDirection) {
+        if (skipDirection) {
+            delay(300)
+            skipDirection = false
         }
     }
-    // Entering fullscreen puts the remote on that window (double-OK leaves it); leaving puts it
-    // back on the bar, or on the window when the bar is hidden.
-    LaunchedEffect(fullscreenId) {
-        delay(80)
-        if (fullscreenId != null) {
-            runCatching { fullscreenFocus.requestFocus() }
-        } else if (showControls && !showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
-            runCatching { controlsFocus.requestFocus() }
-        } else if (!showControls) {
-            val target = lastPaneId?.let { paneFocuses[it] } ?: firstPaneFocus
-            if (target != null) runCatching { target.requestFocus() }
-        }
+    // Hands the remote to the floating bar, with the first button as a fallback.
+    fun moveToBar(): Boolean {
+        if (showControls && focusManager.moveFocus(FocusDirection.Up)) return true
+        return runCatching { controlsFocus.requestFocus(FocusDirection.Enter) }.getOrDefault(false)
+    }
+    // Up from the top row reveals the bar; hand the remote over once it is composed.
+    LaunchedEffect(showControls, focusBarNext) {
+        if (!showControls || !focusBarNext) return@LaunchedEffect
+        delay(120)
+        focusBarNext = false
+        moveToBar()
+    }
+    // Focus the player area, then hand the remote to the bar when it is showing.
+    fun returnFocus(toBar: Boolean) {
+        val onPlayers = runCatching { rootFocus.requestFocus(FocusDirection.Enter) }.getOrDefault(false)
+        if (toBar && onPlayers) moveToBar()
     }
     // The exit confirmation takes focus; when it is dismissed, put the remote back.
     LaunchedEffect(confirmExit) {
         if (confirmExit) return@LaunchedEffect
         delay(80)
         if (showPicker || showLayouts || showSavedLayouts || paneMenuFor != null || swapMode) return@LaunchedEffect
-        if (showControls) {
-            runCatching { controlsFocus.requestFocus() }
-        } else {
-            val target = if (fullscreenId != null) {
-                fullscreenFocus
-            } else {
-                lastPaneId?.let { paneFocuses[it] } ?: firstPaneFocus
-            }
-            if (target != null) runCatching { target.requestFocus() } else runCatching { rootFocus.requestFocus() }
-        }
+        returnFocus(toBar = true)
     }
     LaunchedEffect(showPicker, showLayouts, showSavedLayouts, paneMenuFor) {
         if (showPicker || showLayouts || showSavedLayouts || paneMenuFor != null) {
@@ -221,10 +215,10 @@ fun LiveTvMultiViewScreen(
         delay(90)
         if (swapMode) {
             val target = swapFirst ?: streams.firstOrNull()?.id
-            val firstOther = streams.firstOrNull { it.id != target }?.id
-            firstOther?.let { paneFocuses[it] }?.let { runCatching { it.requestFocus() } }
+            streams.firstOrNull { it.id != target }?.let { selectedId = it.id }
+            returnFocus(toBar = false)
         } else if (!showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null) {
-            runCatching { controlsFocus.requestFocus() }
+            returnFocus(toBar = true)
         }
     }
 
@@ -232,7 +226,7 @@ fun LiveTvMultiViewScreen(
     LaunchedEffect(showPicker, showLayouts, showSavedLayouts, paneMenuFor, swapMode) {
         if (!showPicker && !showLayouts && !showSavedLayouts && paneMenuFor == null && !swapMode) {
             delay(120)
-            runCatching { controlsFocus.requestFocus() }
+            returnFocus(toBar = true)
         }
     }
 
@@ -252,46 +246,58 @@ fun LiveTvMultiViewScreen(
         }
     }
 
+    fun isSelectCode(code: Int): Boolean =
+        code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+            code == AndroidKeyEvent.KEYCODE_ENTER ||
+            code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+
+    fun isDirectionCode(code: Int): Boolean =
+        code == AndroidKeyEvent.KEYCODE_DPAD_UP ||
+            code == AndroidKeyEvent.KEYCODE_DPAD_DOWN ||
+            code == AndroidKeyEvent.KEYCODE_DPAD_LEFT ||
+            code == AndroidKeyEvent.KEYCODE_DPAD_RIGHT
+
+    // OK on a window makes its sound audible; a second OK within a moment goes fullscreen.
+    fun activatePane(id: String) {
+        if (swapMode) {
+            if (swapFirst == null) {
+                swapFirst = id
+            } else if (swapFirst != id) {
+                MultiViewRepository.swap(swapFirst!!, id)
+                swapFirst = null
+                swapMode = false
+            }
+        } else {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastSelectAt <= 400L) {
+                lastSelectAt = 0L
+                fullscreenId = id
+            } else {
+                lastSelectAt = now
+                MultiViewRepository.setAudible(id)
+            }
+        }
+    }
+
+    // Keys from the bar are counted here so the bar stays up; the players handle their own keys.
     Box(
         Modifier.fillMaxSize().background(Color.Black)
-            .focusRequester(rootFocus)
-            .focusable()
-            .focusProperties { firstPaneFocus?.let { down = it } }
             .onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown) {
                     controlsTick++
-                    if (!showControls) {
-                        val code = event.nativeKeyEvent.keyCode
-                        // Back goes straight to the exit confirmation, not to showing the bar.
-                        if (code == AndroidKeyEvent.KEYCODE_BACK) return@onPreviewKeyEvent false
-                        showControls = true
-                        val isSelect = code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
-                            code == AndroidKeyEvent.KEYCODE_ENTER ||
-                            code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
-                        // OK stays with the focused window (double-OK enters fullscreen);
-                        // navigation keys hand the remote to the bar. With no focused window
-                        // (or no windows at all), the bar takes it.
-                        val keepOnWindow = isSelect && streams.isNotEmpty() &&
-                            (lastPaneId != null || fullscreenId != null)
-                        focusBarOnShow = !keepOnWindow
-                        if (keepOnWindow) return@onPreviewKeyEvent false
-                        return@onPreviewKeyEvent true
-                    }
-                    // The bar floats over the players, so let Down hand the remote straight to
-                    // the first window (or the fullscreen one) from any bar button.
-                    if (barHasFocus &&
+                    if (!playersHaveFocus &&
                         event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
                     ) {
-                        val target = if (fullscreenId != null) fullscreenFocus else firstPaneFocus
-                        if (target != null && runCatching { target.requestFocus() }.isSuccess) {
-                            return@onPreviewKeyEvent true
-                        }
+                        skipDirection = true
                     }
                 }
                 false
-            }
-            .padding(horizontal = 32.dp, vertical = 22.dp),
+            },
     ) {
+        Box(
+            Modifier.fillMaxSize()
+                .padding(horizontal = 32.dp, vertical = 22.dp),
+        ) {
         val fullscreenStream = fullscreenId?.let { id -> streams.firstOrNull { it.id == id } }
         if (fullscreenStream != null) {
             Box(Modifier.fillMaxSize()) {
@@ -303,11 +309,7 @@ fun LiveTvMultiViewScreen(
                     swapMarked = false,
                     refreshTick = refreshTicks[fullscreenStream.id] ?: 0,
                     showInfo = false,
-                    focusRequester = fullscreenFocus,
-                    upFocus = controlsFocus,
-                    onClick = {},
-                    onDoubleClick = { fullscreenId = null },
-                    onLongPress = { paneMenuFor = fullscreenStream },
+                    selected = showControls && playersHaveFocus,
                 )
             }
         } else if (streams.isEmpty()) {
@@ -334,37 +336,127 @@ fun LiveTvMultiViewScreen(
                 volumes = volumes,
                 refreshTicks = refreshTicks,
                 showInfo = showControls,
-                paneFocuses = paneFocuses,
-                upFocus = controlsFocus,
-                onLongPress = { paneMenuFor = it },
-                onPaneClick = { id ->
-                    if (swapMode) {
-                        if (swapFirst == null) swapFirst = id
-                        else if (swapFirst != id) {
-                            MultiViewRepository.swap(swapFirst!!, id)
-                            swapFirst = null
-                            swapMode = false
-                        }
-                    } else {
-                        MultiViewRepository.setAudible(id)
-                    }
+                selectedId = if (showControls && playersHaveFocus) {
+                    fullscreenId
+                        ?: selectedId?.takeIf { id -> streams.any { it.id == id } }
+                        ?: streams.firstOrNull()?.id
+                } else {
+                    null
                 },
-                onPaneDoubleClick = { id -> fullscreenId = id },
-                onPaneFocused = { id -> lastPaneId = id },
+            )
+        }
+        }
+        // The remote lives in this area below the floating bar. Keeping it separate means Up
+        // from the top row can reach the bar, and Down from the bar can come back.
+        Box(
+            Modifier.fillMaxSize()
+                .padding(top = 80.dp, start = 32.dp, end = 32.dp, bottom = 22.dp),
+        ) {
+            Box(
+                Modifier.fillMaxSize()
+                    .onFocusChanged { playersHaveFocus = it.isFocused }
+                    .focusRequester(rootFocus)
+                    .focusable()
+                .onPreviewKeyEvent { event ->
+                    val code = event.nativeKeyEvent.keyCode
+                    if (event.type == KeyEventType.KeyDown) {
+                    // Back is the exit confirmation's business.
+                    if (code == AndroidKeyEvent.KEYCODE_BACK) return@onPreviewKeyEvent false
+                    if (!isSelectCode(code) && !isDirectionCode(code)) return@onPreviewKeyEvent false
+                    if (skipDirection) {
+                        skipDirection = false
+                        return@onPreviewKeyEvent true
+                    }
+                    val barWasVisible = showControls
+                    if (!showControls) showControls = true
+                    val currentId = fullscreenId
+                        ?: selectedId?.takeIf { id -> streams.any { it.id == id } }
+                        ?: streams.firstOrNull()?.id
+                    if (currentId == null) {
+                        if (code == AndroidKeyEvent.KEYCODE_DPAD_UP) {
+                            moveToBar()
+                        }
+                        return@onPreviewKeyEvent false
+                    }
+                    if (fullscreenId != null) {
+                        // The bar is still above the fullscreen window.
+                        if (code == AndroidKeyEvent.KEYCODE_DPAD_UP) {
+                            if (barWasVisible) {
+                                moveToBar()
+                            } else {
+                                focusBarNext = true
+                            }
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+                    if (isDirectionCode(code)) {
+                        val index = streams.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+                        val n = neighbors.getOrNull(index) ?: PaneNeighbours()
+                        val target = when (code) {
+                            AndroidKeyEvent.KEYCODE_DPAD_UP -> n.up
+                            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> n.down
+                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> n.left
+                            else -> n.right
+                        }
+                        if (target >= 0) {
+                            selectedId = streams[target].id
+                            // Moving to another window starts a fresh click sequence.
+                            lastSelectAt = 0L
+                        } else if (code == AndroidKeyEvent.KEYCODE_DPAD_UP) {
+                            // Nothing above the top row: hand the remote to the bar.
+                            if (barWasVisible) {
+                                moveToBar()
+                            } else {
+                                focusBarNext = true
+                            }
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+                    // OK: a long press opens the window menu; the release handles the click.
+                    val stream = streams.firstOrNull { it.id == currentId }
+                    if (stream != null) {
+                        paneSelectTracker.handle(event.nativeKeyEvent, ::isSelectCode) { paneMenuFor = stream }
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (event.type == KeyEventType.KeyUp && isSelectCode(code)) {
+                    val currentId = fullscreenId
+                        ?: selectedId?.takeIf { id -> streams.any { it.id == id } }
+                        ?: streams.firstOrNull()?.id
+                    val handled = paneSelectTracker.handle(event.nativeKeyEvent, ::isSelectCode) {
+                        paneMenuFor = streams.firstOrNull { it.id == currentId }
+                    }
+                    if (!handled && currentId != null) {
+                        if (fullscreenId != null) {
+                            // Double-OK leaves fullscreen; a single OK does nothing.
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastSelectAt <= 400L) {
+                                lastSelectAt = 0L
+                                fullscreenId = null
+                            } else {
+                                lastSelectAt = now
+                            }
+                        } else {
+                            activatePane(currentId)
+                        }
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                false
+            }
             )
         }
         // The control bar floats over the players: showing it must not resize or move them.
         if (showControls) {
             MultiViewControlBar(
-                modifier = Modifier.align(Alignment.TopCenter),
+                modifier = Modifier.align(Alignment.TopCenter)
+                    .padding(horizontal = 32.dp, vertical = 22.dp),
                 layout = layout,
                 streamCount = streams.size,
                 swapMode = swapMode,
                 soundAll = soundAll,
                 pauseAll = pauseAll,
                 firstFocus = controlsFocus,
-                downFocus = if (fullscreenStream != null) fullscreenFocus else firstPaneFocus,
-                onBarFocus = { barHasFocus = it },
                 onLayout = { showLayouts = true },
                 onSaved = { showSavedLayouts = true },
                 onSwap = {
@@ -530,8 +622,6 @@ private fun MultiViewControlBar(
     soundAll: Boolean,
     pauseAll: Boolean,
     firstFocus: FocusRequester,
-    downFocus: FocusRequester? = null,
-    onBarFocus: (Boolean) -> Unit = {},
     onLayout: () -> Unit,
     onSaved: () -> Unit,
     onSwap: () -> Unit,
@@ -550,41 +640,24 @@ private fun MultiViewControlBar(
             .clip(shape)
             .background(Color.Black.copy(alpha = 0.30f))
             .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            // The bar floats over the players, so spatial focus search can't see a pane below.
-            // Down always goes to the first window (or the fullscreen one).
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown &&
-                    event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN &&
-                    downFocus != null
-                ) {
-                    runCatching { downFocus.requestFocus() }.isSuccess
-                } else {
-                    false
-                }
-            },
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         item {
             MultiViewBarButton(
                 label = layoutLabel(layout),
-                downFocus = downFocus,
-                onBarFocus = onBarFocus,
                 icon = Icons.Default.GridView,
                 onClick = onLayout,
                 enabled = streamCount >= 2,
                 modifier = Modifier.focusRequester(firstFocus),
             )
         }
-        item { MultiViewBarButton("Saved", Icons.Default.Bookmarks, onSaved, downFocus = downFocus,
-                onBarFocus = onBarFocus, enabled = streamCount > 0) }
+        item { MultiViewBarButton("Saved", Icons.Default.Bookmarks, onSaved, enabled = streamCount > 0) }
         item {
             MultiViewBarButton(
                 label = "Swap",
                 icon = Icons.Default.SwapHoriz,
-                downFocus = downFocus,
-                onBarFocus = onBarFocus,
                 onClick = onSwap,
                 enabled = streamCount >= 2,
                 selected = swapMode,
@@ -594,8 +667,6 @@ private fun MultiViewControlBar(
             MultiViewBarButton(
                 label = if (soundAll) "All sound" else "One sound",
                 icon = if (soundAll) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                downFocus = downFocus,
-                onBarFocus = onBarFocus,
                 onClick = onSound,
             )
         }
@@ -603,23 +674,19 @@ private fun MultiViewControlBar(
             MultiViewBarButton(
                 label = if (pauseAll) "Resume all" else "Pause all",
                 icon = if (pauseAll) Icons.Default.PlayArrow else Icons.Default.Pause,
-                downFocus = downFocus,
-                onBarFocus = onBarFocus,
                 onClick = onPause,
             )
         }
-        item { MultiViewBarButton("Refresh", Icons.Default.Refresh, onRefresh, downFocus = downFocus, onBarFocus = onBarFocus) }
+        item { MultiViewBarButton("Refresh", Icons.Default.Refresh, onRefresh) }
         item {
             MultiViewBarButton(
                 label = "Add channel",
                 icon = Icons.Default.Add,
-                downFocus = downFocus,
-                onBarFocus = onBarFocus,
                 onClick = onAdd,
                 enabled = streamCount < MultiViewRepository.MAX_STREAMS,
             )
         }
-        item { MultiViewBarButton("Clear", Icons.Default.DeleteSweep, onClear, downFocus = downFocus, onBarFocus = onBarFocus) }
+        item { MultiViewBarButton("Clear", Icons.Default.DeleteSweep, onClear) }
     }
 }
 
@@ -632,29 +699,11 @@ private fun MultiViewBarButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     selected: Boolean = false,
-    downFocus: FocusRequester? = null,
-    onBarFocus: (Boolean) -> Unit = {},
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier
-            .onFocusChanged { onBarFocus(it.isFocused) }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown &&
-                    event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
-                ) {
-                    if (downFocus != null) {
-                        runCatching { downFocus.requestFocus() }.isSuccess
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            .then(if (downFocus != null) Modifier.focusProperties { down = downFocus } else Modifier)
-            .height(34.dp),
+        modifier = modifier.height(34.dp),
         contentPadding = PaddingValues(horizontal = 9.dp, vertical = 0.dp),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) NuvioTheme.colors.TextPrimary.copy(alpha = 0.92f) else Color.Transparent,
@@ -792,13 +841,63 @@ private fun PaneMenu(
     }
 }
 
-/** Which window a pane's D-pad directions lead to. Null means there is no window that way. */
-private data class PaneNeighbors(
-    val up: FocusRequester? = null,
-    val down: FocusRequester? = null,
-    val left: FocusRequester? = null,
-    val right: FocusRequester? = null,
+/** Which window each D-pad direction leads to on a pane; -1 means there is no window that way. */
+private data class PaneNeighbours(
+    val up: Int = -1,
+    val down: Int = -1,
+    val left: Int = -1,
+    val right: Int = -1,
 )
+
+/**
+ * Explicit D-pad targets for every window, built from the same slots the panes are laid out in.
+ * The floating bar covers the top of the players, so spatial focus search cannot reliably find
+ * the second/third/fourth window; every direction is mapped here instead.
+ */
+private fun paneNeighbours(streams: List<MultiViewStream>, layout: MultiViewLayout): List<PaneNeighbours> {
+    val effective = effectiveLayout(layout, streams.size)
+    return when (effective) {
+        MultiViewLayout.SIDE_BY_SIDE -> streams.indices.map { i ->
+            PaneNeighbours(
+                left = if (i > 0) i - 1 else -1,
+                right = if (i < streams.lastIndex) i + 1 else -1,
+            )
+        }
+        MultiViewLayout.FOCUS_CORNER -> streams.indices.map { i ->
+            if (i == 0) {
+                PaneNeighbours(right = streams.indices.firstOrNull { it != 0 } ?: -1)
+            } else {
+                PaneNeighbours(
+                    up = if (i == 1) -1 else i - 1,
+                    down = if (i < streams.lastIndex) i + 1 else -1,
+                    left = 0,
+                )
+            }
+        }
+        MultiViewLayout.AUTO, MultiViewLayout.GRID -> {
+            val slots = slotsFor(effective, streams.size)
+            streams.indices.map { index ->
+                val slot = slots.firstOrNull { it.index == index }
+                if (slot == null) {
+                    PaneNeighbours()
+                } else {
+                    val row = slots.filter { it.row == slot.row }.sortedBy { it.col }
+                    val position = row.indexOfFirst { it.index == index }
+                    val above = slots.filter { it.row == slot.row - 1 && it.overlaps(slot) }
+                        .minByOrNull { it.col }
+                    val below = slots.filter { it.row == slot.row + 1 && it.overlaps(slot) }
+                        .minByOrNull { it.col }
+                    PaneNeighbours(
+                        up = above?.index ?: -1,
+                        down = below?.index ?: -1,
+                        left = row.getOrNull(position - 1)?.index ?: -1,
+                        right = row.getOrNull(position + 1)?.index ?: -1,
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun MultiViewGrid(
@@ -812,63 +911,11 @@ private fun MultiViewGrid(
     volumes: Map<String, Int>,
     refreshTicks: Map<String, Int>,
     showInfo: Boolean,
-    paneFocuses: MutableMap<String, FocusRequester>,
-    upFocus: FocusRequester? = null,
-    onLongPress: (MultiViewStream) -> Unit,
-    onPaneClick: (String) -> Unit,
-    onPaneDoubleClick: (String) -> Unit,
-    onPaneFocused: (String) -> Unit,
+    selectedId: String?,
 ) {
     val effective = effectiveLayout(layout, streams.size)
-    val focuses = streams.map { paneFocuses.getOrPut(it.id) { FocusRequester() } }
-    // Explicit D-pad targets, built from the same slots the panes are laid out in. The floating
-    // control bar covers the top of the players, so spatial focus search could not reliably find
-    // the second/third/fourth window; every direction is mapped here instead.
-    val neighbors: List<PaneNeighbors> = when (effective) {
-        MultiViewLayout.SIDE_BY_SIDE -> streams.indices.map { i ->
-            PaneNeighbors(
-                up = upFocus,
-                left = focuses.getOrNull(i - 1),
-                right = focuses.getOrNull(i + 1),
-            )
-        }
-        MultiViewLayout.FOCUS_CORNER -> streams.indices.map { i ->
-            if (i == 0) {
-                PaneNeighbors(up = upFocus, right = focuses.getOrNull(1))
-            } else {
-                PaneNeighbors(
-                    up = if (i == 1) upFocus else focuses.getOrNull(i - 1),
-                    down = focuses.getOrNull(i + 1),
-                    left = focuses.getOrNull(0),
-                )
-            }
-        }
-        MultiViewLayout.AUTO, MultiViewLayout.GRID -> {
-            val slots = slotsFor(effective, streams.size)
-            streams.indices.map { index ->
-                val slot = slots.firstOrNull { it.index == index }
-                if (slot == null) {
-                    PaneNeighbors(up = upFocus)
-                } else {
-                    val row = slots.filter { it.row == slot.row }.sortedBy { it.col }
-                    val position = row.indexOfFirst { it.index == index }
-                    val above = slots.filter { it.row == slot.row - 1 && it.overlaps(slot) }
-                        .minByOrNull { it.col }
-                    val below = slots.filter { it.row == slot.row + 1 && it.overlaps(slot) }
-                        .minByOrNull { it.col }
-                    PaneNeighbors(
-                        up = if (slot.row == 0) upFocus else focuses.getOrNull(above?.index ?: -1),
-                        down = focuses.getOrNull(below?.index ?: -1),
-                        left = focuses.getOrNull(row.getOrNull(position - 1)?.index ?: -1),
-                        right = focuses.getOrNull(row.getOrNull(position + 1)?.index ?: -1),
-                    )
-                }
-            }
-        }
-    }
     val pane: @Composable (Int, Modifier) -> Unit = { index, modifier ->
         val stream = streams[index]
-        val n = neighbors.getOrNull(index) ?: PaneNeighbors(up = upFocus)
         Box(modifier) {
             MultiViewPane(
                 stream = stream,
@@ -878,15 +925,7 @@ private fun MultiViewGrid(
                 swapMarked = swapMode && swapFirst == stream.id,
                 refreshTick = refreshTicks[stream.id] ?: 0,
                 showInfo = showInfo,
-                focusRequester = focuses.getOrNull(index),
-                upFocus = n.up,
-                downFocus = n.down,
-                leftFocus = n.left,
-                rightFocus = n.right,
-                onFocused = { onPaneFocused(stream.id) },
-                onClick = { onPaneClick(stream.id) },
-                onDoubleClick = if (swapMode) null else { { onPaneDoubleClick(stream.id) } },
-                onLongPress = { onLongPress(stream) },
+                selected = stream.id == selectedId,
             )
         }
     }
@@ -1041,22 +1080,12 @@ private fun MultiViewPane(
     swapMarked: Boolean,
     refreshTick: Int = 0,
     showInfo: Boolean = true,
-    focusRequester: FocusRequester? = null,
-    upFocus: FocusRequester? = null,
-    downFocus: FocusRequester? = null,
-    leftFocus: FocusRequester? = null,
-    rightFocus: FocusRequester? = null,
-    onFocused: (() -> Unit)? = null,
-    onClick: () -> Unit,
-    onDoubleClick: (() -> Unit)? = null,
-    onLongPress: () -> Unit = {},
+    selected: Boolean = false,
 ) {
     val context = LocalContext.current
     var player by remember(stream.id) { mutableStateOf<ExoPlayer?>(null) }
     var failed by remember(stream.id) { mutableStateOf(false) }
     var autoReload by remember(stream.id) { mutableIntStateOf(0) }
-    var lastClickAt by remember(stream.id) { mutableLongStateOf(0L) }
-    val longPressTracker = rememberLongPressKeyTracker()
 
     LaunchedEffect(stream.id, refreshTick, autoReload) {
         failed = false
@@ -1133,60 +1162,10 @@ private fun MultiViewPane(
         }
     }
 
-    fun isSelectKey(code: Int): Boolean =
-        code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
-            code == AndroidKeyEvent.KEYCODE_ENTER ||
-            code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
-
-    Card(
-        onClick = {
-            val now = SystemClock.elapsedRealtime()
-            if (onDoubleClick != null && now - lastClickAt <= 400L) {
-                lastClickAt = 0L
-                onDoubleClick()
-            } else {
-                lastClickAt = now
-                onClick()
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .onFocusChanged {
-                if (it.isFocused) onFocused?.invoke()
-            }
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
-                    when (event.nativeKeyEvent.keyCode) {
-                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                            if (upFocus != null) runCatching { upFocus.requestFocus() }.isSuccess else true
-                        }
-                        AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                            if (downFocus != null) runCatching { downFocus.requestFocus() }.isSuccess else true
-                        }
-                        AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (leftFocus != null) runCatching { leftFocus.requestFocus() }.isSuccess else true
-                        }
-                        AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (rightFocus != null) runCatching { rightFocus.requestFocus() }.isSuccess else true
-                        }
-                        else -> longPressTracker.handle(event.nativeKeyEvent, ::isSelectKey) { onLongPress() }
-                    }
-                } else {
-                    longPressTracker.handle(event.nativeKeyEvent, ::isSelectKey) { onLongPress() }
-                }
-            },
-        shape = CardDefaults.shape(RoundedCornerShape(14.dp)),
-        colors = CardDefaults.colors(
-            containerColor = Color.Black,
-            focusedContainerColor = Color.Black,
-        ),
-        border = CardDefaults.border(
-            focusedBorder = androidx.tv.material3.Border(
-                border = androidx.compose.foundation.BorderStroke(3.dp, NuvioTheme.colors.FocusRing),
-                shape = RoundedCornerShape(14.dp),
-            ),
-        ),
-        scale = CardDefaults.scale(focusedScale = 1.0f),
+    Box(
+        Modifier.fillMaxSize()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.Black),
     ) {
         Box(Modifier.fillMaxSize()) {
             LivePlayerSurface(
@@ -1200,6 +1179,15 @@ private fun MultiViewPane(
                         androidx.compose.ui.graphics.Brush.verticalGradient(
                             listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
                         ),
+                    ),
+                )
+            }
+            if (selected) {
+                Box(
+                    Modifier.fillMaxSize().border(
+                        3.dp,
+                        NuvioTheme.colors.FocusRing,
+                        RoundedCornerShape(14.dp),
                     ),
                 )
             }
