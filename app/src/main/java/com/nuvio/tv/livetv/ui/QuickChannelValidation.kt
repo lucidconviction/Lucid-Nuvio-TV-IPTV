@@ -61,3 +61,23 @@ fun rememberQuickChannelMatchState(
     }
     return state
 }
+
+/**
+ * The region/language code a playlist puts before a channel's group or name ("US: ESPN",
+ * "ALB | Top Channel", group "UK"). Two or three letters only, so group names like "Sports" or
+ * "News" don't become filters. Null when the channel doesn't say.
+ */
+private val QUICK_CODE_PREFIX = Regex("""^\s*([A-Za-z]{2,3})\s*(?=$|[:|])""")
+private val QUICK_CODE_STOP = setOf(
+    "all", "new", "tv", "hd", "sd", "fhd", "uhd", "vip", "web", "raw", "alt", "bkp", "bk",
+    "ppv", "xxx", "kid", "mov", "mix", "bbc", "cnn", "abc", "cbs", "nbc", "fox", "itv", "sky",
+    "hbo", "max", "amc",
+)
+
+internal fun quickChannelCode(channel: LiveChannel): String? {
+    fun codeIn(text: String): String? {
+        val code = QUICK_CODE_PREFIX.find(text)?.groupValues?.getOrNull(1)?.lowercase() ?: return null
+        return code.takeIf { it !in QUICK_CODE_STOP }
+    }
+    return codeIn(channel.group) ?: codeIn(channel.name)
+}

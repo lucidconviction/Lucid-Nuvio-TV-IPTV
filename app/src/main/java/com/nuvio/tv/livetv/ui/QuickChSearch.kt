@@ -243,11 +243,8 @@ internal fun QuickChSearchBar(
             QuickChResultsDialog(
                 quick = quick,
                 state = validation,
-                onPlay = {
-                    onSelectQuick(null)
-                    onPlay(it)
-                    focusBarLater()
-                },
+                // Picking a stream leaves the results open so another one can be tried.
+                onPlay = { onPlay(it) },
                 onDismiss = {
                     onSelectQuick(null)
                     focusBarLater()
@@ -396,13 +393,19 @@ internal fun QuickChResultsOverlay(
 ) {
     val first = remember { FocusRequester() }
     val root = remember { FocusRequester() }
+    val languageFocus = remember { FocusRequester() }
+    var languageFocused by remember { mutableStateOf(false) }
     val visible = state.visibleMatches
+    val filter = rememberQuickLanguageFilter(visible, quick.displayName)
+    val shown = filter.shown
     var focusedOnce by remember(quick.displayName) { mutableStateOf(false) }
     // Check results arrive after the overlay opens; only the opening should move the highlight.
     // With no matches yet (or none at all) the panel itself takes focus, so Back still closes it.
-    LaunchedEffect(quick.displayName, visible.size) {
-        if (visible.isEmpty()) focusedOnce = false
-        val target = if (visible.isNotEmpty() && !focusedOnce) first else if (visible.isEmpty()) root else null
+    LaunchedEffect(quick.displayName, shown.size) {
+        // Never pull the remote off the language strip while it is being used.
+        if (languageFocused) return@LaunchedEffect
+        if (shown.isEmpty()) focusedOnce = false
+        val target = if (shown.isNotEmpty() && !focusedOnce) first else if (shown.isEmpty()) root else null
         if (target == null) return@LaunchedEffect
         // The panel is measured after its slide-in starts; try again until it can take focus.
         repeat(6) {
@@ -413,6 +416,10 @@ internal fun QuickChResultsOverlay(
             }
         }
     }
+    fun focusResults() {
+        runCatching { (if (shown.isNotEmpty()) first else root).requestFocus() }
+    }
+    val shownWorking = shown.count { state.statuses[it.url] == true }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -433,28 +440,40 @@ internal fun QuickChResultsOverlay(
                 weight = FontWeight.Bold,
                 maxLines = 1,
                 marquee = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(if (filter.codes.isEmpty()) 0.66f else 0.30f),
             )
+            if (filter.codes.isNotEmpty()) {
+                Spacer(Modifier.width(8.dp))
+                QuickLanguageFilter(
+                    codes = filter.codes,
+                    selected = filter.selected,
+                    onAll = filter.selectAll,
+                    onToggle = filter.toggle,
+                    onDown = { focusResults() },
+                    onFocusChanged = { languageFocused = it },
+                    modifier = Modifier.weight(0.48f).focusRequester(languageFocus),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             if (state.isChecking) {
                 LoadingSpinner(Modifier.size(if (compact) 14.dp else 18.dp))
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
             }
             LiveText(
                 when {
                     state.matches.isEmpty() -> "No channel matches this name"
-                    state.isChecking -> "${state.checkedCount}/${state.matches.size} checked · ${state.workingCount} working"
-                    state.workingCount == 0 -> "No working streams found"
-                    else -> "${state.workingCount} working · dead streams hidden"
+                    state.isChecking -> "${state.checkedCount}/${state.matches.size} checked · $shownWorking working"
+                    shownWorking == 0 -> "No working streams found"
+                    else -> "$shownWorking working"
                 },
                 color = NuvioTheme.colors.TextSecondary,
                 size = if (compact) 11.sp else 12.sp,
                 maxLines = 1,
+                modifier = Modifier.weight(if (filter.codes.isEmpty()) 0.34f else 0.22f),
             )
-            Spacer(Modifier.width(12.dp))
-            LiveText("Back to close", color = NuvioTheme.colors.TextTertiary, size = 11.sp, maxLines = 1)
         }
         Spacer(Modifier.height(if (compact) 4.dp else 7.dp))
-        if (visible.isEmpty()) {
+        if (shown.isEmpty()) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -464,7 +483,11 @@ internal fun QuickChResultsOverlay(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 LiveText(
-                    if (state.isChecking) "Searching your playlists…" else "Nothing playable here.",
+                    when {
+                        visible.isNotEmpty() -> "No working streams for this filter."
+                        state.isChecking -> "Searching your playlists…"
+                        else -> "Nothing playable here."
+                    },
                     color = NuvioTheme.colors.TextSecondary,
                     size = if (compact) 13.sp else 15.sp,
                 )
@@ -474,13 +497,29 @@ internal fun QuickChResultsOverlay(
                 verticalArrangement = Arrangement.spacedBy(3.dp),
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
-                itemsIndexed(visible, key = { _, c -> c.key }) { index, channel ->
+                itemsIndexed(shown, key = { _, c -> c.key }) { index, channel ->
                     QuickChResultRow(
                         channel = channel,
                         status = state.statuses[channel.url],
                         compact = compact,
                         modifier = Modifier.fillMaxWidth().then(
-                            if (index == 0) Modifier.focusRequester(first) else Modifier
+                            if (index == 0) {
+                                Modifier
+                                    .focusRequester(first)
+                                    .onPreviewKeyEvent { event ->
+                                        if (filter.codes.isNotEmpty() &&
+                                            event.type == KeyEventType.KeyDown &&
+                                            event.key == Key.DirectionUp
+                                        ) {
+                                            runCatching { languageFocus.requestFocus() }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                            } else {
+                                Modifier
+                            }
                         ),
                         onClick = { onPlay(channel) },
                     )
@@ -543,6 +582,135 @@ private fun QuickChResultRow(
     }
 }
 
+/**
+ * The language/region codes in [visible] ("all" plus the codes themselves), the ones picked and
+ * the list narrowed to them. Picking nothing means everything; the selection resets per channel.
+ */
+private class QuickLanguageFilterState(
+    val codes: List<String>,
+    val selected: Set<String>,
+    val shown: List<LiveChannel>,
+    val selectAll: () -> Unit,
+    val toggle: (String) -> Unit,
+)
+
+@Composable
+private fun rememberQuickLanguageFilter(visible: List<LiveChannel>, resetKey: String): QuickLanguageFilterState {
+    val codes = remember(visible) { visible.mapNotNull(::quickChannelCode).distinct().sorted() }
+    var selected by remember(resetKey) { mutableStateOf<Set<String>>(emptySet()) }
+    // A filter whose last stream was removed (or checked dead) goes away with it.
+    LaunchedEffect(codes) {
+        val present = codes.toSet()
+        if (!selected.all { it in present }) selected = selected.intersect(present)
+    }
+    val shown = remember(visible, selected) {
+        if (selected.isEmpty()) visible else visible.filter { quickChannelCode(it) in selected }
+    }
+    return QuickLanguageFilterState(
+        codes = codes,
+        selected = selected,
+        shown = shown,
+        selectAll = { selected = emptySet() },
+        toggle = { code -> selected = if (code in selected) selected - code else selected + code },
+    )
+}
+
+/** A compact, horizontally scrolling multi-select strip of language codes. */
+@Composable
+private fun QuickLanguageFilter(
+    codes: List<String>,
+    selected: Set<String>,
+    onAll: () -> Unit,
+    onToggle: (String) -> Unit,
+    onDown: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val chips = remember(codes) { listOf("all") + codes }
+    var index by remember { mutableIntStateOf(0) }
+    var focused by remember { mutableStateOf(false) }
+    val rowState = rememberLazyListState()
+    LaunchedEffect(index, chips.size) {
+        runCatching { rowState.scrollToItem(index.coerceIn(0, chips.lastIndex)) }
+    }
+    fun toggle(i: Int) {
+        if (i == 0) onAll() else codes.getOrNull(i - 1)?.let(onToggle)
+    }
+    Box(
+        modifier
+            .height(24.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (focused) NuvioTheme.colors.FocusBackground.copy(alpha = 0.55f) else Color.Transparent)
+            .onFocusChanged { focused = it.isFocused; onFocusChanged(it.isFocused) }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> { index = (index - 1).coerceAtLeast(0); true }
+                    Key.DirectionRight -> { index = (index + 1).coerceAtMost(chips.lastIndex); true }
+                    Key.DirectionDown -> { onDown(); true }
+                    Key.DirectionUp -> true
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                        if (event.nativeKeyEvent.repeatCount == 0) toggle(index)
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .focusable(),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        LazyRow(
+            state = rowState,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            itemsIndexed(chips) { i, code ->
+                val active = if (i == 0) selected.isEmpty() else code in selected
+                QuickLanguageChip(
+                    label = code,
+                    active = active,
+                    focused = focused && i == index,
+                    onClick = { index = i; toggle(i) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickLanguageChip(
+    label: String,
+    active: Boolean,
+    focused: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier
+            .height(20.dp)
+            .clip(shape)
+            .background(
+                when {
+                    focused -> NuvioTheme.colors.FocusBackground
+                    active -> NuvioTheme.colors.Secondary.copy(alpha = 0.30f)
+                    else -> NuvioTheme.colors.BackgroundElevated
+                }
+            )
+            .border(1.dp, if (focused) NuvioTheme.colors.FocusRing else Color.Transparent, shape)
+            .pointerInput(onClick) { detectTapGestures { onClick() } }
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        LiveText(
+            label,
+            size = 10.sp,
+            weight = if (active) FontWeight.Bold else FontWeight.Medium,
+            color = if (focused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
+            maxLines = 1,
+        )
+    }
+}
+
 @Composable
 private fun QuickChResultsDialog(
     quick: QuickChannel,
@@ -551,7 +719,11 @@ private fun QuickChResultsDialog(
     onDismiss: () -> Unit,
 ) {
     val first = remember { FocusRequester() }
+    val languageFocus = remember { FocusRequester() }
     val visible = state.visibleMatches
+    val filter = rememberQuickLanguageFilter(visible, quick.displayName)
+    val shown = filter.shown
+    val shownWorking = shown.count { state.statuses[it.url] == true }
     // Focus the first row once, when the dialog opens. Check results arrive afterwards and must
     // not pull the highlight back to the top while you're moving through the list.
     LaunchedEffect(Unit) {
@@ -565,9 +737,9 @@ private fun QuickChResultsDialog(
                 LiveText(
                     when {
                         state.matches.isEmpty() -> "No channel in your playlists matches this name."
-                        state.isChecking -> "${state.checkedCount}/${state.matches.size} checked · ${state.workingCount} working"
-                        state.workingCount == 0 -> "No working streams found."
-                        else -> "${state.workingCount} working · dead streams hidden"
+                        state.isChecking -> "${state.checkedCount}/${state.matches.size} checked · $shownWorking working"
+                        shownWorking == 0 -> "No working streams found."
+                        else -> "$shownWorking working"
                     },
                     color = NuvioTheme.colors.TextSecondary,
                     size = 13.sp,
@@ -575,19 +747,32 @@ private fun QuickChResultsDialog(
             }
             if (state.isChecking) {
                 LoadingSpinner(Modifier.size(20.dp))
-                Spacer(Modifier.width(10.dp))
             }
-            LiveText(
-                "Back to close",
-                color = NuvioTheme.colors.TextTertiary,
-                size = 12.sp,
-            )
+        }
+        if (filter.codes.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LiveText("Language", color = NuvioTheme.colors.TextSecondary, size = 12.sp)
+                Spacer(Modifier.width(8.dp))
+                QuickLanguageFilter(
+                    codes = filter.codes,
+                    selected = filter.selected,
+                    onAll = filter.selectAll,
+                    onToggle = filter.toggle,
+                    onDown = { runCatching { first.requestFocus() } },
+                    modifier = Modifier.weight(1f).focusRequester(languageFocus),
+                )
+            }
         }
         Spacer(Modifier.height(12.dp))
-        if (visible.isEmpty()) {
+        if (shown.isEmpty()) {
             Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                 LiveText(
-                    if (state.isChecking) "Searching your playlists…" else "Nothing playable here.",
+                    when {
+                        visible.isNotEmpty() -> "No working streams for this filter."
+                        state.isChecking -> "Searching your playlists…"
+                        else -> "Nothing playable here."
+                    },
                     color = NuvioTheme.colors.TextSecondary,
                     size = 15.sp,
                 )
@@ -597,13 +782,27 @@ private fun QuickChResultsDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
             ) {
-                itemsIndexed(visible, key = { _, c -> c.key }) { index, channel ->
+                itemsIndexed(shown, key = { _, c -> c.key }) { index, channel ->
                     QuickChResultRow(
                         channel = channel,
                         status = state.statuses[channel.url],
                         compact = false,
                         modifier = Modifier.fillMaxWidth().then(
-                            if (index == 0) Modifier.focusRequester(first) else Modifier
+                            if (index == 0) {
+                                Modifier.focusRequester(first).onPreviewKeyEvent { event ->
+                                    if (filter.codes.isNotEmpty() &&
+                                        event.type == KeyEventType.KeyDown &&
+                                        event.key == Key.DirectionUp
+                                    ) {
+                                        runCatching { languageFocus.requestFocus() }
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            }
                         ),
                         onClick = { onPlay(channel) },
                     )

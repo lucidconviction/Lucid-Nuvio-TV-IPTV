@@ -1055,11 +1055,11 @@ private fun LiveTvGuideScreenBody(
                 // and the preview off there is no bar, so the search strip keeps its dialog.
                 quickSearch = quickSelected.takeIf { settings.showProgramDetails || settings.showPreview },
                 quickSearchState = quickSearchState,
+                // Trying another stream should not lose the list; Back closes it, and going
+                // fullscreen dismisses it below.
                 onQuickPlay = { ch ->
-                    quickSelected = null
                     quickPlayKey = ch.key
                     playChannel(ch, fromQuickSearch = true)
-                    scope.launch { delay(140); runCatching { quickSearchFocus.requestFocus() } }
                 },
                 onQuickDismiss = {
                     quickSelected = null
