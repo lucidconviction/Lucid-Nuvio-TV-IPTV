@@ -434,15 +434,6 @@ fun LiveTvMultiViewScreen(
         PaneMenu(
             stream = stream,
             currentVolume = volumes[stream.id],
-            onFullscreen = {
-                fullscreenId = stream.id
-                paneMenuFor = null
-            },
-            onSwap = {
-                swapMode = true
-                swapFirst = stream.id
-                paneMenuFor = null
-            },
             onVolume = { volumes[stream.id] = it },
             onRefresh = {
                 refreshTicks[stream.id] = (refreshTicks[stream.id] ?: 0) + 1
@@ -734,8 +725,6 @@ private fun SavedLayoutsMenu(
 private fun PaneMenu(
     stream: MultiViewStream,
     currentVolume: Int?,
-    onFullscreen: () -> Unit,
-    onSwap: () -> Unit,
     onVolume: (Int) -> Unit,
     onRefresh: () -> Unit,
     onCloseWindow: () -> Unit,
@@ -758,11 +747,9 @@ private fun PaneMenu(
             Text("Window controls", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
             Spacer(Modifier.height(4.dp))
             Button(
-                onClick = onFullscreen,
+                onClick = onRefresh,
                 modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
-            ) { Text("Fullscreen") }
-            Button(onClick = onSwap, modifier = Modifier.fillMaxWidth()) { Text("Swap with another window") }
-            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text("Refresh stream") }
+            ) { Text("Refresh stream") }
             Text("Volume", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary, modifier = Modifier.padding(top = 4.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf(0, 20, 40, 60, 80, 100).forEach { level ->
@@ -782,6 +769,14 @@ private fun PaneMenu(
         }
     }
 }
+
+/** Which window a pane's D-pad directions lead to. Null means there is no window that way. */
+private data class PaneNeighbors(
+    val up: FocusRequester? = null,
+    val down: FocusRequester? = null,
+    val left: FocusRequester? = null,
+    val right: FocusRequester? = null,
+)
 
 @Composable
 private fun MultiViewGrid(
@@ -803,7 +798,55 @@ private fun MultiViewGrid(
     onPaneFocused: (String) -> Unit,
 ) {
     val effective = effectiveLayout(layout, streams.size)
-    val pane: @Composable (MultiViewStream, Modifier, Boolean) -> Unit = { stream, modifier, topRow ->
+    val focuses = streams.map { paneFocuses.getOrPut(it.id) { FocusRequester() } }
+    // Explicit D-pad targets, built from the same slots the panes are laid out in. The floating
+    // control bar covers the top of the players, so spatial focus search could not reliably find
+    // the second/third/fourth window; every direction is mapped here instead.
+    val neighbors: List<PaneNeighbors> = when (effective) {
+        MultiViewLayout.SIDE_BY_SIDE -> streams.indices.map { i ->
+            PaneNeighbors(
+                up = upFocus,
+                left = focuses.getOrNull(i - 1),
+                right = focuses.getOrNull(i + 1),
+            )
+        }
+        MultiViewLayout.FOCUS_CORNER -> streams.indices.map { i ->
+            if (i == 0) {
+                PaneNeighbors(up = upFocus, right = focuses.getOrNull(1))
+            } else {
+                PaneNeighbors(
+                    up = if (i == 1) upFocus else focuses.getOrNull(i - 1),
+                    down = focuses.getOrNull(i + 1),
+                    left = focuses.getOrNull(0),
+                )
+            }
+        }
+        MultiViewLayout.AUTO, MultiViewLayout.GRID -> {
+            val slots = slotsFor(effective, streams.size)
+            streams.indices.map { index ->
+                val slot = slots.firstOrNull { it.index == index }
+                if (slot == null) {
+                    PaneNeighbors(up = upFocus)
+                } else {
+                    val row = slots.filter { it.row == slot.row }.sortedBy { it.col }
+                    val position = row.indexOfFirst { it.index == index }
+                    val above = slots.filter { it.row == slot.row - 1 && it.overlaps(slot) }
+                        .minByOrNull { it.col }
+                    val below = slots.filter { it.row == slot.row + 1 && it.overlaps(slot) }
+                        .minByOrNull { it.col }
+                    PaneNeighbors(
+                        up = if (slot.row == 0) upFocus else focuses.getOrNull(above?.index ?: -1),
+                        down = focuses.getOrNull(below?.index ?: -1),
+                        left = focuses.getOrNull(row.getOrNull(position - 1)?.index ?: -1),
+                        right = focuses.getOrNull(row.getOrNull(position + 1)?.index ?: -1),
+                    )
+                }
+            }
+        }
+    }
+    val pane: @Composable (Int, Modifier) -> Unit = { index, modifier ->
+        val stream = streams[index]
+        val n = neighbors.getOrNull(index) ?: PaneNeighbors(up = upFocus)
         Box(modifier) {
             MultiViewPane(
                 stream = stream,
@@ -813,8 +856,11 @@ private fun MultiViewGrid(
                 swapMarked = swapMode && swapFirst == stream.id,
                 refreshTick = refreshTicks[stream.id] ?: 0,
                 showInfo = showInfo,
-                focusRequester = paneFocuses.getOrPut(stream.id) { FocusRequester() },
-                upFocus = if (topRow) upFocus else null,
+                focusRequester = focuses.getOrNull(index),
+                upFocus = n.up,
+                downFocus = n.down,
+                leftFocus = n.left,
+                rightFocus = n.right,
                 onFocused = { onPaneFocused(stream.id) },
                 onClick = { onPaneClick(stream.id) },
                 onDoubleClick = if (swapMode) null else { { onPaneDoubleClick(stream.id) } },
@@ -823,29 +869,20 @@ private fun MultiViewGrid(
         }
     }
     when (effective) {
-        MultiViewLayout.SIDE_BY_SIDE, MultiViewLayout.ROW -> {
+        MultiViewLayout.SIDE_BY_SIDE -> {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                streams.forEach { stream -> pane(stream, Modifier.weight(1f).fillMaxHeight(), true) }
-            }
-        }
-        MultiViewLayout.COLUMN -> {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                streams.forEachIndexed { index, stream ->
-                    pane(stream, Modifier.weight(1f).fillMaxWidth(), index == 0)
-                }
+                streams.indices.forEach { index -> pane(index, Modifier.weight(1f).fillMaxHeight()) }
             }
         }
         MultiViewLayout.FOCUS_CORNER -> {
-            val main = streams.firstOrNull()
-            val rest = streams.drop(1)
-            if (rest.isEmpty()) {
-                main?.let { pane(it, Modifier.fillMaxSize(), true) }
+            if (streams.size <= 1) {
+                streams.firstOrNull()?.let { pane(0, Modifier.fillMaxSize()) }
             } else {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    main?.let { pane(it, Modifier.weight(0.68f).fillMaxHeight(), true) }
+                    pane(0, Modifier.weight(0.68f).fillMaxHeight())
                     Column(Modifier.weight(0.32f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        rest.forEachIndexed { index, stream ->
-                            pane(stream, Modifier.weight(1f).fillMaxWidth(), index == 0)
+                        for (index in 1 until streams.size) {
+                            pane(index, Modifier.weight(1f).fillMaxWidth())
                         }
                     }
                 }
@@ -858,9 +895,8 @@ private fun MultiViewGrid(
                 repeat(rows) { rowIndex ->
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         slots.filter { it.row == rowIndex }.sortedBy { it.col }.forEach { slot ->
-                            val stream = streams.getOrNull(slot.index)
-                            if (stream != null) {
-                                pane(stream, Modifier.weight(slot.colSpan.toFloat()).fillMaxHeight(), slot.row == 0)
+                            if (streams.getOrNull(slot.index) != null) {
+                                pane(slot.index, Modifier.weight(slot.colSpan.toFloat()).fillMaxHeight())
                             }
                         }
                     }
@@ -869,6 +905,10 @@ private fun MultiViewGrid(
         }
     }
 }
+
+/** Whether two grid slots share a column, so one is directly above/below the other. */
+private fun MultiViewSlot.overlaps(other: MultiViewSlot): Boolean =
+    col < other.col + other.colSpan && other.col < col + colSpan
 
 /** One window's place in a grid: which row/column it starts in and how many columns it spans. */
 private data class MultiViewSlot(val index: Int, val row: Int, val col: Int, val colSpan: Int = 1)
@@ -922,8 +962,6 @@ private fun layoutLabel(layout: MultiViewLayout): String = when (layout) {
     MultiViewLayout.AUTO -> "Auto"
     MultiViewLayout.SIDE_BY_SIDE -> "Side by side"
     MultiViewLayout.GRID -> "Grid"
-    MultiViewLayout.ROW -> "Row"
-    MultiViewLayout.COLUMN -> "Column"
     MultiViewLayout.FOCUS_CORNER -> "Focus + corner"
 }
 
@@ -983,6 +1021,9 @@ private fun MultiViewPane(
     showInfo: Boolean = true,
     focusRequester: FocusRequester? = null,
     upFocus: FocusRequester? = null,
+    downFocus: FocusRequester? = null,
+    leftFocus: FocusRequester? = null,
+    rightFocus: FocusRequester? = null,
     onFocused: (() -> Unit)? = null,
     onClick: () -> Unit,
     onDoubleClick: (() -> Unit)? = null,
@@ -1092,11 +1133,22 @@ private fun MultiViewPane(
                 if (it.isFocused) onFocused?.invoke()
             }
             .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown &&
-                    event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP &&
-                    upFocus != null
-                ) {
-                    runCatching { upFocus.requestFocus() }.isSuccess
+                if (event.type == KeyEventType.KeyDown) {
+                    when (event.nativeKeyEvent.keyCode) {
+                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                            if (upFocus != null) runCatching { upFocus.requestFocus() }.isSuccess else true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (downFocus != null) runCatching { downFocus.requestFocus() }.isSuccess else true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                            if (leftFocus != null) runCatching { leftFocus.requestFocus() }.isSuccess else true
+                        }
+                        AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (rightFocus != null) runCatching { rightFocus.requestFocus() }.isSuccess else true
+                        }
+                        else -> longPressTracker.handle(event.nativeKeyEvent, ::isSelectKey) { onLongPress() }
+                    }
                 } else {
                     longPressTracker.handle(event.nativeKeyEvent, ::isSelectKey) { onLongPress() }
                 }

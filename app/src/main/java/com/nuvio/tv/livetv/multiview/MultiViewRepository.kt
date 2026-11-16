@@ -20,21 +20,16 @@ enum class MultiViewLayout {
     AUTO,
     SIDE_BY_SIDE,
     GRID,
-    ROW,
-    COLUMN,
     FOCUS_CORNER,
 }
 
 fun availableMultiViewLayouts(count: Int): List<MultiViewLayout> = when (count) {
     0, 1 -> listOf(MultiViewLayout.AUTO)
     2 -> listOf(MultiViewLayout.AUTO, MultiViewLayout.SIDE_BY_SIDE, MultiViewLayout.FOCUS_CORNER)
-    3 -> listOf(MultiViewLayout.AUTO, MultiViewLayout.GRID, MultiViewLayout.FOCUS_CORNER, MultiViewLayout.ROW, MultiViewLayout.COLUMN)
     else -> listOf(
         MultiViewLayout.AUTO,
         MultiViewLayout.GRID,
         MultiViewLayout.FOCUS_CORNER,
-        MultiViewLayout.ROW,
-        MultiViewLayout.COLUMN,
     )
 }
 
