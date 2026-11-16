@@ -148,6 +148,8 @@ fun LiveTvMultiViewScreen(
     // Whether the shortcut that revealed the bar also moves focus into it. OK on a window keeps
     // the remote on that window (double-OK is fullscreen); any other key brings the bar up.
     var focusBarOnShow by remember { mutableStateOf(true) }
+    // True while the remote is on one of the floating bar's buttons.
+    var barHasFocus by remember { mutableStateOf(false) }
 
     // Windows fill the screen after five seconds without a key; any key brings the bars back.
     LaunchedEffect(showControls, controlsTick, showPicker, showLayouts, showSavedLayouts, paneMenuFor, swapMode) {
@@ -275,6 +277,16 @@ fun LiveTvMultiViewScreen(
                         if (keepOnWindow) return@onPreviewKeyEvent false
                         return@onPreviewKeyEvent true
                     }
+                    // The bar floats over the players, so let Down hand the remote straight to
+                    // the first window (or the fullscreen one) from any bar button.
+                    if (barHasFocus &&
+                        event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
+                    ) {
+                        val target = if (fullscreenId != null) fullscreenFocus else firstPaneFocus
+                        if (target != null && runCatching { target.requestFocus() }.isSuccess) {
+                            return@onPreviewKeyEvent true
+                        }
+                    }
                 }
                 false
             }
@@ -352,6 +364,7 @@ fun LiveTvMultiViewScreen(
                 pauseAll = pauseAll,
                 firstFocus = controlsFocus,
                 downFocus = if (fullscreenStream != null) fullscreenFocus else firstPaneFocus,
+                onBarFocus = { barHasFocus = it },
                 onLayout = { showLayouts = true },
                 onSaved = { showSavedLayouts = true },
                 onSwap = {
@@ -518,6 +531,7 @@ private fun MultiViewControlBar(
     pauseAll: Boolean,
     firstFocus: FocusRequester,
     downFocus: FocusRequester? = null,
+    onBarFocus: (Boolean) -> Unit = {},
     onLayout: () -> Unit,
     onSaved: () -> Unit,
     onSwap: () -> Unit,
@@ -556,18 +570,21 @@ private fun MultiViewControlBar(
             MultiViewBarButton(
                 label = layoutLabel(layout),
                 downFocus = downFocus,
+                onBarFocus = onBarFocus,
                 icon = Icons.Default.GridView,
                 onClick = onLayout,
                 enabled = streamCount >= 2,
                 modifier = Modifier.focusRequester(firstFocus),
             )
         }
-        item { MultiViewBarButton("Saved", Icons.Default.Bookmarks, onSaved, downFocus = downFocus, enabled = streamCount > 0) }
+        item { MultiViewBarButton("Saved", Icons.Default.Bookmarks, onSaved, downFocus = downFocus,
+                onBarFocus = onBarFocus, enabled = streamCount > 0) }
         item {
             MultiViewBarButton(
                 label = "Swap",
                 icon = Icons.Default.SwapHoriz,
                 downFocus = downFocus,
+                onBarFocus = onBarFocus,
                 onClick = onSwap,
                 enabled = streamCount >= 2,
                 selected = swapMode,
@@ -578,6 +595,7 @@ private fun MultiViewControlBar(
                 label = if (soundAll) "All sound" else "One sound",
                 icon = if (soundAll) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
                 downFocus = downFocus,
+                onBarFocus = onBarFocus,
                 onClick = onSound,
             )
         }
@@ -586,20 +604,22 @@ private fun MultiViewControlBar(
                 label = if (pauseAll) "Resume all" else "Pause all",
                 icon = if (pauseAll) Icons.Default.PlayArrow else Icons.Default.Pause,
                 downFocus = downFocus,
+                onBarFocus = onBarFocus,
                 onClick = onPause,
             )
         }
-        item { MultiViewBarButton("Refresh", Icons.Default.Refresh, onRefresh, downFocus = downFocus) }
+        item { MultiViewBarButton("Refresh", Icons.Default.Refresh, onRefresh, downFocus = downFocus, onBarFocus = onBarFocus) }
         item {
             MultiViewBarButton(
                 label = "Add channel",
                 icon = Icons.Default.Add,
                 downFocus = downFocus,
+                onBarFocus = onBarFocus,
                 onClick = onAdd,
                 enabled = streamCount < MultiViewRepository.MAX_STREAMS,
             )
         }
-        item { MultiViewBarButton("Clear", Icons.Default.DeleteSweep, onClear, downFocus = downFocus) }
+        item { MultiViewBarButton("Clear", Icons.Default.DeleteSweep, onClear, downFocus = downFocus, onBarFocus = onBarFocus) }
     }
 }
 
@@ -613,11 +633,13 @@ private fun MultiViewBarButton(
     enabled: Boolean = true,
     selected: Boolean = false,
     downFocus: FocusRequester? = null,
+    onBarFocus: (Boolean) -> Unit = {},
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier
+            .onFocusChanged { onBarFocus(it.isFocused) }
             .onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown &&
                     event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
