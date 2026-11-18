@@ -43,6 +43,8 @@ class UpdateInstallResultReceiver : BroadcastReceiver() {
                     }
                 }
             }
+            // The user declined the install or the session was abandoned on purpose: don't ask again.
+            PackageInstaller.STATUS_FAILURE_ABORTED -> Unit
             else -> retryAfterFailure(context, apkFile, background, withDexMetadata)
         }
     }
