@@ -194,6 +194,8 @@ private fun LayoutSectionContent(
             onConfigureBadges = viewModel::startStreamBadgeQrMode,
             onShowInPlayerChange = viewModel::setShowBadgesInPlayer,
             onPlayerBadgeSourceSelected = viewModel::setPlayerBadgeSource,
+            onAddBadgePack = viewModel::addBadgePack,
+            onRemoveBadgePack = viewModel::removeBadgePack,
             configureBadgesFocusRequester = streamBadgeQrFocusRequester
         )
     }

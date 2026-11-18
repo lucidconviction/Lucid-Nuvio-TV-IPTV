@@ -10,6 +10,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
 import com.nuvio.tv.core.server.DeviceIpAddress
 import com.nuvio.tv.core.server.StreamBadgeConfigServer
+import com.nuvio.tv.core.streams.StreamBadgePacks
 import com.nuvio.tv.core.streams.StreamBadgePlacement
 import com.nuvio.tv.core.streams.StreamBadgeRules
 import com.nuvio.tv.core.sync.HomeCatalogSettingsSyncService
@@ -568,6 +569,23 @@ class LayoutSettingsViewModel @Inject constructor(
 
     fun setPlayerBadgeSource(source: String) {
         viewModelScope.launch { streamBadgeSettingsDataStore.setPlayerBadgeSource(source) }
+    }
+
+    fun addBadgePack(packId: String) {
+        val pack = StreamBadgePacks.all.firstOrNull { it.id == packId } ?: return
+        val rules = _streamBadgeUiState.value.settings.rules
+        viewModelScope.launch { streamBadgeSettingsDataStore.setStreamBadgeRules(rules.upsert(pack.toImport())) }
+    }
+
+    fun removeBadgePack(packId: String) {
+        val pack = StreamBadgePacks.all.firstOrNull { it.id == packId } ?: return
+        val settings = _streamBadgeUiState.value.settings
+        viewModelScope.launch {
+            streamBadgeSettingsDataStore.setStreamBadgeRules(settings.rules.removeSource(pack.sourceUrl))
+            if (settings.playerBadgeSource.equals(pack.sourceUrl, ignoreCase = true)) {
+                streamBadgeSettingsDataStore.setPlayerBadgeSource("")
+            }
+        }
     }
 
     fun setStreamBadgePlacement(placement: StreamBadgePlacement) {

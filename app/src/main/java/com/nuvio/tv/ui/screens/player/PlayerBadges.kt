@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.nuvio.tv.core.streams.StreamBadgeMatcher
 import com.nuvio.tv.domain.model.StreamBadge
 import com.nuvio.tv.ui.components.StreamImportedBadgeChip
+import com.nuvio.tv.ui.components.StreamTextBadgeChip
 import com.nuvio.tv.ui.util.languageCodeToName
 
 @Composable
@@ -48,7 +49,7 @@ internal fun rememberPlayerBadges(viewModel: PlayerViewModel, uiState: PlayerUiS
     val playbackCandidate = refinePlaybackText(text, metaCandidates).takeIf { it.isNotBlank() }
     return remember(playbackCandidate, metaCandidates, filters) {
         StreamBadgeMatcher.matchedPlayerBadges(playbackCandidate, metaCandidates, filters)
-            .filter { it.imageURL.isNotBlank() }
+            .filter { it.imageURL.isNotBlank() || it.name.isNotBlank() }
     }
 }
 
@@ -58,7 +59,15 @@ internal fun PlayerBadges(
     modifier: Modifier = Modifier
 ) {
     Layout(
-        content = { badges.forEach { StreamImportedBadgeChip(badge = it) } },
+        content = {
+            badges.forEach { badge ->
+                if (badge.imageURL.isBlank()) {
+                    StreamTextBadgeChip(badge = badge)
+                } else {
+                    StreamImportedBadgeChip(badge = badge)
+                }
+            }
+        },
         modifier = modifier
     ) { measurables, constraints ->
         val gap = 4.dp.roundToPx()

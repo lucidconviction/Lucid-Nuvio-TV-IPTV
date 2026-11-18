@@ -1,5 +1,8 @@
 package com.nuvio.tv.ui.screens.settings
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,9 +16,12 @@ import androidx.compose.ui.unit.dp
 import com.nuvio.tv.R
 import com.nuvio.tv.core.build.AppFeaturePolicy
 import com.nuvio.tv.core.streams.STREAM_BADGE_IMPORT_LIMIT
+import com.nuvio.tv.core.streams.StreamBadgePacks
 import com.nuvio.tv.core.streams.StreamBadgePlacement
 import com.nuvio.tv.domain.model.DetailImdbRatingsVisibility
 import com.nuvio.tv.domain.model.EpisodeOptionsOverlayStyle
+import com.nuvio.tv.ui.components.NuvioDialog
+import com.nuvio.tv.ui.theme.NuvioTheme
 
 @Composable
 internal fun LayoutDetailPageSection(
@@ -155,10 +161,13 @@ internal fun LayoutStreamsSection(
     onConfigureBadges: () -> Unit,
     onShowInPlayerChange: (Boolean) -> Unit,
     onPlayerBadgeSourceSelected: (String) -> Unit,
+    onAddBadgePack: (String) -> Unit,
+    onRemoveBadgePack: (String) -> Unit,
     configureBadgesFocusRequester: FocusRequester
 ) {
     var showPositionDialog by rememberSaveable { mutableStateOf(false) }
     var showPlayerBadgesDialog by rememberSaveable { mutableStateOf(false) }
+    var showBadgePacksDialog by rememberSaveable { mutableStateOf(false) }
 
     SettingsSectionLabel(text = stringResource(R.string.settings_stream_badges_section))
     SettingsToggleRow(
@@ -178,6 +187,11 @@ internal fun LayoutStreamsSection(
         subtitle = streamBadgeRulesPreview(streamBadgeUiState),
         onClick = onConfigureBadges,
         modifier = Modifier.focusRequester(configureBadgesFocusRequester)
+    )
+    SettingsActionRow(
+        title = stringResource(R.string.settings_stream_badge_packs_title),
+        subtitle = badgePacksLabel(streamBadgeUiState),
+        onClick = { showBadgePacksDialog = true }
     )
     SettingsToggleRow(
         title = stringResource(R.string.settings_stream_badges_in_player_title),
@@ -201,6 +215,15 @@ internal fun LayoutStreamsSection(
         checked = streamBadgeUiState.showAddonLogo,
         onToggle = { onShowAddonLogoChange(!streamBadgeUiState.showAddonLogo) }
     )
+
+    if (showBadgePacksDialog) {
+        BadgePacksDialog(
+            streamBadgeUiState = streamBadgeUiState,
+            onAdd = onAddBadgePack,
+            onRemove = onRemoveBadgePack,
+            onDismiss = { showBadgePacksDialog = false }
+        )
+    }
 
     if (showPlayerBadgesDialog) {
         PlayerBadgesDialog(
@@ -248,6 +271,58 @@ private fun streamBadgePlacementLabel(placement: StreamBadgePlacement): String =
         StreamBadgePlacement.TOP -> stringResource(R.string.settings_stream_badge_position_top)
         StreamBadgePlacement.BOTTOM -> stringResource(R.string.settings_stream_badge_position_bottom)
     }
+
+@Composable
+private fun badgePacksLabel(uiState: StreamBadgeSettingsUiState): String {
+    val added = uiState.rules.normalized().imports
+        .mapNotNull { StreamBadgePacks.packFor(it.sourceUrl) }
+    return if (added.isEmpty()) {
+        stringResource(R.string.settings_stream_badge_packs_description)
+    } else {
+        added.joinToString(", ") { it.name }
+    }
+}
+
+@Composable
+private fun BadgePacksDialog(
+    streamBadgeUiState: StreamBadgeSettingsUiState,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val addedUrls = streamBadgeUiState.rules.normalized().imports.map { it.sourceUrl.lowercase() }.toSet()
+    val atLimit = addedUrls.size >= STREAM_BADGE_IMPORT_LIMIT
+    NuvioDialog(onDismiss = onDismiss, title = stringResource(R.string.settings_stream_badge_packs_title)) {
+        Text(
+            text = stringResource(R.string.settings_stream_badge_packs_dialog_description),
+            color = NuvioTheme.colors.TextSecondary
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xs)) {
+            StreamBadgePacks.all.forEach { pack ->
+                val added = pack.sourceUrl.lowercase() in addedUrls
+                SettingsActionRow(
+                    title = pack.name,
+                    subtitle = pack.description,
+                    value = if (added) {
+                        stringResource(R.string.settings_stream_badge_packs_added)
+                    } else {
+                        stringResource(R.string.settings_stream_badge_packs_add)
+                    },
+                    enabled = added || !atLimit,
+                    onClick = {
+                        if (added) onRemove(pack.id) else onAdd(pack.id)
+                    }
+                )
+            }
+        }
+        if (atLimit) {
+            Text(
+                text = stringResource(R.string.settings_stream_badge_packs_limit, STREAM_BADGE_IMPORT_LIMIT),
+                color = NuvioTheme.colors.TextTertiary
+            )
+        }
+    }
+}
 
 @Composable
 private fun playerBadgesLabel(uiState: StreamBadgeSettingsUiState): String =
