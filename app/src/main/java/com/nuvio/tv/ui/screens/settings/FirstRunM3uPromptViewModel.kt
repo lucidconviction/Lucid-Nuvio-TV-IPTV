@@ -7,6 +7,7 @@ import com.nuvio.tv.livetv.data.LiveTvPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -35,6 +36,8 @@ class FirstRunM3uPromptViewModel @Inject constructor(
         viewModelScope.launch {
             // Wait for the onboarding screen to be finished; the prompt must not sit over it.
             onboarding.hasSeenAuthQrOnFirstLaunch.first { it }
+            // Give a profile/cloud restore a moment to bring playlists in before offering setup.
+            delay(1_500L)
             val hasSeenPrompt = onboarding.hasSeenM3uPrompt.first()
             val hasPlaylists = liveTvPreferences.playlists.first().isNotEmpty()
             evaluated = true
