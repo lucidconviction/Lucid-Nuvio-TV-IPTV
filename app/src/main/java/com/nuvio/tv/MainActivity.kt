@@ -1514,11 +1514,6 @@ open class MainActivity : ComponentActivity() {
                     }
                     if (splashAlpha > 0f) {
                         com.nuvio.tv.ui.components.StartupSplashScreen(
-                            profileColorHex = splashBackground.profileColorHex,
-                            profileBackgroundUrl = splashBackground.backgroundUrl,
-                            backgroundCacheKey = splashBackground.backgroundCacheKey,
-                            skipGradient = splashBackground.skipGradient,
-                            brandWordmarkRes = splashBackground.brandWordmarkRes,
                             modifier = Modifier.graphicsLayer { alpha = splashAlpha }
                         )
                     }
