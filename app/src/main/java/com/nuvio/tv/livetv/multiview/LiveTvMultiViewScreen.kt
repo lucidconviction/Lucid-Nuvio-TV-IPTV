@@ -101,6 +101,21 @@ import kotlin.math.ceil
 private const val AUTO_REFRESH_BUFFER_MS = 15_000L
 private const val AUTO_REFRESH_STALL_MS = 30_000L
 
+/** Key repeats come about every 50 ms; a longer pause after a picker closed means OK was let go. */
+private const val OK_LEFTOVER_GAP_MS = 300L
+
+private fun isSelectKeyCode(code: Int): Boolean =
+    code == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+        code == AndroidKeyEvent.KEYCODE_ENTER ||
+        code == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+
+/** A menu opened with OK must not act on the repeats while the key is still held. */
+private fun Modifier.swallowHeldSelect(): Modifier = onPreviewKeyEvent { event ->
+    event.type == KeyEventType.KeyDown &&
+        event.nativeKeyEvent.repeatCount > 0 &&
+        isSelectKeyCode(event.nativeKeyEvent.keyCode)
+}
+
 /**
  * Up to four live channels at once. The quick Multi-view button in the player adds the channel
  * on screen; the picker adds more from Favorites, Recently watched and the channel list.
@@ -145,6 +160,9 @@ fun LiveTvMultiViewScreen(
     var focusBarNext by remember { mutableStateOf(false) }
     // Whether the players (rather than the floating bar) have the remote, for the window ring.
     var playersHaveFocus by remember { mutableStateOf(false) }
+    // A picker/menu that just closed on OK: its held repeats must not reach the pane or bar.
+    var overlayWasOpen by remember { mutableStateOf(false) }
+    var overlayClosedAt by remember { mutableLongStateOf(0L) }
     // Down from the bar moves focus to the players, and the same key is then delivered to the
     // player area. Skip that second delivery so the selection does not also move a row.
     var skipDirection by remember { mutableStateOf(false) }
@@ -171,6 +189,16 @@ fun LiveTvMultiViewScreen(
     // Fullscreen follows the window that was opened.
     LaunchedEffect(fullscreenId) {
         if (fullscreenId != null) selectedId = fullscreenId
+    }
+    // Remember when a picker/menu closes, so the tail of the OK press that closed it is ignored.
+    LaunchedEffect(showPicker, showLayouts, showSavedLayouts, paneMenuFor) {
+        val open = showPicker || showLayouts || showSavedLayouts || paneMenuFor != null
+        if (open) {
+            overlayWasOpen = true
+        } else if (overlayWasOpen) {
+            overlayWasOpen = false
+            overlayClosedAt = SystemClock.uptimeMillis()
+        }
     }
     // If the key is not delivered again, don't leave the one-shot skip armed.
     LaunchedEffect(skipDirection) {
@@ -283,11 +311,23 @@ fun LiveTvMultiViewScreen(
     Box(
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent { event ->
+                val code = event.nativeKeyEvent.keyCode
+                // A picker/menu closed on OK: swallow the rest of that press until it is released.
+                // A fresh press more than 300 ms later goes through normally.
+                if (isSelectCode(code) && overlayClosedAt > 0L) {
+                    val native = event.nativeKeyEvent
+                    val newPress = event.type == KeyEventType.KeyDown &&
+                        native.repeatCount == 0 &&
+                        native.eventTime - overlayClosedAt > OK_LEFTOVER_GAP_MS
+                    if (!newPress) {
+                        overlayClosedAt = if (event.type == KeyEventType.KeyUp) 0L else native.eventTime
+                        return@onPreviewKeyEvent true
+                    }
+                    overlayClosedAt = 0L
+                }
                 if (event.type == KeyEventType.KeyDown) {
                     controlsTick++
-                    if (!playersHaveFocus &&
-                        event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
-                    ) {
+                    if (!playersHaveFocus && code == AndroidKeyEvent.KEYCODE_DPAD_DOWN) {
                         skipDirection = true
                     }
                 }
@@ -733,7 +773,7 @@ private fun SavedLayoutsMenu(
         runCatching { firstFocus.requestFocus() }
     }
     val saved = MultiViewSavedLayouts.saved
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)).swallowHeldSelect(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.width(520.dp).fillMaxHeight(0.8f)
                 .glassSurface(RoundedCornerShape(18.dp))
@@ -807,7 +847,7 @@ private fun PaneMenu(
         delay(80)
         runCatching { firstFocus.requestFocus() }
     }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)).swallowHeldSelect(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.width(360.dp)
                 .glassSurface(RoundedCornerShape(18.dp))
@@ -1038,7 +1078,7 @@ private fun LayoutMenu(
         delay(80)
         runCatching { firstFocus.requestFocus() }
     }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.TopStart) {
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)).swallowHeldSelect(), contentAlignment = Alignment.TopStart) {
         Column(
             Modifier.padding(start = 34.dp, top = 150.dp).width(330.dp)
                 .glassSurface(RoundedCornerShape(18.dp))
