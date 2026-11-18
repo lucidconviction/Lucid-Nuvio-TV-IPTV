@@ -18,6 +18,7 @@ import com.nuvio.tv.domain.model.normalizeLanguageCode
 import com.nuvio.tv.domain.model.countryToLanguageCode
 import com.nuvio.tv.ui.util.parseEpisodeReleaseDate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -387,6 +388,12 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                         runCatching { cwEnrichmentCache.getInProgressSnapshot() }.getOrDefault(emptyList())
                     }
                     nextUpDeferred.await() to inProgressDeferred.await()
+                }
+                if (cwNoNextUpSeedsProfileId != pipelineProfileId) {
+                    val storedNoNextUp = runCatching { cwEnrichmentCache.getNoNextUpSeeds() }.getOrDefault(emptyMap())
+                    cwNoNextUpSeeds.clear()
+                    cwNoNextUpSeeds.putAll(storedNoNextUp)
+                    cwNoNextUpSeedsProfileId = pipelineProfileId
                 }
                 // Build enrichment lookup from cached snapshots (replaces old CwEnrichmentEntry)
                 val cachedEnrichmentFromInProgress = cachedInProgress.associateBy { it.contentId }
@@ -1389,7 +1396,10 @@ private suspend fun HomeViewModel.buildLightweightNextUpItems(
     onPartialUpdate: suspend (List<ContinueWatchingItem.NextUp>) -> Unit = {}
 ): List<ContinueWatchingItem.NextUp> = coroutineScope {
     // Move seed filtering/grouping/sorting off the main thread.
+    val noNextUpBefore = cwNoNextUpSeeds.toMap()
+    val skippedNoNextUpIds = mutableSetOf<String>()
     val (latestCompletedBySeries, inProgressIds) = withContext(Dispatchers.Default) {
+        val nowMs = System.currentTimeMillis()
         val latestCompletedByContent = allProgress
             .asSequence()
             .filter { isSeriesTypeCW(it.contentType) }
@@ -1453,7 +1463,15 @@ private suspend fun HomeViewModel.buildLightweightNextUpItems(
                 val inCache = synchronized(cwNextUpResolutionCache) {
                     cwNextUpResolutionCache.containsKey(cacheKey)
                 }
-                if (!inCache) return@filter true // cache miss — seed changed or first time
+                if (!inCache) {
+                    // An earlier launch found no episode after this seed, so it is not looked
+                    // up on every launch. The key holds the seed, so watching on is never skipped.
+                    if (isNoNextUpStillConfirmed(noNextUpBefore[cacheKey], nowMs)) {
+                        skippedNoNextUpIds += progress.contentId
+                        return@filter false
+                    }
+                    return@filter true // cache miss — seed changed or first time
+                }
                 val cachedValue = synchronized(cwNextUpResolutionCache) {
                     cwNextUpResolutionCache[cacheKey]
                 }
@@ -1499,17 +1517,22 @@ private suspend fun HomeViewModel.buildLightweightNextUpItems(
                     // remove from processedContentIds so this series is NOT
                     // treated as "rejected". The cached CW snapshot will keep
                     // it visible until the next successful meta resolution.
-                    val metaResolved = synchronized(cwMetaCache) {
+                    val seedMeta = synchronized(cwMetaCache) {
                         cwMetaCache["${progress.contentType}:${progress.contentId}"]
                             ?: cwMetaCache["series:${progress.contentId}"]
                             ?: cwMetaCache["tv:${progress.contentId}"]
-                    } != null
+                    }
+                    val metaResolved = seedMeta != null
                     if (!metaResolved) {
                         processedContentIds.remove(progress.contentId)
+                    } else {
+                        cwNoNextUpSeeds[buildNextUpSeedCacheKey(progress, showUnairedNextUp)] =
+                            noNextUpRecheckAt(seedMeta?.earliestRevalidationMs(), System.currentTimeMillis())
                     }
                     logNextUpDecision("drop contentId=${progress.contentId} name=${progress.name} reason=buildNextUpItem-null metaResolved=$metaResolved")
                     return@withPermit
                 }
+                cwNoNextUpSeeds.remove(buildNextUpSeedCacheKey(progress, showUnairedNextUp))
                 val fullyWatched = fullyWatchedSeriesIds.fullyWatchedSeriesIds.value
                 if (progress.contentId in fullyWatched) {
                     // See [fullyWatchedNextUpAction] — never drop when a next episode exists.
@@ -1548,9 +1571,20 @@ private suspend fun HomeViewModel.buildLightweightNextUpItems(
     jobs.joinAll()
 
     // Store which contentIds were evaluated so olderToInclude can skip fully-watched series.
+    // Seeds skipped as confirmed without a next episode count as evaluated, so the older series
+    // scan does not look them up instead.
     synchronized(cwLastProcessedNextUpContentIds) {
         cwLastProcessedNextUpContentIds.clear()
         cwLastProcessedNextUpContentIds.addAll(processedContentIds)
+        cwLastProcessedNextUpContentIds.addAll(skippedNoNextUpIds)
+    }
+    val persistNowMs = System.currentTimeMillis()
+    cwNoNextUpSeeds.entries.removeIf { it.value <= persistNowMs }
+    val noNextUpAfter = cwNoNextUpSeeds.toMap()
+    if (noNextUpAfter != noNextUpBefore && cwNoNextUpSeedsProfileId == profileManager.activeProfileId.value) {
+        withContext(NonCancellable) {
+            runCatching { cwEnrichmentCache.saveNoNextUpSeeds(noNextUpAfter) }
+        }
     }
 
     nextUpByContent.values.toList()
