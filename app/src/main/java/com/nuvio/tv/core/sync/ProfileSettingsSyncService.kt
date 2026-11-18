@@ -15,6 +15,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.nuvio.tv.core.auth.AuthManager
 import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.data.local.ContinueWatchingEnrichmentCache
+import com.nuvio.tv.data.local.AmbientModeDataStore
 import com.nuvio.tv.data.local.ExperienceModeDataStore
 import com.nuvio.tv.data.local.PluginDataStore
 import com.nuvio.tv.data.local.ProfileDataStoreFactory
@@ -202,6 +203,7 @@ class ProfileSettingsSyncService @Inject constructor(
     private val syncedFeatures = listOf(
         "theme_settings",
         "layout_settings",
+        AmbientModeDataStore.FEATURE,
         ExperienceModeDataStore.FEATURE,
         PLAYER_SETTINGS_FEATURE,
         StreamBadgeSettingsDataStore.FEATURE,
