@@ -45,10 +45,19 @@ object MediaServerModule {
             version = BuildConfig.VERSION_NAME,
             deviceId = identity::currentClientId
         )
+        lateinit var repository: ServerRepository
+        val profileClientIdentity = ServerClientIdentity(
+            device = clientIdentity.device,
+            version = clientIdentity.version,
+            deviceId = { repository.profileDeviceId(identity.currentClientId()) }
+        )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val repository = ServerRepository(
+        repository = ServerRepository(
             persistence = persistence,
-            providers = listOf(JellyfinProvider(http, clientIdentity), EmbyProvider(http, clientIdentity)),
+            providers = listOf(
+                JellyfinProvider(http, profileClientIdentity),
+                EmbyProvider(http, profileClientIdentity)
+            ),
             scope = scope
         )
         scope.launch { profileDataStore.activeProfileId.collect(repository::selectProfile) }

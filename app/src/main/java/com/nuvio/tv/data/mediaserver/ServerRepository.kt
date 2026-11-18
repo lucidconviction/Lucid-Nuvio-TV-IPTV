@@ -63,6 +63,15 @@ class ServerRepository(
         ensureLoaded()
     }
 
+    /**
+     * Jellyfin/Emby revoke a user's previous token when they sign in from the same DeviceId, so
+     * every profile gets its own: the primary keeps the installation ID, others append -p<id>.
+     */
+    fun profileDeviceId(clientId: String): String {
+        val profileId = loadedProfileId ?: activeProfileId
+        return if (profileId == 1) clientId else "$clientId-p$profileId"
+    }
+
     fun connection(connectionId: String): ServerConnection? {
         ensureLoaded()
         return mutableState.value.connections.firstOrNull { it.id == connectionId }
