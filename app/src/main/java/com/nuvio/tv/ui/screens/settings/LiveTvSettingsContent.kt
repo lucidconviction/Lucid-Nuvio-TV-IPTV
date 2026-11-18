@@ -147,6 +147,7 @@ private val LocalLiveFlat = androidx.compose.runtime.compositionLocalOf { false 
 fun LiveTvSettingsScreen(
     onBack: () -> Unit = {},
     onOpenLucidStudio: () -> Unit = {},
+    openSources: Boolean = false,
     viewModel: LiveTvSettingsViewModel = hiltViewModel()
 ) {
     SettingsStandaloneScaffold(title = LIVE_TV_TITLE, subtitle = LIVE_TV_SUBTITLE) {
@@ -154,6 +155,7 @@ fun LiveTvSettingsScreen(
             viewModel = viewModel,
             page = LiveTvPage.ALL,
             onOpenLucidStudio = onOpenLucidStudio,
+            openSources = openSources,
         )
     }
 }
@@ -309,7 +311,8 @@ internal fun LiveTvSettingsContent(
     viewModel: LiveTvSettingsViewModel = hiltViewModel(),
     initialFocusRequester: FocusRequester? = null,
     page: LiveTvPage = LiveTvPage.ALL,
-    onOpenLucidStudio: () -> Unit = {}
+    onOpenLucidStudio: () -> Unit = {},
+    openSources: Boolean = false,
 ) {
     // HUB: one Live TV page with its own row of tabs; the tab picked is the page shown.
     val hub = page == LiveTvPage.HUB
@@ -338,7 +341,8 @@ internal fun LiveTvSettingsContent(
     fun update(t: (LiveTvSettings) -> LiveTvSettings) = viewModel.update(t)
 
     // Every section starts folded; OK on its header opens or closes it (not remembered).
-    var open by remember { mutableStateOf(setOf<String>()) }
+    // The first-run offer opens Playlists & Guides for the user.
+    var open by remember { mutableStateOf(if (openSources) setOf("sources") else setOf<String>()) }
     fun toggle(key: String) { open = if (key in open) open - key else open + key }
     /** Asks before doing something that can't simply be undone. */
     fun confirm(title: String, message: String, label: String, action: () -> Unit) {

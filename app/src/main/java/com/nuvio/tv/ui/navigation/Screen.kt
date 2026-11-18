@@ -156,7 +156,11 @@ sealed class Screen(val route: String) {
     data object YouTube : Screen("youtube")
     data object LiveTv : Screen("live_tv")
     data object LiveTvPlayer : Screen("live_tv_player")
-    data object LiveTvSettings : Screen("live_tv_settings")
+    data object LiveTvSettings : Screen("live_tv_settings") {
+        /** Opens Live TV settings with Playlists & Guides already expanded. */
+        fun createRoute(openSources: Boolean = false): String =
+            if (openSources) "$route?openSources=true" else route
+    }
     data object LucidTvStudio : Screen("lucid_tv_studio")
     data object OnDemand : Screen("on_demand")
     /** Live TV fork: recorded shows. */

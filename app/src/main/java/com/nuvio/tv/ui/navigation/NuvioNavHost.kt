@@ -89,6 +89,8 @@ fun NuvioNavHost(
     com.nuvio.tv.livetv.sync.CloudSyncHost()
     // Live TV fork: "Loading channels… / Importing movies…" pill while things download.
     com.nuvio.tv.livetv.ui.LiveTvLoadingHost(navController)
+    // Live TV fork: one-time offer to set up M3U playlists after onboarding.
+    com.nuvio.tv.ui.screens.settings.FirstRunM3uPromptHost(navController)
     // Live TV fork: Sports reminders and scoring alerts, on top of whatever screen you're on.
     com.nuvio.tv.livetv.sports.SportsHost(navController)
     // Live TV fork: pinned game scoreboards in the corner while something plays.
@@ -1654,10 +1656,19 @@ private fun PlaybackNavHost(
             }
         }
 
-        composable(Screen.LiveTvSettings.route) {
+        composable(
+            route = "${Screen.LiveTvSettings.route}?openSources={openSources}",
+            arguments = listOf(
+                navArgument("openSources") {
+                    type = NavType.BoolType
+                    defaultValue = false
+                }
+            )
+        ) { entry ->
             com.nuvio.tv.ui.screens.settings.LiveTvSettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenLucidStudio = { navController.navigate(Screen.LucidTvStudio.route) },
+                openSources = entry.arguments?.getBoolean("openSources") == true,
             )
         }
 

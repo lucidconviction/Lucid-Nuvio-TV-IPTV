@@ -25,14 +25,26 @@ class AppOnboardingDataStore @Inject constructor(
 ) {
     private val dataStore = context.appOnboardingDataStore
     private val hasSeenAuthQrOnFirstLaunchKey = booleanPreferencesKey("has_seen_auth_qr_on_first_launch")
+    private val hasSeenM3uPromptKey = booleanPreferencesKey("has_seen_m3u_prompt")
 
     val hasSeenAuthQrOnFirstLaunch: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[hasSeenAuthQrOnFirstLaunchKey] ?: false
     }
 
+    /** Whether the one-time "add M3U playlists?" prompt was shown or skipped. */
+    val hasSeenM3uPrompt: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[hasSeenM3uPromptKey] ?: false
+    }
+
     suspend fun setHasSeenAuthQrOnFirstLaunch(value: Boolean) {
         dataStore.edit { prefs ->
             prefs[hasSeenAuthQrOnFirstLaunchKey] = value
+        }
+    }
+
+    suspend fun setHasSeenM3uPrompt(value: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[hasSeenM3uPromptKey] = value
         }
     }
 }
