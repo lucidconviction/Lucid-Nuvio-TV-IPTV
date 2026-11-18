@@ -81,6 +81,7 @@ import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -109,6 +110,8 @@ fun HeroContentSection(
     isInLibrary: Boolean,
     onToggleLibrary: () -> Unit,
     onLibraryLongPress: () -> Unit,
+    rating: Double? = null,
+    onRateClick: (() -> Unit)? = null,
     isMovieWatched: Boolean,
     isMovieWatchedPending: Boolean,
     onToggleMovieWatched: () -> Unit,
@@ -285,6 +288,20 @@ fun HeroContentSection(
                             onLongPress = onLibraryLongPress,
                             onFocused = onHeroActionFocused
                         )
+
+                        if (onRateClick != null) {
+                            ActionIconButton(
+                                icon = Icons.Default.Star,
+                                contentDescription = rating?.let {
+                                    stringResource(R.string.rating_action_rated, it.toInt())
+                                } ?: stringResource(R.string.rating_action),
+                                onClick = onRateClick,
+                                selected = rating != null,
+                                selectedContainerColor = Color(0xFFFFC107),
+                                selectedContentColor = Color.Black,
+                                onFocused = onHeroActionFocused
+                            )
+                        }
 
                         // Live TV fork: the bell puts it on your Calendar (new episodes on Home).
                         com.nuvio.tv.livetv.calendar.rememberCalendarBell(meta)?.let { bell ->

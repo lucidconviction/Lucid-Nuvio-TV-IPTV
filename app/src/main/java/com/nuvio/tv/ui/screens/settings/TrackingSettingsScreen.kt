@@ -92,6 +92,7 @@ fun TrackingSettingsContent(
     var showWatchProgressDialog by remember { mutableStateOf(false) }
     var showDaysCapDialog by remember { mutableStateOf(false) }
     var showMoreLikeThisSourceDialog by remember { mutableStateOf(false) }
+    var showRatingSourceDialog by remember { mutableStateOf(false) }
     var showAnimeIdDialog by remember { mutableStateOf(false) }
     var showMdbListLibraryListsDialog by remember { mutableStateOf(false) }
 
@@ -101,6 +102,7 @@ fun TrackingSettingsContent(
         showWatchProgressDialog ||
         showDaysCapDialog ||
         showMoreLikeThisSourceDialog ||
+        showRatingSourceDialog ||
         showAnimeIdDialog ||
         showMdbListLibraryListsDialog
 
@@ -204,6 +206,9 @@ fun TrackingSettingsContent(
         onWatchProgressClick = {
             restoreFocusTarget = TrackingFocusTarget.WATCH_PROGRESS
             showWatchProgressDialog = true
+        },
+        onRatingSourceClick = {
+            showRatingSourceDialog = true
         },
         onContinueWatchingWindowClick = {
             restoreFocusTarget = TrackingFocusTarget.CONTINUE_WATCHING
@@ -350,6 +355,27 @@ fun TrackingSettingsContent(
         )
     }
 
+    if (showRatingSourceDialog) {
+        val options = listOf(
+            SettingsPickerOption<TrackingProviderId?>(null, stringResource(R.string.tracking_rating_source_off))
+        ) + trackingState.availableRatingSources.map { provider ->
+            SettingsPickerOption<TrackingProviderId?>(provider, trackingProviderLabel(provider))
+        }
+        SettingsSingleChoiceDialog(
+            title = stringResource(R.string.tracking_rating_source_dialog_title),
+            subtitle = stringResource(R.string.tracking_rating_source_dialog_subtitle),
+            options = options,
+            selectedValue = trackingState.ratingSource,
+            onOptionSelected = { source ->
+                trackingViewModel.selectRatingSource(source)
+                showRatingSourceDialog = false
+            },
+            onDismiss = { showRatingSourceDialog = false },
+            width = 620.dp,
+            maxHeight = 320.dp
+        )
+    }
+
     if (showWatchProgressDialog) {
         SettingsSingleChoiceDialog(
             title = stringResource(R.string.trakt_watch_progress_dialog_title),
@@ -486,6 +512,7 @@ internal fun TrackingSettingsOverview(
     onMdbListClick: () -> Unit,
     onLibrarySourceClick: () -> Unit,
     onWatchProgressClick: () -> Unit,
+    onRatingSourceClick: () -> Unit,
     onContinueWatchingWindowClick: () -> Unit,
     onCommentsChanged: (Boolean) -> Unit,
     onMoreLikeThisClick: () -> Unit,
@@ -585,6 +612,15 @@ internal fun TrackingSettingsOverview(
                                 .focusRequester(watchProgressFocusRequester)
                                 .testTag(TrackingSettingsTestTags.WATCH_PROGRESS_SOURCE)
                         )
+                        if (trackingState.availableRatingSources.isNotEmpty()) {
+                            SettingsActionRow(
+                                title = stringResource(R.string.tracking_rating_source_title),
+                                subtitle = stringResource(R.string.tracking_rating_source_subtitle),
+                                value = ratingSourceLabel(trackingState.ratingSource),
+                                enabled = trackingState.isReady,
+                                onClick = onRatingSourceClick
+                            )
+                        }
                         if (traktConnected || simklState.mode == SimklConnectionMode.CONNECTED) {
                             SettingsActionRow(
                                 title = stringResource(R.string.trakt_more_like_this_source_title),
@@ -817,4 +853,15 @@ internal object TrackingSettingsTestTags {
     const val CONTINUE_WATCHING = "tracking_trakt_continue_watching"
     const val COMMENTS = "tracking_trakt_comments"
     const val MORE_LIKE_THIS = "tracking_trakt_more_like_this"
+}
+
+
+@Composable
+private fun ratingSourceLabel(source: TrackingProviderId?): String =
+    source?.let { trackingProviderLabel(it) } ?: stringResource(R.string.tracking_rating_source_off)
+
+private fun trackingProviderLabel(provider: TrackingProviderId): String = when (provider) {
+    TrackingProviderId.TRAKT -> "Trakt"
+    TrackingProviderId.SIMKL -> "Simkl"
+    TrackingProviderId.MDBLIST -> "MDBList"
 }

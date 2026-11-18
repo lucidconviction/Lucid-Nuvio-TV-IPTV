@@ -1395,6 +1395,18 @@ private fun MetaDetailsContent(
     var showHeroPlayOptionsDialog by rememberSaveable(meta.id) { mutableStateOf(false) }
     var showSynopsisOverlay by rememberSaveable(meta.id) { mutableStateOf(false) }
     var showRandomEpisodeOverlay by rememberSaveable(meta.id) { mutableStateOf(false) }
+    val ratingViewModel: RatingViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val ratingReference = remember(meta.id, meta.apiType, meta.name, meta.releaseInfo) {
+        com.nuvio.tv.core.tracking.buildTrackingMediaReference(
+            contentType = meta.apiType,
+            parentMetaId = meta.id,
+            title = meta.name,
+            releaseInfo = meta.releaseInfo
+        )
+    }
+    LaunchedEffect(ratingReference) { ratingViewModel.bind(ratingReference) }
+    val ratingState by ratingViewModel.state.collectAsStateWithLifecycle()
+    var showRatingPanel by rememberSaveable(meta.id) { mutableStateOf(false) }
     var randomEpisodePlaybackPending by rememberSaveable(meta.id) { mutableStateOf(false) }
     var stoppingShuffle by remember(meta.id) { mutableStateOf(false) }
     val showRandomEpisodeButton = remember(randomEpisodeEnabled, isSeries, meta.videos, episodeShuffle.enabled) {
@@ -2490,6 +2502,12 @@ private fun MetaDetailsContent(
                         isInLibrary = isInLibrary,
                         onToggleLibrary = onToggleLibrary,
                         onLibraryLongPress = onLibraryLongPress,
+                        rating = ratingState.rating,
+                        onRateClick = if (ratingState.available) {
+                            { showRatingPanel = true }
+                        } else {
+                            null
+                        },
                         isMovieWatched = isMovieWatched,
                         isMovieWatchedPending = isMovieWatchedPending,
                         onToggleMovieWatched = onToggleMovieWatched,
@@ -3070,6 +3088,15 @@ private fun MetaDetailsContent(
                     onMarkPreviousSeasonsWatched(season)
                     seasonOptionsDialogSeason = null
                 }
+            )
+        }
+
+        if (showRatingPanel && ratingState.available) {
+            RatingPanel(
+                title = meta.name,
+                state = ratingState,
+                onRate = ratingViewModel::rate,
+                onDismiss = { showRatingPanel = false }
             )
         }
 
