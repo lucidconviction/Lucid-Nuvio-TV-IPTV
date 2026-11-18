@@ -182,6 +182,7 @@ private val CLOCK_SIZES = listOf("small" to "Small", "medium" to "Medium", "larg
 
 private sealed interface LiveDialog {
     data object AddM3u : LiveDialog
+    data object BrowseM3u : LiveDialog
     data object AddXtream : LiveDialog
     data object AddEpg : LiveDialog
     data class PlaylistActions(val source: PlaylistSource) : LiveDialog
@@ -494,6 +495,12 @@ internal fun LiveTvSettingsContent(
                         subtitle = "A channel list from the M3U link your provider gave you",
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddM3u }
+                    )
+                    SettingsActionRow(
+                        title = "Browse M3U playlists",
+                        subtitle = "Country, category and region channel lists from the iptv-org project",
+                        leadingIcon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                        onClick = { dialog = LiveDialog.BrowseM3u }
                     )
                     SettingsActionRow(
                         title = "Add Xtream Codes Login",
@@ -1699,6 +1706,11 @@ internal fun LiveTvSettingsContent(
     val close = { dialog = null }
     when (val d = dialog) {
         null -> Unit
+        LiveDialog.BrowseM3u -> IptvOrgBrowserDialog(
+            existingUrls = playlists.mapTo(HashSet()) { normalizeIptvOrgUrl(it.url) },
+            onDismiss = close,
+            onAdd = { list -> viewModel.addPlaylist("iptv-org · ${list.name}", list.url, "") },
+        )
         LiveDialog.AddM3u -> SourceFormDialog(
             title = "Add M3U playlist",
             fields = listOf(
