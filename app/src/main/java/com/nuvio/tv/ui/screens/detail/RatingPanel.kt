@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.detail
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
@@ -50,24 +51,28 @@ internal fun RatingPanel(
             color = if (state.rating != null) Color(0xFFFFC107) else NuvioTheme.colors.TextSecondary,
             fontWeight = FontWeight.Bold
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            for (value in 1..10) {
-                val selected = state.rating != null && value <= state.rating
-                Button(
-                    onClick = { onRate(value) },
-                    enabled = !state.saving,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .then(if (value == 1) Modifier.focusRequester(firstStar) else Modifier)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (rowStart in listOf(1, 6)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "★",
-                        color = if (selected) Color(0xFFFFC107) else NuvioTheme.colors.TextTertiary,
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    for (value in rowStart until rowStart + 5) {
+                        val selected = state.rating != null && value <= state.rating
+                        Button(
+                            onClick = { onRate(value) },
+                            enabled = !state.saving,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .then(if (value == 1) Modifier.focusRequester(firstStar) else Modifier)
+                        ) {
+                            Text(
+                                text = "$value ★",
+                                color = if (selected) Color(0xFFFFC107) else NuvioTheme.colors.TextTertiary,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
                 }
             }
         }
