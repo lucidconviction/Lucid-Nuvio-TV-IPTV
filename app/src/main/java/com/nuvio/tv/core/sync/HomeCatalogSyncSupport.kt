@@ -166,3 +166,33 @@ private fun CatalogDescriptor.shouldShowOnHomeForSync(): Boolean {
     }
     return !hasExplicitShowInHome || showInHome
 }
+
+private fun SyncCatalogItem.rowKey(): String =
+    if (isCollection) homeCollectionKey(collectionId) else homeCatalogKey(addonId, type, catalogId)
+
+/**
+ * A push only knows the addons that loaded this session. An addon that failed to load (network,
+ * slow manifest) must not erase its saved rows from the shared copy: carry the previous remote
+ * items for installed addons that produced no catalogs this time. Addons that loaded normally
+ * are authoritative, so a removed catalog still disappears.
+ */
+internal fun carryForwardUnloadedCatalogRows(
+    localPayload: SyncHomeCatalogPayload,
+    remotePayload: SyncHomeCatalogPayload?,
+    installedAddonIds: Set<String>,
+    loadedAddonIds: Set<String>,
+): SyncHomeCatalogPayload {
+    if (remotePayload == null || remotePayload.items.isEmpty()) return localPayload
+    val localKeys = localPayload.items.mapTo(HashSet()) { it.rowKey() }
+    val carried = remotePayload.items
+        .asSequence()
+        .filter { !it.isCollection }
+        .filter { it.addonId in installedAddonIds && it.addonId !in loadedAddonIds }
+        .filter { it.rowKey() !in localKeys }
+        .distinctBy { it.rowKey() }
+        .toList()
+    if (carried.isEmpty()) return localPayload
+    val items = localPayload.items.mapIndexed { index, item -> item.copy(order = index) } +
+        carried.mapIndexed { index, item -> item.copy(order = localPayload.items.size + index) }
+    return localPayload.copy(items = items)
+}

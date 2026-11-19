@@ -193,6 +193,69 @@ class HomeCatalogSyncSupportTest {
         assertFalse(payload.items.last().enabled)
     }
 
+    @Test
+    fun `carries forward rows from an addon that did not load`() {
+        val remote = SyncHomeCatalogPayload(
+            items = listOf(
+                SyncCatalogItem(addonId = "slow-addon", type = "movie", catalogId = "films", order = 0)
+            )
+        )
+        val local = SyncHomeCatalogPayload(
+            items = listOf(
+                SyncCatalogItem(addonId = "fast-addon", type = "series", catalogId = "shows", order = 0)
+            )
+        )
+
+        val merged = carryForwardUnloadedCatalogRows(
+            localPayload = local,
+            remotePayload = remote,
+            installedAddonIds = setOf("slow-addon", "fast-addon"),
+            loadedAddonIds = setOf("fast-addon"),
+        )
+
+        assertEquals(2, merged.items.size)
+        assertEquals("fast-addon", merged.items[0].addonId)
+        assertEquals(0, merged.items[0].order)
+        assertEquals("slow-addon", merged.items[1].addonId)
+        assertEquals(1, merged.items[1].order)
+    }
+
+    @Test
+    fun `does not carry rows when the addon loaded or is gone`() {
+        val remote = SyncHomeCatalogPayload(
+            items = listOf(
+                SyncCatalogItem(addonId = "loaded", type = "movie", catalogId = "films"),
+                SyncCatalogItem(addonId = "gone", type = "movie", catalogId = "films"),
+            )
+        )
+        val local = SyncHomeCatalogPayload()
+
+        val merged = carryForwardUnloadedCatalogRows(
+            localPayload = local,
+            remotePayload = remote,
+            installedAddonIds = setOf("loaded"),
+            loadedAddonIds = setOf("loaded"),
+        )
+
+        assertTrue(merged.items.isEmpty())
+    }
+
+    @Test
+    fun `does not duplicate a row the local payload already has`() {
+        val item = SyncCatalogItem(addonId = "slow-addon", type = "movie", catalogId = "films")
+        val remote = SyncHomeCatalogPayload(items = listOf(item.copy(order = 3)))
+        val local = SyncHomeCatalogPayload(items = listOf(item.copy(order = 0)))
+
+        val merged = carryForwardUnloadedCatalogRows(
+            localPayload = local,
+            remotePayload = remote,
+            installedAddonIds = setOf("slow-addon"),
+            loadedAddonIds = emptySet(),
+        )
+
+        assertEquals(1, merged.items.size)
+    }
+
     private fun testAddon(
         id: String,
         baseUrl: String,

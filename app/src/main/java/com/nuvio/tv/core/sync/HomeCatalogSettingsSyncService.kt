@@ -106,7 +106,14 @@ class HomeCatalogSettingsSyncService @Inject constructor(
             val profileId = profileManager.activeProfileId.value
             val syncScope = currentScope(profileId)
                 ?: return@withContext Result.success(Unit)
-            val payload = loadLocalPayload()
+            val addons = addonRepository.getInstalledAddons().first().enabledAddons()
+            val localPayload = loadLocalPayload()
+            val payload = carryForwardUnloadedCatalogRows(
+                localPayload = localPayload,
+                remotePayload = cachedRemotePayload(syncScope, localPayload),
+                installedAddonIds = addons.mapTo(HashSet()) { it.id },
+                loadedAddonIds = addons.filter { it.catalogs.isNotEmpty() }.mapTo(HashSet()) { it.id },
+            )
             Log.d(TAG, "Push start profile=$profileId reason=$reason ${payload.summary()}")
             pushPayload(syncScope, payload)
 
@@ -222,6 +229,22 @@ class HomeCatalogSettingsSyncService @Inject constructor(
             postgrest.rpc("sync_pull_home_catalog_settings", params)
         }
         return response.decodeList<SupabaseHomeCatalogSettingsBlob>().firstOrNull()
+    }
+
+    /** The last shared payload, from the pull cache or one fresh read. */
+    private suspend fun cachedRemotePayload(
+        syncScope: HomeCatalogSyncScope,
+        localPayload: SyncHomeCatalogPayload
+    ): SyncHomeCatalogPayload? {
+        val cached = cachedSharedSettings
+            ?.takeIf { it.scope == syncScope }
+            ?.settingsJson
+        val settingsJson = cached ?: runCatching {
+            fetchRemoteBlob(syncScope.profileId)?.settingsJson
+        }.getOrNull()?.also { json ->
+            cachedSharedSettings = CachedSharedSettings(scope = syncScope, settingsJson = json)
+        } ?: return null
+        return decodePayloadPreservingLocalDefaults(settingsJson, localPayload)
     }
 
     private fun decodePayloadPreservingLocalDefaults(
