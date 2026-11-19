@@ -981,6 +981,7 @@ fun MetaDetailsScreen(
                     isTrailerPlaying = uiState.isTrailerPlaying,
                     isBackgroundTrailerPlaying = uiState.isBackgroundTrailerPlaying,
                     pauseBackgroundTrailerOnScroll = uiState.pauseBackgroundTrailerOnScroll,
+                    childOverlayVisible = childOverlayVisible,
                     isTrailerPaused = isTrailerPaused,
                     showTrailerControls = uiState.showTrailerControls,
                     hideLogoDuringTrailer = uiState.hideLogoDuringTrailer,
@@ -1270,6 +1271,8 @@ private fun MetaDetailsContent(
     isTrailerPlaying: Boolean,
     isBackgroundTrailerPlaying: Boolean,
     pauseBackgroundTrailerOnScroll: Boolean,
+    /** A Cast/network page is covering the details: the background trailer must not keep playing. */
+    childOverlayVisible: Boolean = false,
     isTrailerPaused: Boolean = false,
     showTrailerControls: Boolean,
     hideLogoDuringTrailer: Boolean,
@@ -2325,6 +2328,7 @@ private fun MetaDetailsContent(
             isTrailerPlaying = isTrailerPlaying,
             isBackgroundTrailerPlaying = isBackgroundTrailerPlaying,
             pauseBackgroundTrailerOnScroll = pauseBackgroundTrailerOnScroll,
+            childOverlayVisible = childOverlayVisible,
             isTrailerPaused = isTrailerPaused,
             showTrailerControls = showTrailerControls,
             trailerSeekToken = trailerSeekToken,
@@ -3276,6 +3280,7 @@ private fun BackdropLayer(
     isTrailerPlaying: Boolean,
     isBackgroundTrailerPlaying: Boolean,
     pauseBackgroundTrailerOnScroll: Boolean,
+    childOverlayVisible: Boolean = false,
     isTrailerPaused: Boolean = false,
     showTrailerControls: Boolean,
     trailerSeekToken: Int,
@@ -3290,8 +3295,10 @@ private fun BackdropLayer(
     var showHeroBackdropUnderlay by remember(heroBackdropRequest, backdropRequest) {
         mutableStateOf(heroBackdropRequest != null)
     }
-    val isBackgroundTrailerPaused =
-        isBackgroundTrailerPlaying && pauseBackgroundTrailerOnScroll && isScrolledPastHero
+    val isBackgroundTrailerPaused = isBackgroundTrailerPlaying && (
+        childOverlayVisible ||
+            (pauseBackgroundTrailerOnScroll && isScrolledPastHero)
+        )
     val isBackgroundTrailerVisible = isBackgroundTrailerPlaying && !isBackgroundTrailerPaused
     // Keep the backdrop until the trailer has a frame to show; the request alone can be many
     // seconds ahead of it while the stream is fetched and buffered.
