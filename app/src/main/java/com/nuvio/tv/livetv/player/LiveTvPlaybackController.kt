@@ -55,8 +55,6 @@ private const val MAX_VIRTUAL_SKIPS = 3
 private const val MAX_VIRTUAL_RECOVERIES = 2
 /** The Lucid guide clock is checked this often, in case the timer job was lost. */
 private const val VIRTUAL_WATCHDOG_MS = 5_000L
-/** How late a Lucid boundary may be before the watchdog takes over. */
-private const val VIRTUAL_ADVANCE_GRACE_MS = 3_000L
 /** A media item ending this long before its guide slot is treated as ended early. */
 private const val VIRTUAL_EARLY_END_MS = 30_000L
 
@@ -1226,7 +1224,14 @@ class LiveTvPlaybackController @Inject constructor(
         if (tune.live) return
         val channel = currentChannel ?: return
         val now = System.currentTimeMillis()
-        if (now < tune.slotEndMs + VIRTUAL_ADVANCE_GRACE_MS) return
+        if (!LucidAdvancePolicy.canAdvance(
+                nowMs = now,
+                slotEndMs = tune.slotEndMs,
+                userPaused = _state.value.userPaused,
+                inBackground = pausedForBackground,
+                resolving = resolvingVirtualKey == channel.key,
+            )
+        ) return
         advanceVirtualToNow(channel, tune.slotEndMs, "the guide boundary passed")
     }
 
