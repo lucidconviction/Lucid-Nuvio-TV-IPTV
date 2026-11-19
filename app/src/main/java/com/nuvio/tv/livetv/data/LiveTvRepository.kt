@@ -892,6 +892,7 @@ class LiveTvRepository @Inject constructor(
                 c.catchup?.let { id(it.type) }
                 c.drm?.let { id(it.scheme) }
             }
+            baseDir.mkdirs()
             val tmp = File(baseDir, "channels_cache3.tmp")
             java.io.DataOutputStream(java.io.BufferedOutputStream(tmp.outputStream(), 256 * 1024)).use { out ->
                 fun opt(v: String?) { out.writeBoolean(v != null); if (v != null) out.writeUTF(v) }

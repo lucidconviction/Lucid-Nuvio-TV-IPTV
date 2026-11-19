@@ -20,6 +20,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.nuvio.tv.core.debrid.DirectDebridPlayableResult
 import com.nuvio.tv.core.debrid.DirectDebridResolver
 import com.nuvio.tv.core.network.NetworkResult
+import com.nuvio.tv.domain.model.enabledAddons
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.StreamRepository
 import com.nuvio.tv.livetv.data.LiveTvRepository
@@ -771,6 +772,12 @@ class LiveTvPlaybackController @Inject constructor(
         return url to playable
     }
 
+    private suspend fun hasStreamAddon(): Boolean = runCatching {
+        addonRepository.getInstalledAddons().first()
+            .enabledAddons()
+            .any { addon -> addon.resources.any { it.name.equals("stream", ignoreCase = true) } }
+    }.getOrDefault(true)
+
     /** The same full source list the stream screen uses: all addons, embedded meta and plugins. */
     private suspend fun allAddonStreams(
         type: String,
@@ -996,10 +1003,13 @@ class LiveTvPlaybackController @Inject constructor(
                             tuneAt = System.currentTimeMillis()
                             continue
                         }
-                        val message = if (item.season != null) {
-                            "No playable stream was found for ${item.title} S${item.season}E${item.episode}."
-                        } else {
-                            "No playable stream was found for ${item.title}."
+                        val message = when {
+                            !hasStreamAddon() ->
+                                "Lucid TV needs a stream addon to find sources. Add one in Settings → Addons."
+                            item.season != null ->
+                                "No playable stream was found for ${item.title} S${item.season}E${item.episode}."
+                            else ->
+                                "No playable stream was found for ${item.title}."
                         }
                         lucid.reportError(channel.key, message)
                         com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
