@@ -9,6 +9,14 @@ import retrofit2.http.Query
 
 interface TmdbApi {
     
+    @GET("search/person")
+    suspend fun searchPerson(
+        @Query("query") query: String,
+        @Query("api_key") apiKey: String,
+        @Query("language") language: String = "en-US",
+        @Query("include_adult") includeAdult: Boolean = false
+    ): Response<TmdbPersonSearchResponse>
+
     @GET("find/{external_id}")
     suspend fun findByExternalId(
         @Path("external_id") externalId: String,
@@ -642,6 +650,20 @@ data class TmdbRecommendationResult(
 )
 
 // ── Person / Cast Detail DTOs ──
+
+@JsonClass(generateAdapter = true)
+data class TmdbPersonSearchResponse(
+    @Json(name = "results") val results: List<TmdbPersonSearchResult> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TmdbPersonSearchResult(
+    @Json(name = "id") val id: Int,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "known_for_department") val knownForDepartment: String? = null,
+    @Json(name = "popularity") val popularity: Double? = null,
+    @Json(name = "profile_path") val profilePath: String? = null
+)
 
 @JsonClass(generateAdapter = true)
 data class TmdbPersonResponse(

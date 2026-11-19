@@ -2747,13 +2747,14 @@ private fun MetaDetailsContent(
                                     },
                                     windowResetKey = meta.id,
                                     onCastMemberClick = { member ->
-                                        member.tmdbId?.let { id ->
-                                            markCastMemberRestore(id)
-                                            val preferCrew = member.character.equals("Creator", ignoreCase = true) ||
-                                                member.character.equals("Director", ignoreCase = true) ||
-                                                member.character.equals("Writer", ignoreCase = true)
-                                            onNavigateToCastDetail(id, member.name, preferCrew)
-                                        }
+                                        // Addon credit lists often have no TMDB id; the cast page
+                                        // resolves the person by name instead of ignoring the click.
+                                        val id = member.tmdbId ?: 0
+                                        if (id > 0) markCastMemberRestore(id)
+                                        val preferCrew = member.character.equals("Creator", ignoreCase = true) ||
+                                            member.character.equals("Director", ignoreCase = true) ||
+                                            member.character.equals("Writer", ignoreCase = true)
+                                        onNavigateToCastDetail(id, member.name, preferCrew)
                                     },
                                     modifier = Modifier.onSizeChanged { castSectionHeightPx = it.height }
                                 )

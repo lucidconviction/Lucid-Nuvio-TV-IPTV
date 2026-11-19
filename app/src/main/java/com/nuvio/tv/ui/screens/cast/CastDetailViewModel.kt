@@ -70,10 +70,21 @@ class CastDetailViewModel @Inject constructor(
     private fun loadPersonDetail() {
         viewModelScope.launch {
             try {
+                val language = tmdbSettingsDataStore.settings.first().language
+                // Addon credits often carry only a name. Resolve it once, then reuse the normal
+                // person/credits path.
+                val resolvedId = personId.takeIf { it > 0 }
+                    ?: tmdbMetadataService.findPersonId(personName, language)
+                if (resolvedId == null) {
+                    _uiState.value = CastDetailUiState.Error(
+                        context.getString(R.string.cast_error_load_details_for, personName)
+                    )
+                    return@launch
+                }
                 val detail = tmdbMetadataService.fetchPersonDetail(
-                    personId = personId,
+                    personId = resolvedId,
                     preferCrewCredits = preferCrew,
-                    language = tmdbSettingsDataStore.settings.first().language
+                    language = language
                 )
                 if (detail != null) {
                     val pattern = layoutPreferenceDataStore.customPosterUrlPattern.first()

@@ -59,6 +59,7 @@ class TmdbMetadataService(
     private val enrichmentInFlight = ConcurrentHashMap<String, CompletableDeferred<TmdbEnrichment?>>()
     private val episodeInFlight = ConcurrentHashMap<String, CompletableDeferred<Map<Pair<Int, Int>, TmdbEpisodeEnrichment>>>()
     private val personCache = ConcurrentHashMap<String, PersonDetail>()
+    private val personSearchCache = ConcurrentHashMap<String, Int>()
     private val moreLikeThisCache = ConcurrentHashMap<String, List<MetaPreview>>()
     private val entityHeaderCache = ConcurrentHashMap<String, TmdbEntityHeader>()
     private val entityRailCache = ConcurrentHashMap<String, List<MetaPreview>>()
@@ -1283,6 +1284,34 @@ class TmdbMetadataService(
             }
         )
     }
+
+    /**
+     * Addon metadata often names a creator/cast member without a TMDB id. Resolve the name once
+     * so the details page can open the person instead of ignoring the click.
+     */
+    suspend fun findPersonId(name: String, language: String = "en"): Int? =
+        withContext(ioDispatcher) {
+            val query = name.trim()
+            if (query.isBlank() || TMDB_API_KEY.isBlank()) return@withContext null
+            val normalizedLanguage = normalizeTmdbLanguage(language)
+            val cacheKey = query.lowercase() + "|" + normalizedLanguage
+            personSearchCache[cacheKey]?.let { return@withContext it.takeIf { id -> id > 0 } }
+            val results = runCatching {
+                tmdbApi.searchPerson(
+                    query = query,
+                    apiKey = TMDB_API_KEY,
+                    language = normalizedLanguage
+                ).body()?.results.orEmpty()
+            }.getOrDefault(emptyList())
+            val id = results.firstOrNull {
+                it.name.equals(query, ignoreCase = true) &&
+                    it.knownForDepartment.equals("Acting", ignoreCase = true)
+            }?.id
+                ?: results.firstOrNull { it.name.equals(query, ignoreCase = true) }?.id
+                ?: results.firstOrNull()?.id
+            personSearchCache[cacheKey] = id ?: -1
+            id
+        }
 
     suspend fun fetchPersonDetail(
         personId: Int,
