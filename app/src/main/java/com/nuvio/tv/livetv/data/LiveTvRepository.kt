@@ -57,7 +57,8 @@ data class LiveTvStatus(
 class LiveTvRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val prefs: LiveTvPreferences,
-    private val guideDb: EpgDatabase
+    private val guideDb: EpgDatabase,
+    private val stalker: StalkerPortalClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -208,6 +209,28 @@ class LiveTvRepository @Inject constructor(
         return id
     }
 
+    suspend fun addStalker(
+        name: String,
+        portal: String,
+        mac: String,
+    ): String {
+        val id = UUID.randomUUID().toString()
+        val normalizedPortal = StalkerPortalClient.normalizePortal(portal)
+        val normalizedMac = StalkerPortalClient.normalizeMac(mac)
+            .ifBlank { StalkerPortalClient.randomMac() }
+        prefs.updatePlaylists {
+            it + PlaylistSource(
+                id = id,
+                name = name.ifBlank { "Stalker portal" },
+                url = "",
+                stalkerPortal = normalizedPortal,
+                stalkerMac = normalizedMac,
+            )
+        }
+        scope.launch { refreshInternal(forcePlaylists = false, forceEpg = false, forceIds = setOf(id)) }
+        return id
+    }
+
     suspend fun updatePlaylist(input: PlaylistSource) {
         val source = if (input.isXtream) {
             val fromLink = PlaylistSource.credentialsFromLink(input.xtreamServer)
@@ -215,6 +238,13 @@ class LiveTvRepository @Inject constructor(
                 xtreamServer = PlaylistSource.cleanXtreamServer(input.xtreamServer),
                 xtreamUsername = input.xtreamUsername.trim().ifBlank { fromLink?.first.orEmpty() },
                 xtreamPassword = input.xtreamPassword.trim().ifBlank { fromLink?.second.orEmpty() }
+            )
+        } else if (input.isStalker) {
+            val existingMac = prefs.currentPlaylists().firstOrNull { it.id == input.id }?.stalkerMac.orEmpty()
+            input.copy(
+                stalkerPortal = StalkerPortalClient.normalizePortal(input.stalkerPortal),
+                stalkerMac = StalkerPortalClient.normalizeMac(input.stalkerMac)
+                    .ifBlank { existingMac.ifBlank { StalkerPortalClient.randomMac() } },
             )
         } else input
         val wasLive = prefs.currentPlaylists().firstOrNull { it.id == source.id }?.liveEnabled == true
@@ -603,7 +633,21 @@ class LiveTvRepository @Inject constructor(
                 setStatus(loading = true, message = "Updating playlist \"${pl.name}\"…")
                 val before = if (file.exists()) file.length() to file.lastModified() else null
                 val result = runCatching {
-                    if (pl.isXtream) {
+                    if (pl.isStalker) {
+                        val old = if (file.exists()) File(file.parentFile, file.name + ".prev").also { file.copyTo(it, overwrite = true) } else null
+                        val channels = stalker.fetchChannels(pl, force = true)
+                        check(channels.isNotEmpty()) { "The portal returned no channels. Check the portal address and MAC." }
+                        file.writeText(StalkerPortalClient.buildM3u(pl.id, channels))
+                        // Portals rebuild channel ids/links each refresh: unchanged if identical.
+                        val unchanged = old != null && sameDecoded(old, file)
+                        old?.delete()
+                        if (!unchanged) markChanged(file)
+                        LIVE_REPORT.add(
+                            "Stalker portal \"${pl.name}\": ${channels.size} channel(s), " +
+                                if (unchanged) "no changes" else "new content"
+                        )
+                        !unchanged
+                    } else if (pl.isXtream) {
                         val old = if (file.exists()) File(file.parentFile, file.name + ".prev").also { file.copyTo(it, overwrite = true) } else null
                         downloadXtream(pl, file)
                         // Xtream lists are rebuilt each time: unchanged if identical to before.
@@ -615,7 +659,7 @@ class LiveTvRepository @Inject constructor(
                     } else download(pl.resolvedUrl(), file, pl.userAgent, progressLabel = "Downloading playlist \"${pl.name}\"")
                 }
                 // M3U links from Xtream providers (get.php with a login): the account's details.
-                if (!pl.isXtream) refreshM3uAccount(pl)
+                if (!pl.isXtream && !pl.isStalker) refreshM3uAccount(pl)
                 val err = result.exceptionOrNull()?.let { e ->
                     when (e) {
                         is java.net.UnknownHostException -> "Couldn't find the provider's server (${e.message?.substringAfter("\"")?.substringBefore("\"") ?: "address"}). Check the address, your internet, or try again later."

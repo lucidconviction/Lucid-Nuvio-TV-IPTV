@@ -15,6 +15,12 @@ data class PlaylistSource(
     val xtreamServer: String = "",
     val xtreamUsername: String = "",
     val xtreamPassword: String = "",
+    /** Stalker/MAG portal address (the URL the provider gave, without /c/ or portal.php). */
+    val stalkerPortal: String = "",
+    /** The MAC the portal authorises. Generated when the user leaves it blank. */
+    val stalkerMac: String = "",
+    val stalkerSerial: String = "",
+    val stalkerDeviceId: String = "",
     val lastUpdatedMs: Long = 0L,
     val lastError: String? = null,
     val channelCount: Int = 0,
@@ -61,21 +67,23 @@ data class PlaylistSource(
     val catchupShiftMinutes: Int = 0
 ) {
     val isXtream: Boolean get() = xtreamServer.isNotBlank()
+    val isStalker: Boolean get() = stalkerPortal.isNotBlank()
 
     /** The time zone catch-up links are written in: the one picked in settings, else the server's. */
     val catchupZone: String get() = catchupTimezone.ifBlank { serverTimezone }
 
     /** Whether this source's live channels (and their guide) are loaded. */
-    val liveEnabled: Boolean get() = enabled && (!isXtream || importLive)
+    val liveEnabled: Boolean get() = enabled && (!isXtream || importLive) && (!isStalker || importLive)
 
     fun resolvedUrl(): String {
+        if (isStalker) return ""
         if (!isXtream) return tidyLink(url)
         return "${xtreamBase()}/get.php?username=${enc(xtreamUsername)}&password=${enc(xtreamPassword)}&type=m3u_plus&output=ts"
     }
 
     /** A channel link from this M3U playlist in the chosen stream format (unchanged on Auto). */
     fun m3uStreamLink(link: String): String {
-        if (isXtream) return link
+        if (isXtream || isStalker) return link
         return when (streamFormat) {
             "ts", "m3u8" -> streamLinkAs(link, streamFormat)
             else -> link

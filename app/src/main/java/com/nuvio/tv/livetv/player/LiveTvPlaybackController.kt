@@ -110,6 +110,7 @@ class LiveTvPlaybackController @Inject constructor(
     private val streamRepository: StreamRepository,
     private val debridResolver: DirectDebridResolver,
     private val lucid: LucidTvRepository,
+    private val stalker: com.nuvio.tv.livetv.data.StalkerPortalClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -899,6 +900,37 @@ class LiveTvPlaybackController @Inject constructor(
         }
     }
 
+    private var resolvingStalkerKey: String? = null
+    /** Fresh Stalker links tried after an expired URL, before falling back to the normal ladder. */
+    @Volatile private var stalkerRelinks = 0
+
+    /**
+     * Stalker portals mint a short-lived stream link per tune. Channels are stored as
+     * "stalker:<playlistId>:<channelId>"; ask for a fresh link and play that.
+     */
+    private fun resolveAndPlayStalker(channel: LiveChannel) {
+        if (resolvingStalkerKey == channel.key) return
+        resolvingStalkerKey = channel.key
+        _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        scope.launch {
+            try {
+                val parts = channel.url.split(':', limit = 3)
+                val sourceId = parts.getOrNull(1).orEmpty()
+                val channelId = parts.getOrNull(2).orEmpty()
+                val link = stalker.createLink(sourceId, channelId)
+                if (link != null) {
+                    play(channel.copy(headers = link.headers), overrideUrl = link.url)
+                } else {
+                    val message = "The Stalker portal didn't return a playable link. Check the portal and MAC."
+                    com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Stalker \"${channel.name}\": $message")
+                    _state.value = LivePlaybackState(channelKey = channel.key, error = message)
+                }
+            } finally {
+                if (resolvingStalkerKey == channel.key) resolvingStalkerKey = null
+            }
+        }
+    }
+
     /**
      * Lucid TV: a catalog channel. Resolve the film for the current slot and the streams for it
      * now, then play it through the normal player at the joined offset.
@@ -1026,6 +1058,10 @@ class LiveTvPlaybackController @Inject constructor(
         }
         if (overrideUrl == null && channel.url.startsWith("addon:")) {
             resolveAndPlayAddon(channel)
+            return
+        }
+        if (overrideUrl == null && channel.url.startsWith("stalker:")) {
+            resolveAndPlayStalker(channel)
             return
         }
         if (virtualTune != null) {
@@ -1681,6 +1717,10 @@ class LiveTvPlaybackController @Inject constructor(
             resolveAndPlayVirtual(ch)
             return
         }
+        if (ch.url.startsWith("stalker:")) {
+            resolveAndPlayStalker(ch)
+            return
+        }
         val url = currentUrl
         currentUrl = null
         play(ch, url, _state.value.catchupTitle)
@@ -1731,6 +1771,9 @@ class LiveTvPlaybackController @Inject constructor(
                     while (waited < 15_000 && _player?.playbackState != Player.STATE_READY) { delay(200); waited += 200 }
                     _player?.let { pl -> if (pos > 0) pl.seekTo(pos); if (!wasPlaying) pl.pause() }
                 }
+            } else if (ch.url.startsWith("stalker:")) {
+                currentUrl = null
+                resolveAndPlayStalker(ch)
             } else {
                 currentUrl = null
                 play(ch, overrideUrl = url.takeIf { it != ch.url })
@@ -2361,7 +2404,10 @@ class LiveTvPlaybackController @Inject constructor(
                 error = if (playbackState == Player.STATE_READY) null else _state.value.error,
                 reconnectAttempt = if (playbackState == Player.STATE_READY) 0 else _state.value.reconnectAttempt
             )
-            if (playbackState == Player.STATE_READY) _player?.let { applyPendingVirtualStart(it) }
+            if (playbackState == Player.STATE_READY) {
+                stalkerRelinks = 0
+                _player?.let { applyPendingVirtualStart(it) }
+            }
             if (playbackState == Player.STATE_ENDED) {
                 val tune = activeVirtual
                 if (tune != null) {
@@ -2554,6 +2600,14 @@ class LiveTvPlaybackController @Inject constructor(
             if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
                 "Catch-up failed on ${ch?.name} (${error.errorCodeName}); no other links left to try"
             )
+            if (ch != null && ch.url.startsWith("stalker:") && stalkerRelinks < 2) {
+                stalkerRelinks++
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                    "Stalker \"${ch.name}\": the link failed (${error.errorCodeName}); asking the portal for a fresh one"
+                )
+                resolveAndPlayStalker(ch)
+                return
+            }
             if (activeVirtual != null) {
                 com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
                     "Lucid TV \"${currentChannel?.name}\": ${error.errorCodeName}"

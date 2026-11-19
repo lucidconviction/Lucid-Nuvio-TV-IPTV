@@ -1518,7 +1518,8 @@ class LiveTvPreferences @Inject constructor(
                             v = encodePlaylists(decodePlaylists(v).map { r ->
                                 localPlaylists[r.id]?.let { l ->
                                     if (l.url != r.url || l.xtreamServer != r.xtreamServer || l.xtreamUsername != r.xtreamUsername ||
-                                        l.xtreamPassword != r.xtreamPassword || l.userAgent != r.userAgent || l.streamFormat != r.streamFormat
+                                        l.xtreamPassword != r.xtreamPassword || l.stalkerPortal != r.stalkerPortal ||
+                                        l.stalkerMac != r.stalkerMac || l.userAgent != r.userAgent || l.streamFormat != r.streamFormat
                                     ) changed += r.id
                                     r.copy(
                                         lastUpdatedMs = l.lastUpdatedMs, lastError = l.lastError, channelCount = l.channelCount,
@@ -1561,6 +1562,10 @@ class LiveTvPreferences @Inject constructor(
                     xtreamServer = o.optString("xtreamServer"),
                     xtreamUsername = o.optString("xtreamUsername"),
                     xtreamPassword = o.optString("xtreamPassword"),
+                    stalkerPortal = o.optString("stalkerPortal"),
+                    stalkerMac = o.optString("stalkerMac"),
+                    stalkerSerial = o.optString("stalkerSerial"),
+                    stalkerDeviceId = o.optString("stalkerDeviceId"),
                     lastUpdatedMs = o.optLong("lastUpdatedMs"),
                     lastError = o.optString("lastError").ifBlank { null },
                     channelCount = o.optInt("channelCount"),
@@ -1589,6 +1594,8 @@ class LiveTvPreferences @Inject constructor(
                     .put("useEmbeddedEpg", s.useEmbeddedEpg)
                     .put("xtreamServer", s.xtreamServer).put("xtreamUsername", s.xtreamUsername)
                     .put("xtreamPassword", s.xtreamPassword)
+                    .put("stalkerPortal", s.stalkerPortal).put("stalkerMac", s.stalkerMac)
+                    .put("stalkerSerial", s.stalkerSerial).put("stalkerDeviceId", s.stalkerDeviceId)
                     .put("lastUpdatedMs", s.lastUpdatedMs).put("lastError", s.lastError ?: "")
                     .put("channelCount", s.channelCount)
                     .put("importVod", s.importVod)

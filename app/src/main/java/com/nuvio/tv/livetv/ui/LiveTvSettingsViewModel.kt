@@ -67,6 +67,9 @@ class LiveTvSettingsViewModel @Inject constructor(
             onDemand.refreshSoon()
         }
 
+    fun addStalker(name: String, portal: String, mac: String) =
+        viewModelScope.launch { repository.addStalker(name, portal, mac) }
+
     fun savePlaylist(source: PlaylistSource) = viewModelScope.launch {
         val before = playlists.value.firstOrNull { it.id == source.id }
         repository.updatePlaylist(source)

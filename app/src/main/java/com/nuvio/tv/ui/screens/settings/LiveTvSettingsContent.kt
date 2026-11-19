@@ -186,6 +186,7 @@ private sealed interface LiveDialog {
     data object AddM3u : LiveDialog
     data object BrowseM3u : LiveDialog
     data object AddXtream : LiveDialog
+    data object AddStalker : LiveDialog
     data object AddEpg : LiveDialog
     data class PlaylistActions(val source: PlaylistSource) : LiveDialog
     data class CatchupZone(val source: PlaylistSource) : LiveDialog
@@ -476,7 +477,11 @@ internal fun LiveTvSettingsContent(
                         val account = accounts[pl.id]
                         val expiring = pl.enabled && account?.expiringSoon() == true
                         SettingsActionRow(
-                            title = pl.name + if (pl.isXtream) " (Xtream)" else "",
+                            title = pl.name + when {
+                                pl.isXtream -> " (Xtream)"
+                                pl.isStalker -> " (Stalker)"
+                                else -> ""
+                            },
                             subtitle = when {
                                 pl.isXtream && pl.enabled && !pl.importLive && pl.importVod -> "Movies & series only (TV channels off)"
                                 pl.isXtream && pl.enabled && !pl.importLive && !pl.importVod -> "Nothing included: turn on TV channels or movies & series under Edit"
@@ -511,6 +516,12 @@ internal fun LiveTvSettingsContent(
                         subtitle = "Sign in with the server, username and password from your provider. Its TV guide comes with it.",
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddXtream }
+                    )
+                    SettingsActionRow(
+                        title = "Add Stalker Portal",
+                        subtitle = "A MAG/Stalker portal address and the MAC it authorises. Live channels are imported into the guide.",
+                        leadingIcon = Icons.Default.Add,
+                        onClick = { dialog = LiveDialog.AddStalker }
                     )
                     SubHeading("TV Guides (EPG)")
                     epgs.forEach { e ->
@@ -1742,6 +1753,19 @@ internal fun LiveTvSettingsContent(
                 close()
             }
         )
+        LiveDialog.AddStalker -> SourceFormDialog(
+            title = "Add Stalker portal",
+            fields = listOf(
+                FormField("Name", "My provider"),
+                FormField("Portal URL", "http://host:port/c/"),
+                FormField("MAC address (optional)", "00:1A:79:… — generated when empty")
+            ),
+            onDismiss = close,
+            onSave = { v, _ ->
+                if (v[1].isNotBlank()) viewModel.addStalker(v[0], v[1], v[2])
+                close()
+            }
+        )
         LiveDialog.AddEpg -> SourceFormDialog(
             title = "Add EPG source",
             fields = listOf(FormField("Name", "Guide"), FormField("XMLTV URL", "http://…/epg.xml.gz")),
@@ -1774,7 +1798,7 @@ internal fun LiveTvSettingsContent(
                 // M3U links: Auto keeps the playlist's own links; TS / HLS switch links that can
                 // be switched (Xtream-style links, Dispatcharr).
                 "Stream format: " + when (d.source.streamFormat) {
-                    "ts" -> "TS"; "m3u8" -> "HLS (m3u8)"; else -> if (d.source.isXtream) "Auto" else "As in playlist"
+                    "ts" -> "TS"; "m3u8" -> "HLS (m3u8)"; else -> if (d.source.isXtream || d.source.isStalker) "Auto" else "As in playlist"
                 } to {
                     val next = when (d.source.streamFormat) { "auto" -> "ts"; "ts" -> "m3u8"; else -> "auto" }
                     viewModel.savePlaylist(d.source.copy(streamFormat = next))
@@ -1835,6 +1859,26 @@ internal fun LiveTvSettingsContent(
                             src.copy(
                                 name = v[0], xtreamServer = v[1], xtreamUsername = v[2], xtreamPassword = v[3],
                                 userAgent = v[4], useEmbeddedEpg = t, importVod = vod, importLive = live
+                            )
+                        )
+                        close()
+                    }
+                )
+            } else if (src.isStalker) {
+                SourceFormDialog(
+                    title = "Edit Stalker portal",
+                    fields = listOf(
+                        FormField("Name", "", src.name),
+                        FormField("Portal URL", "", src.stalkerPortal),
+                        FormField("MAC address", "", src.stalkerMac)
+                    ),
+                    onDismiss = close,
+                    onSave = { v, _ ->
+                        viewModel.savePlaylist(
+                            src.copy(
+                                name = v[0],
+                                stalkerPortal = com.nuvio.tv.livetv.data.StalkerPortalClient.normalizePortal(v[1]),
+                                stalkerMac = com.nuvio.tv.livetv.data.StalkerPortalClient.normalizeMac(v[2]),
                             )
                         )
                         close()
