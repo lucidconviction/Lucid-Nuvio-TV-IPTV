@@ -135,6 +135,7 @@ fun LiveTvMultiViewScreen(
     val channels by viewModel.displayChannels.collectAsStateWithLifecycle()
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val addonBrowserViewModel: AddonBrowserViewModel = hiltViewModel()
     var showPicker by remember { mutableStateOf(streams.isEmpty()) }
     var showLayouts by remember { mutableStateOf(false) }
@@ -307,6 +308,31 @@ fun LiveTvMultiViewScreen(
         }
     }
 
+    // A pane that keeps failing asks for another copy of the same channel before giving up.
+    fun tryBackupFor(id: String): Boolean {
+        val channel = viewModel.channelByKey(id) ?: return false
+        val inUse = streams.mapTo(HashSet()) { it.id }
+        val backup = viewModel.backupsFor(channel)
+            .firstOrNull { it.key !in inUse && it.url.isNotBlank() }
+            ?: return false
+        val replaced = MultiViewRepository.replace(
+            id,
+            MultiViewStream(
+                id = id,
+                url = backup.url,
+                title = backup.name,
+                subtitle = backup.group,
+                logo = backup.logo,
+                headers = backup.headers,
+                providerName = backup.sourceName,
+            ),
+        )
+        if (replaced) {
+            com.nuvio.tv.livetv.record.LiveTvNotice.show("Switched to backup: ${backup.name}")
+        }
+        return replaced
+    }
+
     // Keys from the bar are counted here so the bar stays up; the players handle their own keys.
     Box(
         Modifier.fillMaxSize().background(Color.Black)
@@ -376,6 +402,8 @@ fun LiveTvMultiViewScreen(
                 volumes = volumes,
                 refreshTicks = refreshTicks,
                 showInfo = showControls,
+                autoBackupChannel = settings.autoBackupChannel,
+                onTryBackup = ::tryBackupFor,
                 selectedId = if (showControls && playersHaveFocus) {
                     fullscreenId
                         ?: selectedId?.takeIf { id -> streams.any { it.id == id } }
@@ -951,6 +979,8 @@ private fun MultiViewGrid(
     volumes: Map<String, Int>,
     refreshTicks: Map<String, Int>,
     showInfo: Boolean,
+    autoBackupChannel: Boolean,
+    onTryBackup: (String) -> Boolean,
     selectedId: String?,
 ) {
     val effective = effectiveLayout(layout, streams.size)
@@ -965,6 +995,8 @@ private fun MultiViewGrid(
                 swapMarked = swapMode && swapFirst == stream.id,
                 refreshTick = refreshTicks[stream.id] ?: 0,
                 showInfo = showInfo,
+                autoBackupChannel = autoBackupChannel,
+                onTryBackup = { onTryBackup(stream.id) },
                 selected = stream.id == selectedId,
             )
         }
@@ -1120,14 +1152,25 @@ private fun MultiViewPane(
     swapMarked: Boolean,
     refreshTick: Int = 0,
     showInfo: Boolean = true,
+    autoBackupChannel: Boolean = true,
+    onTryBackup: () -> Boolean = { false },
     selected: Boolean = false,
 ) {
     val context = LocalContext.current
     var player by remember(stream.id) { mutableStateOf<ExoPlayer?>(null) }
     var failed by remember(stream.id) { mutableStateOf(false) }
+    var exhausted by remember(stream.id) { mutableStateOf(false) }
+    var retryAttempt by remember(stream.id) { mutableIntStateOf(0) }
     var autoReload by remember(stream.id) { mutableIntStateOf(0) }
 
-    LaunchedEffect(stream.id, refreshTick, autoReload) {
+    // A manual Refresh or a backup URL starts the retry budget again.
+    LaunchedEffect(stream.url, refreshTick) {
+        retryAttempt = 0
+        exhausted = false
+        failed = false
+    }
+
+    LaunchedEffect(stream.id, stream.url, refreshTick, autoReload) {
         failed = false
         player?.release()
         player = null
@@ -1175,6 +1218,8 @@ private fun MultiViewPane(
             if (position > lastPosition) {
                 lastPosition = position
                 lastProgressAt = now
+                if (failed) failed = false
+                if (retryAttempt != 0) retryAttempt = 0
             }
             val buffering = p.playbackState == Player.STATE_BUFFERING
             if (buffering) {
@@ -1187,8 +1232,18 @@ private fun MultiViewPane(
             val endedOrFailed = p.playbackState == Player.STATE_ENDED || p.playerError != null
             if (stuckBuffering || noProgress || endedOrFailed) {
                 failed = true
-                // Let the Retrying label show, then rebuild the player.
-                delay(2_000L)
+                val attempt = retryAttempt + 1
+                retryAttempt = attempt
+                if (!MultiViewRetryPolicy.canRetry(attempt)) {
+                    // Keep the last frame and the honest message; Refresh starts again.
+                    exhausted = true
+                    break
+                }
+                delay(MultiViewRetryPolicy.delayMs(attempt))
+                if (MultiViewRetryPolicy.shouldTryBackup(attempt, autoBackupChannel) && onTryBackup()) {
+                    // The pane's stream changed; the effect keyed on stream.url reopens it.
+                    break
+                }
                 autoReload++
                 break
             }
@@ -1270,21 +1325,19 @@ private fun MultiViewPane(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (failed) {
-                    Text("Retrying…", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.Warning)
+                when {
+                    exhausted -> Text(
+                        "Stream unavailable · hold OK for Refresh",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.Warning,
+                    )
+                    failed -> Text(
+                        "Retrying… (${retryAttempt}/${MultiViewRetryPolicy.MAX_ATTEMPTS})",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.Warning,
+                    )
                 }
             }
-            }
-        }
-    }
-
-    if (failed) {
-        LaunchedEffect(stream.id, failed) {
-            if (!failed) return@LaunchedEffect
-            delay(2500)
-            player?.let { p ->
-                p.prepare()
-                p.play()
             }
         }
     }
@@ -1292,11 +1345,16 @@ private fun MultiViewPane(
 
 private fun buildLivePlayer(context: android.content.Context, stream: MultiViewStream): ExoPlayer {
     val headers = stream.headers
-    val dataSource = DefaultHttpDataSource.Factory()
-        .setUserAgent(headers["User-Agent"] ?: "NuvioTV")
+    val userAgent = headers["User-Agent"] ?: "NuvioTV"
+    // Same protected path as the single Live TV player: VPN routing, cross-protocol redirects
+    // and the provider's headers. A bare DefaultHttpDataSource bypassed all three.
+    val upstream = DefaultHttpDataSource.Factory()
+        .setUserAgent(userAgent)
         .setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) })
+        .setAllowCrossProtocolRedirects(true)
         .setConnectTimeoutMs(15_000)
         .setReadTimeoutMs(20_000)
+    val dataSource = com.nuvio.tv.core.vpn.protectHttpFactory(upstream, headers, userAgent)
     val mediaSource = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSource)
         .createMediaSource(MediaItem.fromUri(stream.url))

@@ -79,6 +79,15 @@ object MultiViewRepository {
         if (_audibleId.value == id) _audibleId.value = _streams.value.firstOrNull()?.id
     }
 
+    /** Swaps a pane's stream (a backup copy) without changing its window id or position. */
+    fun replace(id: String, stream: MultiViewStream): Boolean {
+        val current = _streams.value
+        val index = current.indexOfFirst { it.id == id }
+        if (index < 0) return false
+        _streams.value = current.toMutableList().also { it[index] = stream.copy(id = id) }
+        return true
+    }
+
     fun clear() {
         _streams.value = emptyList()
         _audibleId.value = null
