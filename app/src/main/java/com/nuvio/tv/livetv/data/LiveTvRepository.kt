@@ -637,6 +637,7 @@ class LiveTvRepository @Inject constructor(
                         val old = if (file.exists()) File(file.parentFile, file.name + ".prev").also { file.copyTo(it, overwrite = true) } else null
                         val channels = stalker.fetchChannels(pl, force = true)
                         check(channels.isNotEmpty()) { "The portal returned no channels. Check the portal address and MAC." }
+                        file.parentFile?.mkdirs()
                         file.writeText(StalkerPortalClient.buildM3u(pl.id, channels))
                         // Portals rebuild channel ids/links each refresh: unchanged if identical.
                         val unchanged = old != null && sameDecoded(old, file)
