@@ -301,6 +301,7 @@ class LiveTvRepository @Inject constructor(
             val epgId = stalkerEpgId(id)
             prefs.updateEpgSources { list -> list.filterNot { it.id == epgId } }
             stalkerEpgFile(id).delete()
+            epgFile(epgId).delete()
         }
         dropPlaylistNow(id)
         scope.launch { rebuild() }
@@ -2521,7 +2522,8 @@ class LiveTvRepository @Inject constructor(
 
     /** A Stalker portal's guide is generated into a local XMLTV file. */
     private fun stalkerEpgId(playlistId: String) = "stalker_$playlistId"
-    private fun stalkerEpgFile(playlistId: String) = File(epgDir, "stalker_$playlistId.xml")
+    /** The generated XMLTV; the normal EPG copy is epgFile(stalkerEpgId(id)). */
+    private fun stalkerEpgFile(playlistId: String) = File(epgDir, "stalker_${playlistId}.source.xml")
     /** An Xtream login's group names in the provider's order (see [PlaylistGroupOrder]). */
     private fun groupOrderFile(id: String) = File(playlistDir, "$id.groups")
 
