@@ -1090,7 +1090,10 @@ class LiveTvPlaybackController @Inject constructor(
         // Picked by you (not a switch to the next channel for a game): start the game's list afresh.
         if (!switchingForGame) gameTried.clear()
         val changedChannel = currentChannel?.key != channel.key
-        if (changedChannel) recentStalls.clear()
+        if (changedChannel) {
+            recentStalls.clear()
+            stalkerRelinks = 0
+        }
         shiftStartPending = false
         savedRecordingId = null
         _ownTimeline.value = false
