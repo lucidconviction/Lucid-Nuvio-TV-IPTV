@@ -218,17 +218,39 @@ class LiveTvRepository @Inject constructor(
         val normalizedPortal = StalkerPortalClient.normalizePortal(portal)
         val normalizedMac = StalkerPortalClient.normalizeMac(mac)
             .ifBlank { StalkerPortalClient.randomMac() }
+        val displayName = name.ifBlank { "Stalker portal" }
         prefs.updatePlaylists {
             it + PlaylistSource(
                 id = id,
-                name = name.ifBlank { "Stalker portal" },
+                name = displayName,
                 url = "",
                 stalkerPortal = normalizedPortal,
                 stalkerMac = normalizedMac,
             )
         }
+        val epgId = stalkerEpgId(id)
+        prefs.updateEpgSources { list ->
+            list.filterNot { it.id == epgId } + EpgSource(
+                id = epgId,
+                name = "$displayName guide",
+                url = "file://${stalkerEpgFile(id).absolutePath}",
+            )
+        }
         scope.launch { refreshInternal(forcePlaylists = false, forceEpg = false, forceIds = setOf(id)) }
         return id
+    }
+
+    /** A restored/synced Stalker source needs its generated guide source too. */
+    private suspend fun ensureStalkerEpgSource(pl: PlaylistSource) {
+        val epgId = stalkerEpgId(pl.id)
+        prefs.updateEpgSources { list ->
+            if (list.any { it.id == epgId }) list
+            else list + EpgSource(
+                id = epgId,
+                name = "${pl.name} guide",
+                url = "file://${stalkerEpgFile(pl.id).absolutePath}",
+            )
+        }
     }
 
     suspend fun updatePlaylist(input: PlaylistSource) {
@@ -249,6 +271,12 @@ class LiveTvRepository @Inject constructor(
         } else input
         val wasLive = prefs.currentPlaylists().firstOrNull { it.id == source.id }?.liveEnabled == true
         prefs.updatePlaylists { list -> list.map { if (it.id == source.id) source else it } }
+        if (source.isStalker) {
+            val epgId = stalkerEpgId(source.id)
+            prefs.updateEpgSources { list ->
+                list.map { if (it.id == epgId) it.copy(name = "${source.name} guide") else it }
+            }
+        }
         if (!source.liveEnabled) {
             // TV channels switched off (or never on, for an On Demand-only login): take them out
             // of the guide straight away and leave Live TV alone. Nothing to download for the
@@ -266,8 +294,14 @@ class LiveTvRepository @Inject constructor(
     suspend fun removePlaylist(id: String) {
         prefs.updatePlaylists { list -> list.filterNot { it.id == id } }
         File(playlistDir, "$id.m3u").delete()
+        File(playlistDir, "$id.m3u.prev").delete()
         groupOrderFile(id).delete()
         embeddedEpgUrls.remove(id)
+        if (prefs.currentPlaylists().none { it.id == id }) {
+            val epgId = stalkerEpgId(id)
+            prefs.updateEpgSources { list -> list.filterNot { it.id == epgId } }
+            stalkerEpgFile(id).delete()
+        }
         dropPlaylistNow(id)
         scope.launch { rebuild() }
     }
@@ -285,7 +319,14 @@ class LiveTvRepository @Inject constructor(
     }
 
     suspend fun setPlaylistEnabled(id: String, enabled: Boolean) {
+        val isStalker = prefs.currentPlaylists().firstOrNull { it.id == id }?.isStalker == true
         prefs.updatePlaylists { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
+        if (isStalker) {
+            val epgId = stalkerEpgId(id)
+            prefs.updateEpgSources { list ->
+                list.map { if (it.id == epgId) it.copy(enabled = enabled) else it }
+            }
+        }
         if (!enabled) dropPlaylistNow(id)
         // Rebuild from the cached files first (turning a playlist on or off downloads nothing,
         // so the refresh alone wouldn't rebuild the channel list), then fetch anything missing.
@@ -637,14 +678,20 @@ class LiveTvRepository @Inject constructor(
                         val old = if (file.exists()) File(file.parentFile, file.name + ".prev").also { file.copyTo(it, overwrite = true) } else null
                         val channels = stalker.fetchChannels(pl, force = true)
                         check(channels.isNotEmpty()) { "The portal returned no channels. Check the portal address and MAC." }
+                        val epg = stalker.fetchEpg(pl)
                         file.parentFile?.mkdirs()
                         file.writeText(StalkerPortalClient.buildM3u(pl.id, channels))
+                        val epgFile = stalkerEpgFile(pl.id)
+                        epgFile.parentFile?.mkdirs()
+                        epgFile.writeText(StalkerPortalClient.buildXmltv(channels, epg))
+                        ensureStalkerEpgSource(pl)
                         // Portals rebuild channel ids/links each refresh: unchanged if identical.
                         val unchanged = old != null && sameDecoded(old, file)
                         old?.delete()
                         if (!unchanged) markChanged(file)
                         LIVE_REPORT.add(
                             "Stalker portal \"${pl.name}\": ${channels.size} channel(s), " +
+                                "${epg.size} guide entries, " +
                                 if (unchanged) "no changes" else "new content"
                         )
                         !unchanged
@@ -2471,6 +2518,10 @@ class LiveTvRepository @Inject constructor(
     // ---------------------------------------------------------------- IO helpers
 
     private fun playlistFile(id: String) = File(playlistDir, "$id.m3u")
+
+    /** A Stalker portal's guide is generated into a local XMLTV file. */
+    private fun stalkerEpgId(playlistId: String) = "stalker_$playlistId"
+    private fun stalkerEpgFile(playlistId: String) = File(epgDir, "stalker_$playlistId.xml")
     /** An Xtream login's group names in the provider's order (see [PlaylistGroupOrder]). */
     private fun groupOrderFile(id: String) = File(playlistDir, "$id.groups")
 
@@ -2510,6 +2561,18 @@ class LiveTvRepository @Inject constructor(
     ): Boolean = withContext(Dispatchers.IO) {
         require(url.isNotBlank()) { "No URL set" }
         target.parentFile?.mkdirs()
+        if (url.startsWith("file://")) {
+            val source = File(java.net.URI(url))
+            check(source.exists()) { "The local guide file is missing" }
+            val same = target.exists() && target.length() == source.length() && runCatching {
+                target.readBytes().contentEquals(source.readBytes())
+            }.getOrDefault(false)
+            if (same) return@withContext false
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            source.copyTo(tmp, overwrite = true)
+            tmp.renameTo(target)
+            return@withContext true
+        }
         val meta = File(target.parentFile, target.name + ".meta")
         val (etag, lastModified) = if (!full && target.exists() && meta.exists()) {
             meta.readLines().let { it.getOrNull(0).orEmpty() to it.getOrNull(1).orEmpty() }

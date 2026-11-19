@@ -27,6 +27,31 @@ data class StalkerPlayback(
     val headers: Map<String, String>,
 )
 
+data class StalkerEpgProgram(
+    val channelId: String,
+    val startMs: Long,
+    val stopMs: Long,
+    val title: String,
+    val description: String?,
+)
+
+data class StalkerVodCategory(
+    val id: String,
+    val name: String,
+)
+
+data class StalkerVodItem(
+    val id: String,
+    val name: String,
+    val categoryId: String,
+    val icon: String?,
+    val year: Int?,
+    val genre: String?,
+    val addedSec: Long,
+    val isSeries: Boolean,
+    val command: String,
+)
+
 /**
  * A small Stalker/MAG portal client: handshake, profile, genres and the live channel list.
  * Channels are written into a normal M3U file so the rest of Live TV (keys, groups, favourites,
@@ -102,6 +127,59 @@ class StalkerPortalClient @Inject constructor(
                 appendLine("stalker:$sourceId:${channel.id}")
             }
         }
+
+        fun buildXmltv(
+            channels: List<StalkerPortalChannel>,
+            programs: List<StalkerEpgProgram>,
+        ): String = buildString {
+            appendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+            appendLine("<tv>")
+            val names = channels.associateBy { it.id }
+            names.values.forEach { channel ->
+                append("  <channel id=\"")
+                append(escapeXml(channel.id))
+                append("\"><display-name>")
+                append(escapeXml(channel.name))
+                append("</display-name>")
+                channel.logo?.takeIf { it.isNotBlank() }?.let {
+                    append("<icon src=\"")
+                    append(escapeXml(it))
+                    append("\"/>")
+                }
+                appendLine("</channel>")
+            }
+            programs
+                .filter { it.channelId in names }
+                .sortedBy { it.startMs }
+                .forEach { program ->
+                    append("  <programme start=\"")
+                    append(xmltvTime(program.startMs))
+                    append("\" stop=\"")
+                    append(xmltvTime(program.stopMs))
+                    append("\" channel=\"")
+                    append(escapeXml(program.channelId))
+                    append("\"><title>")
+                    append(escapeXml(program.title))
+                    append("</title>")
+                    program.description?.takeIf { it.isNotBlank() }?.let {
+                        append("<desc>")
+                        append(escapeXml(it))
+                        append("</desc>")
+                    }
+                    appendLine("</programme>")
+                }
+            appendLine("</tv>")
+        }
+
+        private fun xmltvTime(ms: Long): String =
+            java.text.SimpleDateFormat("yyyyMMddHHmmss Z", java.util.Locale.US).format(java.util.Date(ms))
+
+        private fun escapeXml(value: String): String = value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
     }
 
     private data class Session(
@@ -120,6 +198,7 @@ class StalkerPortalClient @Inject constructor(
 
     private val sessions = ConcurrentHashMap<String, Session>()
     private val channelCache = ConcurrentHashMap<String, Pair<Long, List<StalkerPortalChannel>>>()
+    private val vodItemCache = ConcurrentHashMap<String, StalkerVodItem>()
     private val generatedMacs = ConcurrentHashMap<String, String>()
 
     suspend fun fetchChannels(source: PlaylistSource, force: Boolean = false): List<StalkerPortalChannel> =
@@ -136,6 +215,190 @@ class StalkerPortalClient @Inject constructor(
             }
             channels
         }
+
+    suspend fun fetchVodCategories(source: PlaylistSource): List<StalkerVodCategory> =
+        withContext(Dispatchers.IO) {
+            val session = session(source) ?: return@withContext emptyList()
+            val response = get(portalUrl(source, "type=vod&action=get_categories"), session.headers)
+                ?: return@withContext emptyList()
+            val js = response.opt("js")
+            val array = when (js) {
+                is JSONArray -> js
+                is JSONObject -> js.optJSONArray("data") ?: JSONArray()
+                else -> JSONArray()
+            }
+            buildList {
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+                    val name = item.optString("title").ifBlank { item.optString("name") }
+                        .takeIf { it.isNotBlank() } ?: continue
+                    add(StalkerVodCategory(id, name))
+                }
+            }
+        }
+
+    suspend fun fetchVodItems(
+        source: PlaylistSource,
+        categoryId: String,
+    ): List<StalkerVodItem> = withContext(Dispatchers.IO) {
+        val session = session(source) ?: return@withContext emptyList()
+        val out = ArrayList<StalkerVodItem>()
+        var page = 1
+        while (page <= 100) {
+            val response = get(
+                portalUrl(
+                    source,
+                    "type=vod&action=get_ordered_list&category_id=${URLEncoder.encode(categoryId, "UTF-8")}&p=$page",
+                ),
+                session.headers,
+            ) ?: break
+            val js = response.opt("js") ?: break
+            val data = when (js) {
+                is JSONArray -> js
+                is JSONObject -> js.optJSONArray("data") ?: JSONArray()
+                else -> JSONArray()
+            }
+            if (data.length() == 0) break
+            for (i in 0 until data.length()) {
+                val item = data.optJSONObject(i) ?: continue
+                val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val name = item.optString("name").ifBlank { item.optString("o_name") }
+                    .takeIf { it.isNotBlank() } ?: continue
+                val command = item.optString("cmd").takeIf { it.isNotBlank() } ?: continue
+                val icon = item.optString("screenshot_uri")
+                    .ifBlank { item.optString("cover") }
+                    .ifBlank { item.optString("logo") }
+                    .takeIf { it.isNotBlank() }
+                val isSeries = when (val raw = item.opt("is_series")) {
+                    is Boolean -> raw
+                    is Number -> raw.toInt() != 0
+                    else -> item.optString("is_series") == "1"
+                }
+                val year = item.optString("year").toIntOrNull()
+                    ?: item.optString("year").take(4).toIntOrNull()
+                val added = item.optString("added").toLongOrNull()?.let {
+                    if (it > 10_000_000_000L) it / 1_000L else it
+                } ?: (parsePortalTime(item.optString("added")) ?: 0L) / 1_000L
+                val parsed = StalkerVodItem(
+                    id = id,
+                    name = name,
+                    categoryId = item.optString("category_id").ifBlank { categoryId },
+                    icon = icon,
+                    year = year,
+                    genre = item.optString("genres_str")
+                        .ifBlank { item.optString("genre") }
+                        .takeIf { it.isNotBlank() },
+                    addedSec = added,
+                    isSeries = isSeries,
+                    command = command,
+                )
+                out += parsed
+                vodItemCache["${source.id}|${parsed.id}"] = parsed
+            }
+            val total = (js as? JSONObject)?.optInt("total_items", 0) ?: 0
+            val perPage = (js as? JSONObject)?.optInt("max_page_items", 0) ?: 0
+            if (total <= 0 || perPage <= 0 || page * perPage >= total) break
+            page++
+        }
+        out
+    }
+
+    /** A fresh playback URL for a Stalker VOD title. */
+    suspend fun createVodLink(sourceId: String, itemId: String): StalkerPlayback? =
+        withContext(Dispatchers.IO) {
+            val source = prefs.currentPlaylists().firstOrNull { it.id == sourceId } ?: return@withContext null
+            val item = vodItemCache["$sourceId|$itemId"] ?: run {
+                fetchVodCategories(source).forEach { category ->
+                    if (vodItemCache["$sourceId|$itemId"] == null) fetchVodItems(source, category.id)
+                }
+                vodItemCache["$sourceId|$itemId"]
+            } ?: return@withContext null
+            val session = session(source) ?: return@withContext null
+            val command = URLEncoder.encode(item.command, "UTF-8")
+            val response = get(
+                portalUrl(
+                    source,
+                    "type=vod&action=create_link&cmd=$command&series=0&forced_storage=0&disable_ad=0&download=0",
+                ),
+                session.headers,
+            )
+            val js = response?.opt("js")
+            val selected = when (js) {
+                is JSONObject -> js.optString("cmd").takeIf { it.isNotBlank() }
+                is String -> js.takeIf { it.isNotBlank() }
+                else -> null
+            }
+            val url = stripCommandPrefix(selected ?: item.command)
+            if (url.isBlank()) return@withContext null
+            StalkerPlayback(url, session.headers)
+        }
+
+    suspend fun fetchEpg(source: PlaylistSource, hours: Int = 48): List<StalkerEpgProgram> =
+        withContext(Dispatchers.IO) {
+            val session = session(source) ?: return@withContext emptyList()
+            val response = get(
+                portalUrl(source, "type=itv&action=get_epg_info&period=${hours.coerceIn(1, 168)}"),
+                session.headers,
+            ) ?: return@withContext emptyList()
+            val js = response.opt("js") ?: return@withContext emptyList()
+            val out = ArrayList<StalkerEpgProgram>()
+            fun add(channelId: String, item: JSONObject) {
+                if (channelId.isBlank()) return
+                val start = parsePortalTime(
+                    item.optString("time").ifBlank { item.optString("start_timestamp") }
+                        .ifBlank { item.optString("time_start") }
+                ) ?: return
+                val stop = parsePortalTime(
+                    item.optString("time_end").ifBlank { item.optString("stop_timestamp") }
+                        .ifBlank { item.optString("time_stop") }
+                ) ?: (start + 30 * 60_000L)
+                val title = item.optString("name").ifBlank { item.optString("title") }
+                    .takeIf { it.isNotBlank() } ?: return
+                out += StalkerEpgProgram(
+                    channelId = channelId,
+                    startMs = start,
+                    stopMs = stop.coerceAtLeast(start + 60_000L),
+                    title = title,
+                    description = item.optString("descr")
+                        .ifBlank { item.optString("description") }
+                        .ifBlank { item.optString("desc") }
+                        .takeIf { it.isNotBlank() },
+                )
+            }
+            val payload = (js as? JSONObject)?.optJSONObject("data") ?: js
+            when (payload) {
+                is JSONObject -> payload.keys().forEach { channelId ->
+                    val arr = payload.optJSONArray(channelId) ?: return@forEach
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let { add(channelId, it) }
+                    }
+                }
+                is JSONArray -> {
+                    for (i in 0 until payload.length()) {
+                        val item = payload.optJSONObject(i) ?: continue
+                        add(item.optString("ch_id").ifBlank { item.optString("channel_id") }, item)
+                    }
+                }
+            }
+            out.sortBy { it.startMs }
+            out
+        }
+
+    private fun parsePortalTime(raw: String): Long? {
+        val value = raw.trim()
+        if (value.isEmpty()) return null
+        value.toLongOrNull()?.let { number ->
+            return if (number > 10_000_000_000L) number else number * 1_000L
+        }
+        val patterns = listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss")
+        patterns.forEach { pattern ->
+            runCatching {
+                java.text.SimpleDateFormat(pattern, java.util.Locale.US).parse(value)?.time
+            }.getOrNull()?.let { return it }
+        }
+        return null
+    }
 
     suspend fun createLink(sourceId: String, channelId: String): StalkerPlayback? =
         withContext(Dispatchers.IO) {

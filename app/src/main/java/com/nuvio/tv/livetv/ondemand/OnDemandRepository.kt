@@ -102,7 +102,8 @@ data class OnDemandStatus(val loading: Boolean = false, val message: String? = n
 @Singleton
 class OnDemandRepository @Inject constructor(
     private val db: OnDemandDatabase,
-    private val prefs: LiveTvPreferences
+    private val prefs: LiveTvPreferences,
+    private val stalker: com.nuvio.tv.livetv.data.StalkerPortalClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
@@ -186,7 +187,7 @@ class OnDemandRepository @Inject constructor(
         // import it straight away. One that's gone is dropped the same way.
         scope.launch {
             prefs.playlists
-                .map { list -> list.filter { it.enabled && it.isXtream && it.importVod }.map { it.id }.toSet() }
+                .map { list -> list.filter { it.enabled && (it.isXtream || it.isStalker) && it.importVod }.map { it.id }.toSet() }
                 .distinctUntilChanged()
                 .drop(1)
                 .collect { refreshSoon() }
@@ -212,7 +213,8 @@ class OnDemandRepository @Inject constructor(
      * With [onlyId], only that provider is imported (the others are kept as they are).
      */
     suspend fun refresh(force: Boolean, onlyId: String? = null) = mutex.withLock {
-        val playlists = prefs.playlists.first().filter { it.enabled && it.isXtream && it.importVod }
+        val playlists = prefs.playlists.first()
+            .filter { it.enabled && (it.isXtream || it.isStalker) && it.importVod }
         val keep = playlists.map { it.id }.toSet()
         val dropped = runCatching { db.removeExcept(keep) }.getOrDefault(emptySet())
         // A provider switched off forgets when it was last imported, so switching it back on
@@ -302,7 +304,13 @@ class OnDemandRepository @Inject constructor(
         val id = item.tmdbId?.toIntOrNull() ?: return ""
         val path = if (item.kind == VodKind.SERIES) "tv" else "movie"
         return runCatching {
-            val text = getText("https://api.themoviedb.org/3/$path/$id?api_key=$key&language=en-US", "")
+            val bearer = key.startsWith("eyJ")
+            val url = if (bearer) {
+                "https://api.themoviedb.org/3/$path/$id?language=en-US"
+            } else {
+                "https://api.themoviedb.org/3/$path/$id?api_key=$key&language=en-US"
+            }
+            val text = getText(url, "", if (bearer) mapOf("Authorization" to "Bearer $key") else emptyMap())
             val arr = JSONObject(text).optJSONArray("genres") ?: return@runCatching ""
             (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf { n -> n.isNotBlank() } }
                 .joinToString(", ")
@@ -312,7 +320,7 @@ class OnDemandRepository @Inject constructor(
         }
     }
 
-    private fun importKind(pl: PlaylistSource, kind: VodKind) {
+    private suspend fun importKind(pl: PlaylistSource, kind: VodKind) {
         val t0 = System.currentTimeMillis()
         try { importKindInner(pl, kind) } finally {
             com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
@@ -321,7 +329,56 @@ class OnDemandRepository @Inject constructor(
         }
     }
 
-    private fun importKindInner(pl: PlaylistSource, kind: VodKind) {
+    /** Stalker portals list movies and series together; split by the item's is_series flag. */
+    private suspend fun importStalkerKind(pl: PlaylistSource, kind: VodKind) {
+        val what = if (kind == VodKind.MOVIE) "movies" else "series"
+        _status.value = OnDemandStatus(true, "Importing $what from ${pl.name}…")
+        val categories = stalker.fetchVodCategories(pl)
+        check(categories.isNotEmpty()) { "The portal returned no On Demand categories." }
+        val used = LinkedHashMap<String, String>()
+        val items = ArrayList<VodItem>()
+        categories.forEachIndexed { index, category ->
+            _status.value = OnDemandStatus(
+                true,
+                "Importing $what from ${pl.name}… ${index + 1}/${categories.size}",
+            )
+            val matches = stalker.fetchVodItems(pl, category.id)
+                .filter { it.isSeries == (kind == VodKind.SERIES) }
+            if (matches.isEmpty()) return@forEachIndexed
+            used[category.id] = category.name
+            matches.forEach { item ->
+                items += VodItem(
+                    playlistId = pl.id,
+                    kind = kind,
+                    id = item.id,
+                    name = item.name,
+                    icon = item.icon,
+                    categoryId = category.id,
+                    ext = null,
+                    tmdbId = null,
+                    year = item.year,
+                    rating = null,
+                    addedSec = item.addedSec,
+                    genre = item.genre,
+                )
+            }
+        }
+        val saved = db.replace(
+            pl.id,
+            kind,
+            used.map { it.key to it.value },
+            items.asSequence(),
+        )
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+            "On Demand \"${pl.name}\": ${"%,d".format(saved)} $what, ${used.size} categories (Stalker)"
+        )
+    }
+
+    private suspend fun importKindInner(pl: PlaylistSource, kind: VodKind) {
+        if (pl.isStalker) {
+            importStalkerKind(pl, kind)
+            return
+        }
         val api = pl.xtreamApiUrl()
         val catAction = if (kind == VodKind.MOVIE) "get_vod_categories" else "get_series_categories"
         val listAction = if (kind == VodKind.MOVIE) "get_vod_streams" else "get_series"
@@ -573,11 +630,26 @@ class OnDemandRepository @Inject constructor(
         runCatching { db.item(parts[1], kind, parts[2]) }.getOrNull()
     }
 
-    /** Movie link: /movie/user/pass/<id>.<ext> */
-    suspend fun movieUrl(item: VodItem): String? {
+    data class PlaybackLink(val url: String, val headers: Map<String, String>)
+
+    /** A playable movie link and the headers it needs (Stalker portals mint a fresh one). */
+    suspend fun playbackLink(item: VodItem): PlaybackLink? {
         val pl = playlist(item.playlistId) ?: return null
-        return "${pl.xtreamBase()}/movie/${enc(pl.xtreamUsername)}/${enc(pl.xtreamPassword)}/${item.id}.${item.ext ?: "mp4"}"
+        if (pl.isStalker) {
+            val link = stalker.createVodLink(pl.id, item.id) ?: return null
+            return PlaybackLink(link.url, link.headers)
+        }
+        val headers = if (pl.userAgent.isNotBlank()) mapOf("User-Agent" to pl.userAgent) else emptyMap()
+        return PlaybackLink(
+            "${pl.xtreamBase()}/movie/${enc(pl.xtreamUsername)}/${enc(pl.xtreamPassword)}/${item.id}.${item.ext ?: "mp4"}",
+            headers,
+        )
     }
+
+    /** Movie link: /movie/user/pass/<id>.<ext> */
+    suspend fun movieUrl(item: VodItem): String? = playbackLink(item)?.url
+
+    suspend fun isStalker(item: VodItem): Boolean = playlist(item.playlistId)?.isStalker == true
 
     /** Provider details for a movie or series (series include every episode). Cached. */
     suspend fun info(item: VodItem): VodInfo? = withContext(Dispatchers.IO) {
@@ -726,10 +798,10 @@ class OnDemandRepository @Inject constructor(
             val pl = playlist(item.playlistId) ?: continue
             val headers = if (pl.userAgent.isNotBlank()) mapOf("User-Agent" to pl.userAgent) else emptyMap()
             if (kind == VodKind.MOVIE) {
-                val url = movieUrl(item) ?: continue
+                val link = playbackLink(item) ?: continue
                 val tech = runCatching { info(item)?.tech }.getOrNull()
                 out += OnDemandSource(
-                    "${pl.name} · ${(item.ext ?: "mp4").uppercase()}", url, headers,
+                    "${pl.name} · ${(item.ext ?: "mp4").uppercase()}", link.url, link.headers,
                     title = item.name, year = item.year, providerName = pl.name, ext = item.ext ?: "mp4", tech = tech
                 )
             } else if (season != null && episode != null) {
@@ -762,8 +834,15 @@ class OnDemandRepository @Inject constructor(
 
     // ------------------------------------------------------------------ helpers
 
-    private fun getText(url: String, userAgent: String): String {
-        val request = Request.Builder().url(url).header("User-Agent", userAgent.ifBlank { LiveTvRepository.DEFAULT_UA }).build()
+    private fun getText(
+        url: String,
+        userAgent: String,
+        headers: Map<String, String> = emptyMap(),
+    ): String {
+        val request = Request.Builder().url(url)
+            .header("User-Agent", userAgent.ifBlank { LiveTvRepository.DEFAULT_UA })
+            .apply { headers.forEach { (k, v) -> header(k, v) } }
+            .build()
         http.newCall(request).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             return r.body?.string() ?: error("Empty response")

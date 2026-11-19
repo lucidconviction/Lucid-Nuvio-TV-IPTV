@@ -76,7 +76,7 @@ class LiveTvSettingsViewModel @Inject constructor(
         // Movies & series just switched on: import this provider now, whenever it was last
         // imported (switched off earlier, it had its titles removed but still counted as
         // "imported recently", so nothing came back for up to a day).
-        if (source.isXtream && source.importVod && source.enabled && before?.importVod == false) onDemand.refreshNow(source.id)
+        if ((source.isXtream || source.isStalker) && source.importVod && source.enabled && before?.importVod == false) onDemand.refreshNow(source.id)
         else onDemand.refreshSoon()
     }
     /**

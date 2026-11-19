@@ -510,6 +510,7 @@ private fun PlaybackNavHost(
                               season = season,
                               episode = episode,
                               episodeTitle = episodeName,
+                              headers = resolved.headers,
                               addonName = com.nuvio.tv.livetv.ondemand.OnDemandStreams.GROUP_NAME,
                               bingeGroup = com.nuvio.tv.livetv.ondemand.OnDemandStreams.BINGE_GROUP,
                               contentLanguage = contentLanguage

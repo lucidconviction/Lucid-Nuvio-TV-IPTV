@@ -319,12 +319,29 @@ object NetworkModule {
     @Provides
     @Singleton
     @Named("tmdb")
-    fun provideTmdbRetrofit(okHttpClient: OkHttpClient, moshi: Moshi): Retrofit =
-        Retrofit.Builder()
+    fun provideTmdbRetrofit(okHttpClient: OkHttpClient, moshi: Moshi): Retrofit {
+        // TMDB accepts either a v3 API key (api_key query) or a v4 read token (Bearer).
+        // Keep one build field so both kinds work: a JWT is sent as the Authorization header.
+        val tmdbClient = okHttpClient.newBuilder()
+            .addInterceptor { chain ->
+                val token = BuildConfig.TMDB_API_KEY
+                if (token.startsWith("eyJ")) {
+                    chain.proceed(
+                        chain.request().newBuilder()
+                            .header("Authorization", "Bearer $token")
+                            .build()
+                    )
+                } else {
+                    chain.proceed(chain.request())
+                }
+            }
+            .build()
+        return Retrofit.Builder()
             .baseUrl("https://api.themoviedb.org/3/")
-            .client(okHttpClient)
+            .client(tmdbClient)
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
+    }
 
     @Provides
     @Singleton

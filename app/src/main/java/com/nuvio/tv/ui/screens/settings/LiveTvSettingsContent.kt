@@ -483,10 +483,10 @@ internal fun LiveTvSettingsContent(
                                 else -> ""
                             },
                             subtitle = when {
-                                pl.isXtream && pl.enabled && !pl.importLive && pl.importVod -> "Movies & series only (TV channels off)"
-                                pl.isXtream && pl.enabled && !pl.importLive && !pl.importVod -> "Nothing included: turn on TV channels or movies & series under Edit"
+                                (pl.isXtream || pl.isStalker) && pl.enabled && !pl.importLive && pl.importVod -> "Movies & series only (TV channels off)"
+                                (pl.isXtream || pl.isStalker) && pl.enabled && !pl.importLive && !pl.importVod -> "Nothing included: turn on TV channels or movies & series under Edit"
                                 else -> sourceStatus(pl.enabled, pl.lastUpdatedMs, pl.lastError, "${pl.channelCount} channels") +
-                                    (if (pl.isXtream && pl.importVod && pl.enabled) " · + movies & series" else "")
+                                    (if ((pl.isXtream || pl.isStalker) && pl.importVod && pl.enabled) " · + movies & series" else "")
                             } + (account?.expiryLabel()?.let { " · Expires $it" } ?: ""),
                             value = when {
                                 !pl.enabled -> "Off"
@@ -763,7 +763,7 @@ internal fun LiveTvSettingsContent(
                         onClick = { viewModel.onDemand.refreshNow() }
                     )
                     // One switch per Xtream login (logins added before On Demand start switched off).
-                    playlists.filter { it.isXtream }.forEach { pl ->
+                    playlists.filter { it.isXtream || it.isStalker }.forEach { pl ->
                         SettingsToggleRow(
                             "Movies & Series from ${pl.name}",
                             if (pl.importVod) "Included" else "Not included. Switch on to import this provider's movies and series.",

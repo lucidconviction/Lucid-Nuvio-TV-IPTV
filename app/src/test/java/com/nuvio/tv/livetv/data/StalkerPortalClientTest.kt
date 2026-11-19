@@ -36,6 +36,35 @@ class StalkerPortalClientTest {
     }
 
     @Test
+    fun `xmltv keeps the channel and programme times`() {
+        val channel = StalkerPortalChannel(
+            id = "42",
+            name = "News & One",
+            command = "ffmpeg http://stream/42",
+            logo = "http://logo/42.png",
+            genreId = "News",
+        )
+        val text = StalkerPortalClient.buildXmltv(
+            listOf(channel),
+            listOf(
+                StalkerEpgProgram(
+                    channelId = "42",
+                    startMs = 1_792_000_000_000L,
+                    stopMs = 1_792_003_600_000L,
+                    title = "Headlines",
+                    description = "The day's news",
+                )
+            ),
+        )
+
+        assertTrue(text.contains("<channel id=\"42\">"))
+        assertTrue(text.contains("<display-name>News &amp; One</display-name>"))
+        assertTrue(text.contains("channel=\"42\""))
+        assertTrue(text.contains("<title>Headlines</title>"))
+        assertTrue(text.contains("<desc>The day&apos;s news</desc>"))
+    }
+
+    @Test
     fun `m3u keeps the channel id name logo and genre`() {
         val text = StalkerPortalClient.buildM3u(
             "playlist-1",

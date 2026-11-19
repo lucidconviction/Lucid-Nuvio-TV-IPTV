@@ -33,7 +33,12 @@ object OnDemandPlay {
     /** Saved-state key on the details page's back stack entry. */
     const val KEY = "livetv_on_demand_uid"
 
-    data class Resolved(val url: String, val title: String, val poster: String?)
+    data class Resolved(
+        val url: String,
+        val title: String,
+        val poster: String?,
+        val headers: Map<String, String> = emptyMap(),
+    )
 
     /** The "Play Straight from My Provider" setting. */
     suspend fun playDirect(context: Context): Boolean = runCatching {
@@ -53,8 +58,13 @@ object OnDemandPlay {
         val repo = onDemandRepository(context)
         val item = repo.itemByUid(uid) ?: return null
         val name = OnDemandDatabase.displayTitle(item.name)
+        if (repo.isStalker(item)) {
+            // Stalker VOD (movies and series) uses a fresh portal link with MAC/token headers.
+            repo.playbackLink(item)?.let { Resolved(it.url, name, item.icon, it.headers) }
+                ?.let { return it }
+        }
         return if (item.kind == VodKind.MOVIE) {
-            repo.movieUrl(item)?.let { Resolved(it, name, item.icon) }
+            repo.playbackLink(item)?.let { Resolved(it.url, name, item.icon, it.headers) }
         } else {
             val info = repo.info(item) ?: return null
             val ep = info.episodes.firstOrNull { it.season == season && it.episode == episode }
