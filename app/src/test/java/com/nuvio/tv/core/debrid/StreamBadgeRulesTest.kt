@@ -175,6 +175,43 @@ class StreamBadgeRulesTest {
         assertEquals(listOf("Dolby Vision", "Atmos"), badges.map { it.name })
     }
 
+    @Test
+    fun `matches badges from behavior hints binge group`() {
+        val stream = Stream(
+            name = "Movie",
+            title = "Movie",
+            description = null,
+            url = "https://example.com/movie.mkv",
+            ytId = null,
+            infoHash = null,
+            fileIdx = null,
+            externalUrl = null,
+            behaviorHints = StreamBehaviorHints(
+                notWebReady = null,
+                bingeGroup = "movie|1080p|WEB-DL",
+                countryWhitelist = null,
+                proxyHeaders = null
+            ),
+            addonName = "Addon",
+            addonLogo = null
+        )
+        val rules = StreamBadgeRules(
+            imports = listOf(
+                StreamBadgeImport(
+                    sourceUrl = "https://example.com/badges.json",
+                    filters = listOf(
+                        StreamBadgeFilter(name = "1080p", pattern = "1080p"),
+                        StreamBadgeFilter(name = "WEB-DL", pattern = "WEB-?DL")
+                    )
+                )
+            )
+        )
+
+        val badges = StreamBadgeMatcher.matchedBadges(stream, StreamBadgeMatcher.compile(rules))
+
+        assertEquals(listOf("1080p", "WEB-DL"), badges.map { it.name })
+    }
+
     private fun badgeImport(
         sourceUrl: String,
         active: Boolean,

@@ -300,6 +300,8 @@ class PlayerViewModel @Inject constructor(
 
     fun playerStreamFilename(): String? = controller.currentFilename
 
+    fun playerStreamBingeGroup(): String? = controller.currentStreamBingeGroup
+
     fun bindExoSubtitleView(subtitleView: androidx.media3.ui.SubtitleView?) {
         controller.bindExoSubtitleView(subtitleView)
     }

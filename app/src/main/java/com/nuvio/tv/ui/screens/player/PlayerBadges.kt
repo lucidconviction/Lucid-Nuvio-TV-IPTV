@@ -21,6 +21,7 @@ internal fun rememberPlayerBadges(viewModel: PlayerViewModel, uiState: PlayerUiS
     val filters = uiState.playerBadgeFilters
     var mediaInfo by remember { mutableStateOf(PlayerMediaInfo()) }
     var streamFilename by remember { mutableStateOf<String?>(null) }
+    var streamBingeGroup by remember { mutableStateOf<String?>(null) }
     val selectedAudio = uiState.audioTracks.firstOrNull { it.isSelected }
     LaunchedEffect(
         filters,
@@ -33,6 +34,7 @@ internal fun rememberPlayerBadges(viewModel: PlayerViewModel, uiState: PlayerUiS
         if (filters.isNotEmpty() && uiState.showControls && !uiState.isBuffering) {
             mediaInfo = viewModel.playerMediaInfo()
             streamFilename = viewModel.playerStreamFilename()
+            streamBingeGroup = viewModel.playerStreamBingeGroup()
         }
     }
     if (filters.isEmpty()) return emptyList()
@@ -42,7 +44,8 @@ internal fun rememberPlayerBadges(viewModel: PlayerViewModel, uiState: PlayerUiS
     // Collapse whitespace so \n in stream names doesn't break single-line regex patterns.
     val metaCandidates = listOfNotNull(
         streamFilename?.trim()?.takeIf { it.isNotBlank() },
-        uiState.currentStreamName?.trim()?.takeIf { it.isNotBlank() }
+        uiState.currentStreamName?.trim()?.takeIf { it.isNotBlank() },
+        streamBingeGroup?.trim()?.takeIf { it.isNotBlank() }
     )
     // Refine decoder text with details the decoder can't report (Atmos in MKV, DTS-HD MA vs HRA,
     // HDR10+) before group exclusion runs, so those badges aren't lost.

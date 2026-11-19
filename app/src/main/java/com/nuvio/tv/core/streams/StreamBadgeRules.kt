@@ -409,6 +409,7 @@ internal object StreamBadgeMatcher {
             raw?.filename,
             resolve?.filename,
             stream.behaviorHints?.filename,
+            stream.behaviorHints?.bingeGroup,
             stream.debridCacheStatus?.cachedName,
             raw?.torrentName,
             resolve?.torrentName,
