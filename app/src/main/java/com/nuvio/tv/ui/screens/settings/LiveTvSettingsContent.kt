@@ -187,6 +187,8 @@ private sealed interface LiveDialog {
     data object BrowseM3u : LiveDialog
     data object AddXtream : LiveDialog
     data object AddStalker : LiveDialog
+    data object GeneratePortals : LiveDialog
+    data object GeneratedPortals : LiveDialog
     data object AddEpg : LiveDialog
     data class PlaylistActions(val source: PlaylistSource) : LiveDialog
     data class CatchupZone(val source: PlaylistSource) : LiveDialog
@@ -326,6 +328,11 @@ internal fun LiveTvSettingsContent(
     fun firstFocus(p: LiveTvPage): FocusRequester? = firstRequester.takeIf { page == p }
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val epgs by viewModel.epgSources.collectAsStateWithLifecycle()
+    val generatedPortals by com.nuvio.tv.livetv.data.PortalStore.portals.collectAsStateWithLifecycle()
+    val settingsContext = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.nuvio.tv.livetv.data.PortalStore.init(settingsContext)
+    }
     val s by viewModel.settings.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
@@ -523,6 +530,21 @@ internal fun LiveTvSettingsContent(
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddStalker }
                     )
+                    SettingsActionRow(
+                        title = "Generate portals",
+                        subtitle = "Find verified Xtream accounts from Cloud Vault and Reddit, then add only the ones you want.",
+                        leadingIcon = Icons.Default.Cloud,
+                        onClick = { dialog = LiveDialog.GeneratePortals }
+                    )
+                    if (generatedPortals.isNotEmpty()) {
+                        SettingsActionRow(
+                            title = "Generated portals",
+                            subtitle = "${generatedPortals.count { !it.added }} ready · ${generatedPortals.count { it.added }} added",
+                            value = generatedPortals.size.toString(),
+                            leadingIcon = Icons.Default.GridView,
+                            onClick = { dialog = LiveDialog.GeneratedPortals }
+                        )
+                    }
                     SubHeading("TV Guides (EPG)")
                     epgs.forEach { e ->
                         SettingsActionRow(
@@ -1765,6 +1787,32 @@ internal fun LiveTvSettingsContent(
                 if (v[1].isNotBlank()) viewModel.addStalker(v[0], v[1], v[2])
                 close()
             }
+        )
+        LiveDialog.GeneratePortals -> com.nuvio.tv.livetv.ui.PortalGeneratorDialog(
+            onDismiss = close,
+            onAdd = { portal ->
+                viewModel.addXtream(
+                    portal.name,
+                    portal.baseUrl,
+                    portal.username,
+                    portal.password,
+                    importVod = true,
+                    importLive = true,
+                )
+            },
+        )
+        LiveDialog.GeneratedPortals -> com.nuvio.tv.livetv.ui.GeneratedPortalsDialog(
+            onDismiss = close,
+            onAdd = { portal ->
+                viewModel.addXtream(
+                    portal.name,
+                    portal.baseUrl,
+                    portal.username,
+                    portal.password,
+                    importVod = true,
+                    importLive = true,
+                )
+            },
         )
         LiveDialog.AddEpg -> SourceFormDialog(
             title = "Add EPG source",
