@@ -54,6 +54,7 @@ internal fun YouTubeSettingsScreen(
     val context = LocalContext.current
     var autoplay by remember { mutableStateOf(YouTubeSettings.autoplayNext(context)) }
     var resume by remember { mutableStateOf(YouTubeSettings.resumePlayback(context)) }
+    var continueOnHome by remember { mutableStateOf(YouTubeSettings.continueWatchingOnHome(context)) }
     var quality by remember { mutableIntStateOf(YouTubeSettings.preferredHeight(context)) }
     var hideShorts by remember { mutableStateOf(YouTubeSettings.hideShorts(context)) }
     var hideWatched by remember { mutableStateOf(YouTubeSettings.hideWatched(context)) }
@@ -129,6 +130,16 @@ internal fun YouTubeSettingsScreen(
                 SettingsQualityChoices(quality) {
                     quality = it
                     YouTubeSettings.setPreferredHeight(context, it)
+                }
+            }
+            item {
+                YouTubeSettingToggle(
+                    label = "YouTube in Continue Watching",
+                    subtitle = "Show unfinished YouTube videos in Home's Continue Watching row.",
+                    value = continueOnHome,
+                ) {
+                    continueOnHome = it
+                    YouTubeSettings.setContinueWatchingOnHome(context, it)
                 }
             }
 

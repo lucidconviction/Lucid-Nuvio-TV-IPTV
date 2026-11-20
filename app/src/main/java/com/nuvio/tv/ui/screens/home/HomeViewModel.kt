@@ -89,6 +89,7 @@ class HomeViewModel @Inject constructor(
     internal val profileManager: com.nuvio.tv.core.profile.ProfileManager,
     internal val tvRecommendationManager: TvRecommendationManager,
     internal val serverCatalog: ServerCatalog,
+    internal val youtubeHistory: com.nuvio.tv.ui.screens.youtube.YouTubeHistoryRepository,
     internal val metaPreviewEnricher: MetaPreviewEnricher = MetaPreviewEnricher(
         tmdbService,
         tmdbMetadataService,
@@ -349,6 +350,7 @@ class HomeViewModel @Inject constructor(
         get() = trailerPreviewAudioUrlsState
 
     init {
+        com.nuvio.tv.youtube.YouTubeSettings.continueWatchingOnHome(appContext)
         // Accumulates individual watched status changes and flushes them as a single
         // update after 150ms of inactivity, preventing N separate recompositions.
         viewModelScope.launch {
@@ -821,14 +823,24 @@ class HomeViewModel @Inject constructor(
         season: Int? = null,
         episode: Int? = null,
         isNextUp: Boolean = false
-    ) = removeContinueWatchingPipeline(
-        contentId = contentId,
-        season = season,
-        episode = episode,
-        isNextUp = isNextUp
-    )
+    ) {
+        if (contentId.startsWith("youtube:")) {
+            youtubeHistory.remove(contentId.removePrefix("youtube:"))
+            return
+        }
+        removeContinueWatchingPipeline(
+            contentId = contentId,
+            season = season,
+            episode = episode,
+            isNextUp = isNextUp
+        )
+    }
 
     private fun markContinueWatchingWatched(item: ContinueWatchingItem) {
+        if (item is ContinueWatchingItem.InProgress && item.progress.contentType == "youtube") {
+            youtubeHistory.remove(item.progress.videoId)
+            return
+        }
         if (!item.canMarkWatched()) return
         viewModelScope.launch {
             runCatching { watchProgressRepository.markAsCompleted(item.toCompletedProgress()) }

@@ -424,6 +424,7 @@ internal fun continueWatchingShouldBlur(
     preferPosterArtwork: Boolean = false
 ): Boolean {
     if (!blurUnwatchedEpisodes || !useEpisodeThumbnails) return false
+    if (item is ContinueWatchingItem.InProgress && item.progress.contentType == "youtube") return false
     if (item is ContinueWatchingItem.InProgress && item.progress.isCompleted()) return false
     val thumbnail = when (item) {
         is ContinueWatchingItem.InProgress -> item.episodeThumbnail

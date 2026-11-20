@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Singleton
 
 private const val MAX_SOURCES_TO_RESOLVE = 12
@@ -713,6 +714,13 @@ class LiveTvPlaybackController @Inject constructor(
 
     private var resolvingVirtualKey: String? = null
     private var virtualResolveToken = 0
+    private data class CachedLucidSources(
+        val urls: List<String>,
+        val headers: Map<String, String>,
+        val atMs: Long,
+    )
+    /** Recent Lucid item sources, so replaying/returning to a channel starts immediately. */
+    private val lucidSourceCache = ConcurrentHashMap<String, CachedLucidSources>()
     /** The Lucid TV slot currently playing, so the next one can start when this film ends. */
     @Volatile private var activeVirtual: LucidTune? = null
     /** Where to seek once the virtual film is ready (join-in-progress). */
@@ -785,9 +793,16 @@ class LiveTvPlaybackController @Inject constructor(
         season: Int? = null,
         episode: Int? = null,
     ): List<com.nuvio.tv.domain.model.Stream> {
-        val result = withTimeoutOrNull(25_000) {
-            streamRepository.getStreamsFromAllAddons(type, itemId, season, episode)
-                .first { it !is NetworkResult.Loading }
+        val flow = streamRepository.getStreamsFromAllAddons(type, itemId, season, episode)
+        // Addons answer as they finish: take the first answer that actually has sources, so an
+        // empty early lane doesn't make Lucid skip a playable title.
+        val result = withTimeoutOrNull(20_000) {
+            flow.first { result ->
+                result is NetworkResult.Error ||
+                    (result is NetworkResult.Success && result.data.any { it.streams.isNotEmpty() })
+            }
+        } ?: withTimeoutOrNull(2_000) {
+            flow.first { it !is NetworkResult.Loading }
         } ?: return emptyList()
         return when (result) {
             is NetworkResult.Success -> result.data.flatMap { it.streams }
@@ -990,12 +1005,34 @@ class LiveTvPlaybackController @Inject constructor(
                     }
                     // The item id is the episode id for series ("tt123:1:1"), which is what
                     // stream addons need for /stream/series/...json.
+                    val cacheKey = "${channel.key}|${item.id}"
+                    val cached = lucidSourceCache[cacheKey]
+                        ?.takeIf { System.currentTimeMillis() - it.atMs < 5 * 60_000L }
+                    if (cached != null && cached.urls.isNotEmpty()) {
+                        lucid.clearError(channel.key)
+                        play(
+                            channel = channel.copy(headers = cached.headers),
+                            overrideUrl = cached.urls.first(),
+                            fallbacks = cached.urls.drop(1),
+                            virtualTune = tune,
+                        )
+                        return@launch
+                    }
                     val raw = allAddonStreams(item.type, item.id, item.season, item.episode)
-                    val resolved = coroutineScope {
-                        raw.take(MAX_SOURCES_TO_RESOLVE)
-                            .map { stream -> async { resolvedAddonSource(stream) } }
-                            .awaitAll()
-                    }.filterNotNull().distinctBy { it.first }
+                    // Most addons return direct links. Play the first one now instead of waiting
+                    // for every debrid link to resolve; the rest stay as fallbacks.
+                    val direct = raw.mapNotNull { stream ->
+                        stream.getStreamUrl()?.let { url -> url to stream }
+                    }.distinctBy { it.first }
+                    val resolved = if (direct.isNotEmpty()) {
+                        direct
+                    } else {
+                        coroutineScope {
+                            raw.take(4)
+                                .map { stream -> async { resolvedAddonSource(stream) } }
+                                .awaitAll()
+                        }.filterNotNull().distinctBy { it.first }
+                    }
                     if (token != virtualResolveToken) return@launch
                     if (resolved.isEmpty()) {
                         if (skipped < MAX_VIRTUAL_SKIPS && lucid.markUnplayable(channel.key, item.id)) {
@@ -1025,11 +1062,17 @@ class LiveTvPlaybackController @Inject constructor(
                     }
                     val primary = resolved.first()
                     val headers = primary.second.behaviorHints?.proxyHeaders?.request.orEmpty()
+                    val urls = resolved.map { it.first }
+                    lucidSourceCache[cacheKey] = CachedLucidSources(
+                        urls = urls,
+                        headers = headers,
+                        atMs = System.currentTimeMillis(),
+                    )
                     lucid.clearError(channel.key)
                     play(
                         channel = channel.copy(headers = headers),
                         overrideUrl = primary.first,
-                        fallbacks = resolved.drop(1).map { it.first },
+                        fallbacks = urls.drop(1),
                         virtualTune = tune,
                     )
                     return@launch

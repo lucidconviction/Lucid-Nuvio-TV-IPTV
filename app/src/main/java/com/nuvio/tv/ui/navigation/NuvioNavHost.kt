@@ -279,6 +279,13 @@ private fun PlaybackNavHost(
                 }
             }
 
+            fun openYouTubeContinue(item: ContinueWatchingItem): Boolean {
+                val progress = (item as? ContinueWatchingItem.InProgress)?.progress ?: return false
+                if (progress.contentType != "youtube") return false
+                com.nuvio.tv.ui.screens.youtube.YouTubeOpen.open?.invoke(progress.videoId, progress.name)
+                return true
+            }
+
             // Live TV fork: get Live TV ready in the background, so the guide is there when opened.
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 runCatching { com.nuvio.tv.livetv.startup.LiveTvPreload.start(context) }
@@ -314,6 +321,7 @@ private fun PlaybackNavHost(
                     )
                 },
                 onContinueWatchingClick = onContinueWatchingClick@{ item ->
+                    if (openYouTubeContinue(item)) return@onContinueWatchingClick
                     if (!playbackAvailability.canStream(item)) {
                         Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
                         return@onContinueWatchingClick
@@ -321,6 +329,7 @@ private fun PlaybackNavHost(
                     navController.navigate(createContinueWatchingRoute(item))
                 },
                 onContinueWatchingStartFromBeginning = onContinueWatchingStartFromBeginning@{ item ->
+                    if (openYouTubeContinue(item)) return@onContinueWatchingStartFromBeginning
                     if (!playbackAvailability.canStream(item)) {
                         Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
                         return@onContinueWatchingStartFromBeginning
@@ -330,6 +339,7 @@ private fun PlaybackNavHost(
                     )
                 },
                 onContinueWatchingPlayManually = onContinueWatchingPlayManually@{ item ->
+                    if (openYouTubeContinue(item)) return@onContinueWatchingPlayManually
                     if (!playbackAvailability.canStream(item)) {
                         Toast.makeText(context, R.string.playback_unavailable_message, Toast.LENGTH_SHORT).show()
                         return@onContinueWatchingPlayManually

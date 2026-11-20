@@ -64,6 +64,24 @@ private data class ProgressSnapshot(
     val hasLoadedRemoteProgress: Boolean
 )
 
+private fun com.nuvio.tv.ui.screens.youtube.YouTubeHistoryEntry.toWatchProgress(): WatchProgress =
+    WatchProgress(
+        contentId = "youtube:$videoId",
+        contentType = "youtube",
+        name = title,
+        poster = thumbnail,
+        backdrop = thumbnail,
+        logo = null,
+        videoId = videoId,
+        season = null,
+        episode = null,
+        episodeTitle = channel,
+        position = positionMs,
+        duration = durationMs,
+        lastWatched = updatedAtMs,
+        source = "youtube",
+    )
+
 private data class ContinueWatchingSettingsSnapshot(
     val items: List<WatchProgress>,
     val nextUpSeeds: List<WatchProgress>,
@@ -303,8 +321,12 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
                 arrayOf(daysCap, dismissedNextUp, showUnairedNextUp, nextUpFromFurthest, sortMode)
             },
             watchProgressRepository.watchedItems.map { it.size },
-            cwPipelineRefreshTrigger
-        ) { progressSnapshot, settingsSnapshot, watchedItemsSize, _ ->
+            cwPipelineRefreshTrigger,
+            combine(
+                youtubeHistory.entries,
+                com.nuvio.tv.youtube.YouTubeSettings.continueWatchingHome.filterNotNull()
+            ) { entries, enabled -> entries to enabled }
+        ) { progressSnapshot, settingsSnapshot, watchedItemsSize, _, youtubeSnapshot ->
             val (items, nextUpSeeds, hasLoadedRemoteProgress) = progressSnapshot
             @Suppress("UNCHECKED_CAST")
             val daysCap = settingsSnapshot[0] as Int
@@ -312,8 +334,15 @@ internal fun HomeViewModel.loadContinueWatchingPipeline() {
             val showUnairedNextUp = settingsSnapshot[2] as Boolean
             val nextUpFromFurthestEpisode = settingsSnapshot[3] as Boolean
             val continueWatchingSortMode = settingsSnapshot[4] as ContinueWatchingSortMode
+            val (youtubeEntries, youtubeEnabled) = youtubeSnapshot
+            val itemsWithYouTube = if (youtubeEnabled) {
+                items.filterNot { it.contentType == "youtube" } +
+                    youtubeEntries.map { it.toWatchProgress() }
+            } else {
+                items.filterNot { it.contentType == "youtube" }
+            }
             ContinueWatchingSettingsSnapshot(
-                items = items,
+                items = itemsWithYouTube,
                 nextUpSeeds = nextUpSeeds,
                 daysCap = daysCap,
                 dismissedNextUp = dismissedNextUp,

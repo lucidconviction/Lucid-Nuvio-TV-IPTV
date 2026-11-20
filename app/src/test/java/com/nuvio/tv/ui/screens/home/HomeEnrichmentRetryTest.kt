@@ -466,7 +466,10 @@ class HomeEnrichmentRetryTest {
             cwEnrichmentCache = cwEnrichmentCache,
             profileManager = profileManager,
             tvRecommendationManager = mockk(relaxed = true),
-            serverCatalog = mockk(relaxed = true)
+            serverCatalog = mockk(relaxed = true),
+            youtubeHistory = mockk<com.nuvio.tv.ui.screens.youtube.YouTubeHistoryRepository>(relaxed = true) {
+                every { entries } returns MutableStateFlow(emptyList())
+            }
         )
         // The pipeline defers everything while the startup grace period is active, and TMDB is
         // switched off so the external addon is the only enrichment source under test.

@@ -201,7 +201,10 @@ class HomeEnrichmentRepositoryBoundaryTest {
             cwEnrichmentCache = cwEnrichmentCache,
             profileManager = profileManager,
             tvRecommendationManager = mockk(relaxed = true),
-            serverCatalog = mockk(relaxed = true)
+            serverCatalog = mockk(relaxed = true),
+            youtubeHistory = mockk<com.nuvio.tv.ui.screens.youtube.YouTubeHistoryRepository>(relaxed = true) {
+                every { entries } returns MutableStateFlow(emptyList())
+            }
         )
         viewModel.startupGracePeriodActive = false
         viewModel.externalMetaPrefetchEnabled = true

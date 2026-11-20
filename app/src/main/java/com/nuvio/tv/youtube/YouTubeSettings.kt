@@ -27,6 +27,10 @@ object YouTubeSettings {
     private const val KEY_FEED_PREVIEW = "feed_preview"
     private const val KEY_CONTENT_REGION = "content_region"
     private const val KEY_RESUME = "resume_playback"
+    private const val KEY_CONTINUE_WATCHING_HOME = "continue_watching_home"
+
+    /** Home observes this; the YouTube settings screen updates it when the toggle changes. */
+    val continueWatchingHome = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
 
     /** SponsorBlock's segment types, in the order they're listed. */
     val sponsorCategories: List<Pair<String, String>> = listOf(
@@ -182,6 +186,17 @@ object YouTubeSettings {
 
     fun setResumePlayback(context: Context, on: Boolean) {
         prefs(context).edit().putBoolean(KEY_RESUME, on).apply()
+    }
+
+    /** Unfinished YouTube videos in Home's Continue Watching row. */
+    fun continueWatchingOnHome(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CONTINUE_WATCHING_HOME, true).also {
+            if (continueWatchingHome.value == null) continueWatchingHome.value = it
+        }
+
+    fun setContinueWatchingOnHome(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CONTINUE_WATCHING_HOME, on).apply()
+        continueWatchingHome.value = on
     }
 
     /** Which video format to prefer when YouTube offers the same size in several. */
