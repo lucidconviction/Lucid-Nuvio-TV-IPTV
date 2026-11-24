@@ -43,6 +43,22 @@ class PluginViewModel @Inject constructor(
 
     init {
         observePluginData()
+        viewModelScope.launch {
+            pluginManager.sourceLanguages.collect { languages ->
+                _uiState.update { it.copy(sourceLanguages = languages) }
+            }
+        }
+        viewModelScope.launch {
+            pluginManager.extensionDns.collect { mode ->
+                _uiState.update { it.copy(extensionDns = mode) }
+            }
+        }
+        viewModelScope.launch {
+            pluginManager.scrapers.collect {
+                val languages = pluginManager.installedSourceLanguages()
+                _uiState.update { state -> state.copy(installedLanguages = languages) }
+            }
+        }
     }
 
     private fun observePluginData() {
@@ -79,6 +95,17 @@ class PluginViewModel @Inject constructor(
 
     fun onEvent(event: PluginUiEvent) {
         when (event) {
+            is PluginUiEvent.ToggleSourceLanguage -> if (!isReadOnly) viewModelScope.launch {
+                val current = _uiState.value.sourceLanguages
+                val next = if (event.language == null) emptySet() else
+                    if (event.language in current) current - event.language else current + event.language
+                pluginManager.setSourceLanguages(next)
+            }
+            PluginUiEvent.CycleExtensionDns -> if (!isReadOnly) viewModelScope.launch {
+                val options = listOf("SYSTEM", "CLOUDFLARE", "GOOGLE", "QUAD9")
+                val next = (options.indexOf(_uiState.value.extensionDns) + 1) % options.size
+                pluginManager.setExtensionDns(options[next])
+            }
             is PluginUiEvent.AddRepository -> addRepository(event.url)
             is PluginUiEvent.RemoveRepository -> removeRepository(event.repoId)
             is PluginUiEvent.RefreshRepository -> refreshRepository(event.repoId)

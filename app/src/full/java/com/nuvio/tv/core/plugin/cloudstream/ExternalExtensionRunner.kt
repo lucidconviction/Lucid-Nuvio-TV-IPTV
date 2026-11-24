@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -52,7 +53,8 @@ private const val MAX_ALT_TITLES = 8
 @Singleton
 class ExternalExtensionRunner @Inject constructor(
     private val extensionLoader: ExternalExtensionLoader,
-    private val tmdbMetadataService: TmdbMetadataService
+    private val tmdbMetadataService: TmdbMetadataService,
+    private val pluginDataStore: com.nuvio.tv.data.local.PluginDataStore? = null
 ) {
     suspend fun execute(
         scraperId: String,
@@ -63,9 +65,13 @@ class ExternalExtensionRunner @Inject constructor(
     ): List<LocalScraperResult> = withContext(Dispatchers.IO) {
         extensionLoader.ensureExtractorsLoaded(listOf(scraperId))
 
-        val apis = extensionLoader.loadExtension(scraperId).distinct()
+        val loadedApis = extensionLoader.loadExtension(scraperId)
+        val languages = pluginDataStore?.sourceLanguages?.first().orEmpty()
+        val apis = if (languages.isEmpty()) loadedApis else loadedApis.filter {
+            com.nuvio.tv.core.plugin.SourceLanguages.allows(it.lang, languages)
+        }.distinct()
         if (apis.isEmpty()) {
-            Log.e(TAG, "No API loaded for scraper: $scraperId")
+            Log.e(TAG, "No API loaded for scraper: $scraperId (loaded=${loadedApis.size}, languages=$languages)")
             return@withContext emptyList()
         }
         if (apis.size == 1) {
@@ -121,10 +127,17 @@ class ExternalExtensionRunner @Inject constructor(
         extensionLoader.ensureExtractorsLoaded(listOf(scraperId), diagnostics)
 
         diagnostics.addStep("Loading DEX extension...")
-        val apis = extensionLoader.loadExtensionWithDiagnostics(scraperId, diagnostics)
+        val loadedApis = extensionLoader.loadExtensionWithDiagnostics(scraperId, diagnostics)
+        val languages = pluginDataStore?.sourceLanguages?.first().orEmpty()
+        val apis = if (languages.isEmpty()) loadedApis else loadedApis.filter {
+            com.nuvio.tv.core.plugin.SourceLanguages.allows(it.lang, languages)
+        }
 
         if (apis.isEmpty()) {
-            diagnostics.addStep("No MainAPI available after load")
+            diagnostics.addStep(
+                if (loadedApis.isEmpty()) "No MainAPI available after load"
+                else "No sources match selected languages"
+            )
             return@withContext emptyList()
         }
 

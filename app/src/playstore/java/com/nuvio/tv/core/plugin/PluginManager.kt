@@ -17,6 +17,8 @@ class PluginManager {
     val pluginsEnabled: Flow<Boolean> = flowOf(false)
     val groupStreamsByRepository: Flow<Boolean> = flowOf(false)
     val enabledScrapers: Flow<List<ScraperInfo>> = flowOf(emptyList())
+    val sourceLanguages: Flow<Set<String>> = flowOf(emptySet())
+    val extensionDns: Flow<String> = flowOf("SYSTEM")
 
     var isSyncingFromRemote: Boolean = false
 
@@ -50,6 +52,16 @@ class PluginManager {
     suspend fun setPluginsEnabled(enabled: Boolean) = Unit
 
     suspend fun setGroupStreamsByRepository(enabled: Boolean) = Unit
+
+    suspend fun setSourceLanguages(languages: Set<String>) = Unit
+
+    suspend fun setExtensionDns(mode: String) = Unit
+
+    suspend fun installedSourceLanguages(): Map<String, Int> = emptyMap()
+
+    suspend fun hasExtensionSettings(scraperId: String): Boolean = false
+
+    fun openExtensionSettings(activity: android.app.Activity, scraperId: String) = Unit
 
     fun recordPluginProviderPlay(stream: Stream) = Unit
 

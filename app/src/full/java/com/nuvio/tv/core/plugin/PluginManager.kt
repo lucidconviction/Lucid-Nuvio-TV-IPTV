@@ -243,10 +243,38 @@ class PluginManager @Inject constructor(
     val pluginsEnabled: Flow<Boolean> = dataStore.pluginsEnabled
 
     val groupStreamsByRepository: Flow<Boolean> = dataStore.groupStreamsByRepository
+
+    val sourceLanguages = dataStore.sourceLanguages
+    val extensionDns = dataStore.extensionDns
+
+    suspend fun setSourceLanguages(languages: Set<String>) =
+        dataStore.setSourceLanguages(languages.mapNotNull(SourceLanguages::normalize).toSet())
+
+    suspend fun setExtensionDns(mode: String) = dataStore.setExtensionDns(mode)
+
+    suspend fun installedSourceLanguages(): Map<String, Int> = withContext(Dispatchers.IO) {
+        val counts = mutableMapOf<String, Int>()
+        dataStore.scrapers.first()
+            .filter { it.type == RepositoryType.EXTERNAL_DEX }
+            .forEach { scraper ->
+                externalExtensionLoader.loadExtension(scraper.id).forEach { api ->
+                    SourceLanguages.normalize(api.lang)?.let { code ->
+                        counts[code] = (counts[code] ?: 0) + 1
+                    }
+                }
+            }
+        counts
+    }
     
     private val syncScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
     )
+
+    init {
+        syncScope.launch {
+            extensionDns.collect { mode -> com.nuvio.tv.core.runtime.ExtensionDns.select(mode) }
+        }
+    }
 
     var isSyncingFromRemote = false
 
@@ -796,6 +824,8 @@ class PluginManager @Inject constructor(
 
     private suspend fun preloadDexExtractors(scrapers: List<ScraperInfo>) {
         if (scrapers.none { it.type == RepositoryType.EXTERNAL_DEX }) return
+        // Extractors can come from a different package than the provider that needs them.
+        com.nuvio.tv.core.runtime.ExtensionDns.select(extensionDns.first())
         val installed = registerInstalledExtensions()
         if (installed.isEmpty()) return
         withContext(Dispatchers.IO) {

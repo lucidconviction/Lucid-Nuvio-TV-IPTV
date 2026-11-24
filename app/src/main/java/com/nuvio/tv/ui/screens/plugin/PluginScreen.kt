@@ -137,6 +137,7 @@ fun PluginScreenContent(
     showHeader: Boolean = true
 ) {
     var repoUrl by remember { mutableStateOf("") }
+    var repoPendingRemoval by remember { mutableStateOf<PluginRepository?>(null) }
     val listState = rememberLazyListState()
     val manageFromPhoneFocusRequester = remember { FocusRequester() }
     var hasEnteredQrMode by remember { mutableStateOf(false) }
@@ -249,6 +250,17 @@ fun PluginScreenContent(
                 )
             }
 
+            if (uiState.scrapers.any { it.type == com.nuvio.tv.domain.model.RepositoryType.EXTERNAL_DEX }) {
+                item {
+                    CloudStreamPreferences(
+                        state = uiState,
+                        readOnly = viewModel.isReadOnly,
+                        onLanguage = { viewModel.onEvent(PluginUiEvent.ToggleSourceLanguage(it)) },
+                        onDns = { viewModel.onEvent(PluginUiEvent.CycleExtensionDns) }
+                    )
+                }
+            }
+
             // Repositories section
             item {
                 Text(
@@ -273,7 +285,7 @@ fun PluginScreenContent(
                     repository = repo,
                     repoScrapers = repoScrapers,
                     onRefresh = { viewModel.onEvent(PluginUiEvent.RefreshRepository(repo.id)) },
-                    onRemove = { viewModel.onEvent(PluginUiEvent.RemoveRepository(repo.id)) },
+                    onRemove = { repoPendingRemoval = repo },
                     onToggleAll = { enabled ->
                         viewModel.onEvent(PluginUiEvent.ToggleAllScrapersForRepo(repo.id, enabled))
                     },
@@ -355,6 +367,17 @@ fun PluginScreenContent(
                 onDismiss = { viewModel.onEvent(PluginUiEvent.DismissPendingScraperEnable) }
             )
         }
+    }
+
+    repoPendingRemoval?.let { repo ->
+        ConfirmRepoDeleteDialog(
+            repoName = repo.name.ifBlank { repo.url },
+            onConfirm = {
+                viewModel.onEvent(PluginUiEvent.RemoveRepository(repo.id))
+                repoPendingRemoval = null
+            },
+            onDismiss = { repoPendingRemoval = null }
+        )
     }
     }
 }
@@ -996,6 +1019,104 @@ private fun ConfirmRepoChangesDialog(
 }
 
 @Composable
+private fun ConfirmRepoDeleteDialog(
+    repoName: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    BackHandler { onDismiss() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            onClick = { },
+            modifier = Modifier.width(560.dp),
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = NuvioTheme.colors.SurfaceVariant
+            ),
+            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(NuvioTheme.radii.xl))
+        ) {
+            Column(
+                modifier = Modifier.padding(NuvioTheme.spacing.xl),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(R.string.plugin_repo_delete_confirm_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = NuvioTheme.colors.TextPrimary
+                )
+                Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
+                Text(
+                    text = stringResource(R.string.plugin_repo_delete_confirm_message) + "\n" + repoName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NuvioTheme.colors.TextSecondary,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(NuvioTheme.spacing.xl))
+                Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg)) {
+                    Surface(
+                        onClick = onDismiss,
+                        modifier = Modifier.semantics { role = Role.Button },
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = NuvioTheme.colors.Surface,
+                            focusedContainerColor = NuvioTheme.colors.FocusBackground
+                        ),
+                        border = ClickableSurfaceDefaults.border(
+                            focusedBorder = Border(
+                                border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                                shape = RoundedCornerShape(50)
+                            )
+                        ),
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50))
+                    ) {
+                        Text(
+                            text = stringResource(R.string.plugin_repo_delete_no),
+                            modifier = Modifier.padding(
+                                horizontal = NuvioTheme.spacing.xl,
+                                vertical = NuvioTheme.spacing.md
+                            ),
+                            color = NuvioTheme.colors.TextPrimary
+                        )
+                    }
+                    Surface(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .focusRequester(focusRequester)
+                            .semantics { role = Role.Button },
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = NuvioTheme.colors.Secondary,
+                            focusedContainerColor = NuvioTheme.colors.SecondaryVariant
+                        ),
+                        border = ClickableSurfaceDefaults.border(
+                            focusedBorder = Border(
+                                border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                                shape = RoundedCornerShape(50)
+                            )
+                        ),
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50))
+                    ) {
+                        Text(
+                            text = stringResource(R.string.plugin_repo_delete_yes),
+                            modifier = Modifier.padding(
+                                horizontal = NuvioTheme.spacing.xl,
+                                vertical = NuvioTheme.spacing.md
+                            ),
+                            color = NuvioTheme.colors.OnSecondary
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConfirmScraperEnableDialog(
     scraperName: String,
     onConfirm: () -> Unit,
@@ -1348,6 +1469,10 @@ private fun ScraperCard(
                             color = NuvioTheme.colors.TextPrimary
                         )
 
+                        PluginTypeBadge(
+                            isCloudStream = scraper.type == com.nuvio.tv.domain.model.RepositoryType.EXTERNAL_DEX
+                        )
+
                         // Type badges
                         scraper.supportedTypes.forEach { type ->
                             TypeBadge(type = type)
@@ -1530,6 +1655,94 @@ private fun ScraperCard(
                 }
             }
         }
+    }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CloudStreamPreferences(
+    state: PluginUiState,
+    readOnly: Boolean,
+    onLanguage: (String?) -> Unit,
+    onDns: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(NuvioTheme.colors.BackgroundCard, RoundedCornerShape(18.dp))
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.plugin_source_languages_title),
+            style = MaterialTheme.typography.titleMedium,
+            color = NuvioTheme.colors.TextPrimary
+        )
+        Text(
+            text = stringResource(R.string.plugin_source_languages_description),
+            style = MaterialTheme.typography.bodyMedium,
+            color = NuvioTheme.colors.TextSecondary
+        )
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            @Composable
+            fun Choice(label: String, selected: Boolean, action: () -> Unit) {
+                Button(
+                    onClick = action,
+                    enabled = !readOnly,
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (selected) NuvioTheme.colors.Secondary else NuvioTheme.colors.Surface,
+                        contentColor = if (selected) NuvioTheme.colors.OnSecondary else NuvioTheme.colors.TextPrimary
+                    )
+                ) {
+                    Text(label)
+                }
+            }
+            Choice(stringResource(R.string.plugin_all_source_languages), state.sourceLanguages.isEmpty()) {
+                onLanguage(null)
+            }
+            val languages = (state.installedLanguages.keys + state.sourceLanguages)
+                .sortedBy { com.nuvio.tv.core.plugin.SourceLanguages.displayName(it) }
+            languages.forEach { code ->
+                val name = com.nuvio.tv.core.plugin.SourceLanguages.displayName(code)
+                val label = "$name · ${state.installedLanguages[code] ?: 0}"
+                Choice(label, code in state.sourceLanguages) { onLanguage(code) }
+            }
+        }
+        val dnsName = when (state.extensionDns) {
+            "CLOUDFLARE" -> "Cloudflare"
+            "GOOGLE" -> "Google"
+            "QUAD9" -> "Quad9"
+            else -> stringResource(R.string.plugin_dns_system)
+        }
+        Text(
+            text = stringResource(R.string.plugin_dns_description),
+            style = MaterialTheme.typography.bodyMedium,
+            color = NuvioTheme.colors.TextSecondary
+        )
+        Button(onClick = onDns, enabled = !readOnly) {
+            Text(stringResource(R.string.plugin_dns_choice, dnsName))
+        }
+    }
+}
+
+@Composable
+private fun PluginTypeBadge(isCloudStream: Boolean) {
+    val color = if (isCloudStream) Color(0xFF9C6BFF) else Color(0xFFFFB74D)
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.2f), RoundedCornerShape(NuvioTheme.radii.xs))
+            .padding(horizontal = 6.dp, vertical = NuvioTheme.spacing.xxs)
+    ) {
+        Text(
+            text = stringResource(
+                if (isCloudStream) R.string.plugin_type_cloudstream else R.string.plugin_type_javascript
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = color
+        )
     }
 }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.nuvio.tv.core.plugin.PluginProviderPlayStat
 import com.nuvio.tv.core.plugin.pluginProviderPlayStats
 import com.nuvio.tv.core.profile.ProfileManager
@@ -210,6 +211,32 @@ class PluginDataStore @Inject constructor(
             if (sharedPluginWriteBlocked()) return
         store().edit { prefs ->
             prefs[groupStreamsByRepositoryKey] = enabled
+        }
+    }
+
+    private val sourceLanguagesKey = stringSetPreferencesKey("cloudstream_languages")
+    private val extensionDnsKey = stringPreferencesKey("cloudstream_dns")
+
+    // An empty selection includes every source, including installations made before this setting existed.
+    val sourceLanguages: Flow<Set<String>> = profileState { pid ->
+        factory.get(pid, FEATURE).data.map { prefs -> prefs[sourceLanguagesKey] ?: emptySet() }
+    }
+
+    val extensionDns: Flow<String> = profileState { pid ->
+        factory.get(pid, FEATURE).data.map { prefs -> prefs[extensionDnsKey] ?: "SYSTEM" }
+    }
+
+    suspend fun setSourceLanguages(languages: Set<String>) {
+        if (sharedPluginWriteBlocked()) return
+        store().edit { prefs ->
+            prefs[sourceLanguagesKey] = languages
+        }
+    }
+
+    suspend fun setExtensionDns(mode: String) {
+        if (sharedPluginWriteBlocked()) return
+        store().edit { prefs ->
+            prefs[extensionDnsKey] = mode
         }
     }
 

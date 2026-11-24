@@ -3462,4 +3462,16 @@
     <string name="autosync_label_synced">Auto synced</string>
     <string name="stream_resume_from_time">Resume from %1$s</string>
     <string name="stream_resume_from_percent">Resume from %1$d%%</string>
+    <string name="plugin_all_source_languages">All languages</string>
+    <string name="plugin_source_languages_title">Source languages</string>
+    <string name="plugin_source_languages_description">Choose which languages’ CloudStream sources search for streams. Sources with an unspecified or multilingual language are always included.</string>
+    <string name="plugin_dns_description">Choose the resolver used for CloudStream extension requests. Press OK to switch providers.</string>
+    <string name="plugin_dns_choice">CloudStream DNS · %1$s</string>
+    <string name="plugin_dns_system">TV system DNS</string>
+    <string name="plugin_repo_delete_confirm_title">Delete repository?</string>
+    <string name="plugin_repo_delete_confirm_message">Are you sure you want to delete it?</string>
+    <string name="plugin_repo_delete_yes">Yes</string>
+    <string name="plugin_repo_delete_no">No</string>
+    <string name="plugin_type_cloudstream">CloudStream</string>
+    <string name="plugin_type_javascript">JavaScript</string>
 </resources>
