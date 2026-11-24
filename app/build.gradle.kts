@@ -636,6 +636,8 @@ dependencies {
 
     add("fullImplementation", files("libs/quickjs-kt-android-1.0.5-nuvio.aar"))
     add("fullImplementation", libs.jsoup)
+    add("fullImplementation", libs.ksoup)
+    add("fullImplementation", libs.okhttp.dnsoverhttps)
     add("fullImplementation", "com.fasterxml.jackson.core:jackson-databind:2.17.0")
     add("fullImplementation", "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0")
     add("fullImplementation", libs.nicehttp)

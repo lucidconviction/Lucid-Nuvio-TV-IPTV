@@ -1,8 +1,8 @@
 package com.nuvio.tv.core.plugin
 
 import android.util.Log
-import com.nuvio.tv.core.plugin.cloudstream.toNuvioType
-import com.nuvio.tv.core.plugin.cloudstream.tvTypeFromString
+import com.nuvio.tv.core.plugin.cloudstream.cloudStreamContentTypes
+import com.nuvio.tv.core.plugin.cloudstream.unwrapCloudStreamUrl
 import com.nuvio.tv.core.plugin.cloudstream.ExternalExtensionLoader
 import com.nuvio.tv.core.plugin.cloudstream.ExternalExtensionRunner
 import com.nuvio.tv.core.plugin.cloudstream.ExternalRepoParser
@@ -101,7 +101,7 @@ class PluginManager @Inject constructor(
      * External repos often use schemes like "cloudstreamrepo://" or "stremio://".
      */
     private fun sanitizeScheme(url: String): String {
-        val trimmed = url.trim()
+        val trimmed = unwrapCloudStreamUrl(url)
         // Replace any non-http(s) scheme with https://
         val schemeEnd = trimmed.indexOf("://")
         if (schemeEnd > 0) {
@@ -1172,18 +1172,13 @@ class PluginManager @Inject constructor(
                     try {
                         val scraperId = "$repoId:${plugin.internalName}"
 
-                        val file = externalExtensionLoader.downloadExtension(scraperId, plugin.url)
+                        val file = externalExtensionLoader.downloadExtension(scraperId, plugin.url, plugin.fileHash)
                         if (file == null) {
                             Log.e(TAG, "Failed to download extension: ${plugin.name}")
                             return@withPermit
                         }
 
-                        val supportedTypes = plugin.tvTypes
-                            ?.mapNotNull { tvTypeFromString(it) }
-                            ?.map { it.toNuvioType() }
-                            ?.distinct()
-                            ?.ifEmpty { listOf("movie", "tv") }
-                            ?: listOf("movie", "tv")
+                        val supportedTypes = cloudStreamContentTypes(plugin.tvTypes)
 
                         val scraper = ScraperInfo(
                             id = scraperId,

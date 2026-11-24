@@ -21,6 +21,7 @@ data class RemotePluginInfo(
 /**
  * Represents a plugin repository containing scrapers
  */
+@JsonClass(generateAdapter = true)
 data class PluginRepository(
     val id: String,
     val name: String,
@@ -69,6 +70,7 @@ data class ScraperManifestInfo(
 /**
  * Installed scraper info with runtime state
  */
+@JsonClass(generateAdapter = true)
 data class ScraperInfo(
     val id: String,
     val name: String,
@@ -122,7 +124,7 @@ data class LocalScraperResult(
  */
 @JsonClass(generateAdapter = true)
 data class ExternalRepoManifest(
-    val name: String,
+    val name: String = "",
     val description: String? = null,
     val manifestVersion: Int = 1,
     val pluginLists: List<String>
@@ -133,7 +135,7 @@ data class ExternalRepoManifest(
  */
 @JsonClass(generateAdapter = true)
 data class ExternalPluginEntry(
-    val name: String,
+    val name: String = "",
     val internalName: String,
     val description: String? = null,
     val version: Int = 1,
@@ -144,7 +146,8 @@ data class ExternalPluginEntry(
     val iconUrl: String? = null,
     val url: String,
     val fileSize: Long? = null,
-    val repositoryUrl: String? = null
+    val repositoryUrl: String? = null,
+    val fileHash: String? = null
 )
 
 const val PLUGIN_BINGE_GROUP_PREFIX = "local-plugin-"

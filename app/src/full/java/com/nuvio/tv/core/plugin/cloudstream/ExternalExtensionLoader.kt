@@ -162,8 +162,6 @@ private class ReflectivePluginWrapper(private val foreignInstance: Any) : Plugin
     }
 }
 
-private const val MAX_DEX_SIZE = 10 * 1024 * 1024L // 10MB max per .cs3 file
-
 /**
  * Manages downloading, loading, and caching of DEX-based external extensions (.cs3 files).
  */
@@ -200,19 +198,18 @@ class ExternalExtensionLoader @Inject constructor(
 
     /**
      * Download a .cs3 DEX file for the given scraper.
+     * The new package is verified and staged beside the installed one, then renamed into place,
+     * so a failed refresh never removes a working extension.
      * Returns the local file path, or null on failure.
      */
-    suspend fun downloadExtension(scraperId: String, downloadUrl: String): File? = withContext(Dispatchers.IO) {
+    suspend fun downloadExtension(
+        scraperId: String,
+        downloadUrl: String,
+        fileHash: String? = null
+    ): File? = withContext(Dispatchers.IO) {
         com.nuvio.tv.core.runtime.PluginRuntimeHooks.ensureCloudstreamInitialized()
         try {
             val targetFile = File(extensionsDir, "${safeFileName(scraperId)}.cs3")
-
-            // Remove existing read-only file before writing (DEX files are set
-            // read-only for API 28+ compat, so overwriting would fail with EACCES)
-            if (targetFile.exists()) {
-                targetFile.setWritable(true)
-                targetFile.delete()
-            }
 
             val request = Request.Builder()
                 .url(downloadUrl)
@@ -225,28 +222,23 @@ class ExternalExtensionLoader @Inject constructor(
                     return@withContext null
                 }
 
-                val contentLength = response.header("Content-Length")?.toLongOrNull() ?: 0
-                if (contentLength > MAX_DEX_SIZE) {
-                    Log.w(TAG, "Extension $scraperId too large: $contentLength bytes")
-                    return@withContext null
+                val body = response.body ?: return@withContext null
+                val staged = stageExtension(extensionsDir, body, fileHash)
+                try {
+                    synchronized(this@ExternalExtensionLoader) {
+                        // Fix for Android API 28+: DEX files must be read-only.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            check(staged.setReadOnly()) { "Could not mark extension read-only" }
+                        }
+                        // Same directory and filesystem, so POSIX rename replaces atomically.
+                        android.system.Os.rename(staged.absolutePath, targetFile.absolutePath)
+                        evictCache(scraperId)
+                    }
+                } finally {
+                    staged.delete()
                 }
 
-                val bytes = response.body?.bytes() ?: return@withContext null
-                if (bytes.size > MAX_DEX_SIZE) {
-                    Log.w(TAG, "Extension $scraperId too large: ${bytes.size} bytes")
-                    return@withContext null
-                }
-
-                targetFile.writeBytes(bytes)
-
-                // Fix for Android API 28+: DEX files must be read-only
-                // Writing writable DEX files is blocked on newer Android versions
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    targetFile.setReadOnly()
-                    Log.d(TAG, "Set DEX file read-only for API ${Build.VERSION.SDK_INT}")
-                }
-
-                Log.d(TAG, "Downloaded extension $scraperId: ${bytes.size} bytes -> ${targetFile.absolutePath}")
+                Log.d(TAG, "Downloaded extension $scraperId -> ${targetFile.absolutePath}")
                 targetFile
             }
         } catch (e: Exception) {
