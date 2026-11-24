@@ -28,6 +28,11 @@
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
+        <activity
+            android:name="com.nuvio.tv.core.plugin.cloudstream.ExtensionSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Lucid.ExtensionSettings" />
+
         <!-- Live TV fork: "Nuvio + IPTV" icons (one per icon color). The original Nuvio
              icons stay available: Settings > Appearance > App icon > "+ IPTV on the icon". -->
         <activity

@@ -642,6 +642,7 @@ dependencies {
     add("fullImplementation", "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0")
     add("fullImplementation", libs.nicehttp)
     add("fullImplementation", libs.conscrypt.android)
+    add("fullImplementation", "com.google.android.material:material:1.12.0")
     add("fullImplementation", "com.github.recloudstream.cloudstream:library:${libs.versions.cloudstream.get()}") {
         exclude(group = "org.mozilla", module = "rhino")
         exclude(group = "com.github.AmarullisVFX", module = "newpipeextractor")

@@ -180,6 +180,12 @@ class ExternalExtensionLoader @Inject constructor(
     /** Cache of loaded MainAPI instances by scraper ID */
     private val apiCache = ConcurrentHashMap<String, MainAPI>()
 
+    /** All providers exposed by one .cs3 package. */
+    private val apisCache = ConcurrentHashMap<String, List<MainAPI>>()
+
+    /** Cache of the plugin entry point used to attach resources and settings. */
+    private val pluginCache = ConcurrentHashMap<String, Plugin>()
+
     /** Cache of loaded class loaders by scraper ID */
     private val classLoaderCache = ConcurrentHashMap<String, DexClassLoader>()
 
@@ -195,6 +201,8 @@ class ExternalExtensionLoader @Inject constructor(
     /** Sanitize scraper ID for use as a filename (colons are not safe on all filesystems). */
     private fun safeFileName(scraperId: String): String =
         scraperId.replace(':', '_').replace('/', '_')
+
+    fun extensionFile(scraperId: String): File = File(extensionsDir, "${safeFileName(scraperId)}.cs3")
 
     /**
      * Download a .cs3 DEX file for the given scraper.
@@ -252,6 +260,7 @@ class ExternalExtensionLoader @Inject constructor(
      */
     fun loadExtension(scraperId: String): List<MainAPI> {
         // Check cache first
+        apisCache[scraperId]?.let { return it }
         apiCache[scraperId]?.let { return listOf(it) }
         com.nuvio.tv.core.runtime.PluginRuntimeHooks.ensureCloudstreamInitialized()
 
@@ -296,6 +305,7 @@ class ExternalExtensionLoader @Inject constructor(
                 Log.e(TAG, "No @CloudstreamPlugin class found in $scraperId")
                 return emptyList()
             }
+            pluginCache[scraperId] = plugin
 
             // Ensure global stubs are initialized for extensions
             AcraApplication.context = context
@@ -390,6 +400,7 @@ class ExternalExtensionLoader @Inject constructor(
             // Also cache the first API under the plain scraper ID
             if (apis.isNotEmpty()) {
                 apiCache[scraperId] = apis.first()
+                apisCache[scraperId] = apis
             }
 
             Log.d(TAG, "Loaded extension $scraperId: ${apis.size} providers (${apis.joinToString { it.name }})")
@@ -419,12 +430,22 @@ class ExternalExtensionLoader @Inject constructor(
     }
 
     /**
+     * Return the settings callback registered by the extension, if it has one.
+     * Uses the same plugin instance that registered the providers and attached its resources.
+     */
+    @Synchronized
+    fun settingsCallback(scraperId: String): ((Context) -> Unit)? {
+        loadExtension(scraperId)
+        return pluginCache[scraperId]?.openSettings
+    }
+
+    /**
      * Load extension with diagnostic output.
      */
     fun loadExtensionWithDiagnostics(scraperId: String, diagnostics: TestDiagnostics): List<MainAPI> {
-        apiCache[scraperId]?.let {
-            diagnostics.addStep("MainAPI cached: ${it.name}")
-            return listOf(it)
+        apisCache[scraperId]?.let {
+            diagnostics.addStep("MainAPIs cached: ${it.joinToString { api -> api.name }}")
+            return it
         }
         com.nuvio.tv.core.runtime.PluginRuntimeHooks.ensureCloudstreamInitialized()
 
@@ -548,7 +569,9 @@ class ExternalExtensionLoader @Inject constructor(
             }
             if (apis.isNotEmpty()) {
                 apiCache[scraperId] = apis.first()
+                apisCache[scraperId] = apis
             }
+            pluginCache[scraperId] = plugin
 
             apis
         } catch (e: Exception) {
@@ -645,15 +668,15 @@ class ExternalExtensionLoader @Inject constructor(
     }
 
     fun deleteExtension(scraperId: String) {
-        apiCache.keys.filter { it.startsWith(scraperId) }.forEach { apiCache.remove(it) }
-        classLoaderCache.remove(scraperId)
-        extractorPreloadedIds.remove(scraperId)
-        File(extensionsDir, "${safeFileName(scraperId)}.cs3").delete()
+        evictCache(scraperId)
+        extensionFile(scraperId).delete()
         Log.d(TAG, "Deleted extension $scraperId")
     }
 
     fun evictCache(scraperId: String) {
         apiCache.keys.filter { it.startsWith(scraperId) }.forEach { apiCache.remove(it) }
+        apisCache.remove(scraperId)
+        pluginCache.remove(scraperId)
         classLoaderCache.remove(scraperId)
         extractorPreloadedIds.remove(scraperId)
     }

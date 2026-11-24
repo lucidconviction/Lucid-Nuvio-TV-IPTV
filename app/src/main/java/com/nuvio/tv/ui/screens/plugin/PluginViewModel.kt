@@ -226,6 +226,14 @@ class PluginViewModel @Inject constructor(
         }
     }
 
+    /** Lazily probe a .cs3 package for a native settings screen. */
+    suspend fun hasExtensionSettings(scraperId: String): Boolean =
+        !isReadOnly && pluginManager.hasExtensionSettings(scraperId)
+
+    fun openExtensionSettings(activity: android.app.Activity, scraperId: String) {
+        if (!isReadOnly) pluginManager.openExtensionSettings(activity, scraperId)
+    }
+
     private fun testScraper(scraperId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isTesting = true, testScraperId = scraperId, testResults = null, testDiagnostics = null) }

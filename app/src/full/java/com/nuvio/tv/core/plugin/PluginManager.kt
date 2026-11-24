@@ -18,6 +18,8 @@ import com.nuvio.tv.domain.model.ScraperInfo
 import com.nuvio.tv.domain.model.ScraperManifestInfo
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.scraperIdFromPluginBingeGroup
+import com.lagradost.cloudstream3.plugins.PluginData
+import com.lagradost.cloudstream3.plugins.PluginManager as CloudStreamPluginManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -713,11 +715,9 @@ class PluginManager @Inject constructor(
         if (dexScraperIds.isNotEmpty()) {
             // Also load ALL dex scrapers from the same repos (not just enabled ones)
             // since extractors can live in any .cs3 file
-            val allDexIds = dataStore.scrapers.first()
-                .filter { it.type == RepositoryType.EXTERNAL_DEX }
-                .map { it.id }
+            val allDex = registerInstalledExtensions()
             withContext(Dispatchers.IO) {
-                externalExtensionLoader.ensureExtractorsLoaded(allDexIds)
+                externalExtensionLoader.ensureExtractorsLoaded(allDex.map { it.id })
             }
         }
 
@@ -796,13 +796,39 @@ class PluginManager @Inject constructor(
 
     private suspend fun preloadDexExtractors(scrapers: List<ScraperInfo>) {
         if (scrapers.none { it.type == RepositoryType.EXTERNAL_DEX }) return
-        val allDexIds = dataStore.scrapers.first()
-            .filter { it.type == RepositoryType.EXTERNAL_DEX }
-            .map { it.id }
-        if (allDexIds.isEmpty()) return
+        val installed = registerInstalledExtensions()
+        if (installed.isEmpty()) return
         withContext(Dispatchers.IO) {
-            externalExtensionLoader.ensureExtractorsLoaded(allDexIds)
+            externalExtensionLoader.ensureExtractorsLoaded(installed.map { it.id })
         }
+    }
+
+    /**
+     * Publish the installed .cs3 packages to extensions that consult CloudStream's online list.
+     * Older packages call this during load() to discover companion or shared extractor modules.
+     */
+    private suspend fun registerInstalledExtensions(): List<ScraperInfo> {
+        val extensions = dataStore.scrapers.first().filter { it.type == RepositoryType.EXTERNAL_DEX }
+        CloudStreamPluginManager.setOnline(extensions.map { extension ->
+            PluginData(
+                internalName = extension.id.removePrefix("${extension.repositoryId}:"),
+                url = extension.filename,
+                isOnline = true,
+                filePath = externalExtensionLoader.extensionFile(extension.id).absolutePath,
+                version = extension.version.toIntOrNull() ?: 0
+            )
+        })
+        return extensions
+    }
+
+    /** True when the extension registers a native settings screen. */
+    suspend fun hasExtensionSettings(scraperId: String): Boolean = withContext(Dispatchers.IO) {
+        registerInstalledExtensions()
+        externalExtensionLoader.settingsCallback(scraperId) != null
+    }
+
+    fun openExtensionSettings(activity: android.app.Activity, scraperId: String) {
+        com.nuvio.tv.core.plugin.cloudstream.ExtensionSettingsActivity.open(activity, scraperId)
     }
 
     private fun CoroutineScope.launchPluginScrapers(
@@ -999,11 +1025,9 @@ class PluginManager @Inject constructor(
 
         // Preload extractors from ALL .cs3 files in the same repo(s)
         if (scraper.type == RepositoryType.EXTERNAL_DEX) {
-            val allDexIds = dataStore.scrapers.first()
-                .filter { it.type == RepositoryType.EXTERNAL_DEX }
-                .map { it.id }
+            val allDex = registerInstalledExtensions()
             withContext(Dispatchers.IO) {
-                externalExtensionLoader.ensureExtractorsLoaded(allDexIds, diagnostics)
+                externalExtensionLoader.ensureExtractorsLoaded(allDex.map { it.id }, diagnostics)
             }
         }
 

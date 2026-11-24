@@ -294,8 +294,22 @@ fun PluginScreenContent(
                 }
 
                 items(uiState.scrapers, key = { it.id }) { scraper ->
+                    val repo = uiState.repositories.find { it.id == scraper.repositoryId }
+                    val canConfigure = uiState.pluginsEnabled && !viewModel.isReadOnly && scraper.enabled &&
+                        scraper.type == com.nuvio.tv.domain.model.RepositoryType.EXTERNAL_DEX &&
+                        repo?.enabled == true
+                    val activity = androidx.activity.compose.LocalActivity.current
+                    var hasSettings by remember(scraper, repo?.lastUpdated, canConfigure) {
+                        mutableStateOf(false)
+                    }
+                    LaunchedEffect(scraper, repo?.lastUpdated, canConfigure) {
+                        if (canConfigure) hasSettings = viewModel.hasExtensionSettings(scraper.id)
+                    }
                     ScraperCard(
                         scraper = scraper,
+                        onSettings = if (hasSettings && activity != null) {
+                            { viewModel.openExtensionSettings(activity, scraper.id) }
+                        } else null,
                         onToggle = { enabled ->
                             viewModel.onEvent(PluginUiEvent.ToggleScraper(scraper.id, enabled))
                         },
@@ -1268,6 +1282,7 @@ private fun RepositoryCard(
 @Composable
 private fun ScraperCard(
     scraper: ScraperInfo,
+    onSettings: (() -> Unit)?,
     onToggle: (Boolean) -> Unit,
     onTest: () -> Unit,
     isTesting: Boolean,
@@ -1278,7 +1293,9 @@ private fun ScraperCard(
     var showResults by remember { mutableStateOf(false) }
     var isTestFocused by remember { mutableStateOf(false) }
     var isToggleFocused by remember { mutableStateOf(false) }
-    val isCardFocused = isTestFocused || isToggleFocused
+    var isSettingsFocused by remember { mutableStateOf(false) }
+    val settingsFocus = remember { FocusRequester() }
+    val isCardFocused = isSettingsFocused || isTestFocused || isToggleFocused
     val cardBorderColor by animateColorAsState(
         targetValue = if (isCardFocused) NuvioTheme.colors.FocusRing else Color.Transparent,
         label = "scraperCardBorder"
@@ -1350,12 +1367,32 @@ private fun ScraperCard(
                     horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (onSettings != null) {
+                        Button(
+                            onClick = onSettings,
+                            modifier = Modifier
+                                .focusRequester(settingsFocus)
+                                .onFocusChanged { isSettingsFocused = it.isFocused },
+                            colors = ButtonDefaults.colors(
+                                containerColor = NuvioTheme.colors.Surface,
+                                contentColor = NuvioTheme.colors.TextPrimary,
+                                focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                                focusedContentColor = NuvioTheme.colors.Primary
+                            ),
+                            shape = ButtonDefaults.shape(RoundedCornerShape(NuvioTheme.radii.md))
+                        ) {
+                            Text(stringResource(R.string.nav_settings))
+                        }
+                    }
+
                     // Test button
                     Button(
                         onClick = onTest,
                         enabled = !isTesting && scraper.enabled,
                         modifier = Modifier
-                            .focusProperties { left = FocusRequester.Cancel }
+                            .focusProperties {
+                                left = if (onSettings != null) settingsFocus else FocusRequester.Cancel
+                            }
                             .onFocusChanged { isTestFocused = it.isFocused }
                             .semantics { role = Role.Button },
                         colors = ButtonDefaults.colors(
