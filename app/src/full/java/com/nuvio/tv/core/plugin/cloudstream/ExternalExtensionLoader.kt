@@ -674,11 +674,29 @@ class ExternalExtensionLoader @Inject constructor(
     }
 
     fun evictCache(scraperId: String) {
+        val providers = apisCache.remove(scraperId).orEmpty()
+        val plugin = pluginCache.remove(scraperId)
         apiCache.keys.filter { it.startsWith(scraperId) }.forEach { apiCache.remove(it) }
-        apisCache.remove(scraperId)
-        pluginCache.remove(scraperId)
         classLoaderCache.remove(scraperId)
         extractorPreloadedIds.remove(scraperId)
+
+        if (plugin != null) {
+            try {
+                plugin.beforeUnload()
+            } catch (failure: Throwable) {
+                if (failure is VirtualMachineError || failure is ThreadDeath) throw failure
+                Log.w(TAG, "Extension unload hook failed for $scraperId", failure)
+            }
+            extractorApis.removeAll(plugin.registeredExtractorAPIs.toSet())
+        }
+        if (providers.isNotEmpty()) {
+            synchronized(APIHolder.allProviders) {
+                providers.forEach { api ->
+                    APIHolder.allProviders.remove(api)
+                    APIHolder.removePluginMapping(api)
+                }
+            }
+        }
     }
 
     /**

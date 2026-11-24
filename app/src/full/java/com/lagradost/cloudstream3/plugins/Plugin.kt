@@ -26,6 +26,9 @@ open class Plugin {
     /** Full file path to the plugin (matches BasePlugin's property). */
     var filename: String? = null
 
+    /** Called before the package is replaced or removed. Override to release resources. */
+    open fun beforeUnload() {}
+
     /**
      * No-arg load matching BasePlugin's pattern. Extensions compiled against
      * CloudStream may override this instead of load(Activity?).

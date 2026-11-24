@@ -257,7 +257,8 @@ android {
             isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
+                "proguard-cloudstream-settings.pro"
             )
             signingConfig = if (useDebugReleaseSigning) {
                 signingConfigs.getByName("debug")
@@ -295,7 +296,8 @@ android {
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
+                "proguard-cloudstream-settings.pro"
             )
             buildConfigField("boolean", "IS_DEBUG_BUILD", "true")
             buildConfigField("String", "SENTRY_ENVIRONMENT", buildConfigString("benchmark"))
