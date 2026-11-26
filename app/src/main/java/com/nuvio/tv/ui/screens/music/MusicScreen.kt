@@ -83,6 +83,7 @@ import com.nuvio.tv.music.MusicSearchData
 import com.nuvio.tv.music.MusicTrack
 import com.nuvio.tv.music.MusicViewModel
 import com.nuvio.tv.music.UserMusicPlaylist
+import com.nuvio.tv.ui.components.nuvioFocusRing
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -240,7 +241,8 @@ private fun MusicChip(
 ) {
     Button(
         onClick = onClick,
-        modifier = (if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
+        modifier = (if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .nuvioFocusRing(RoundedCornerShape(50)),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated,
             contentColor = if (selected) NuvioTheme.colors.TextInverse else NuvioTheme.colors.TextPrimary,
@@ -271,7 +273,8 @@ private fun TopArtistHeader(
     }
     Card(
         onClick = { onOpenArtist(artists[pagerState.currentPage]) },
-        modifier = Modifier.fillMaxWidth().height(300.dp),
+        modifier = Modifier.fillMaxWidth().height(300.dp)
+            .nuvioFocusRing(RoundedCornerShape(NuvioTheme.radii.lg)),
         shape = CardDefaults.shape(RoundedCornerShape(NuvioTheme.radii.lg)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated,
@@ -589,7 +592,7 @@ private fun MusicAlbumCard(album: MusicAlbum, onClick: () -> Unit) {
 private fun MusicArtistCard(artist: MusicArtist, onClick: () -> Unit) {
     Card(
         onClick = onClick,
-        modifier = Modifier.width(180.dp),
+        modifier = Modifier.width(180.dp).nuvioFocusRing(CircleShape),
         shape = CardDefaults.shape(CircleShape),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated,
@@ -631,7 +634,8 @@ private fun MusicPlaylistCard(playlist: MusicPlaylist, onClick: () -> Unit) {
 private fun MusicGenreCard(genre: MusicGenre, onClick: () -> Unit) {
     Card(
         onClick = onClick,
-        modifier = Modifier.width(150.dp).height(56.dp),
+        modifier = Modifier.width(150.dp).height(56.dp)
+            .nuvioFocusRing(RoundedCornerShape(14.dp)),
         shape = CardDefaults.shape(RoundedCornerShape(14.dp)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated,
@@ -663,7 +667,8 @@ private fun MusicCard(
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier.width(if (wide) 280.dp else 190.dp),
+        modifier = Modifier.width(if (wide) 280.dp else 190.dp)
+            .nuvioFocusRing(RoundedCornerShape(NuvioTheme.radii.md)),
         shape = CardDefaults.shape(RoundedCornerShape(NuvioTheme.radii.md)),
         colors = CardDefaults.colors(
             containerColor = Color.Transparent,

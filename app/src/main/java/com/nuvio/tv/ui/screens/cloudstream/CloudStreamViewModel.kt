@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -27,6 +30,11 @@ data class CloudStreamPlayback(
     val season: Int?,
     val episode: Int?,
     val providerName: String,
+)
+
+data class CloudStreamGlobalResult(
+    val provider: LucidPluginExtension,
+    val item: LucidPluginItem,
 )
 
 data class CloudStreamUiState(
@@ -45,6 +53,9 @@ data class CloudStreamUiState(
     val searchQuery: String = "",
     val searchResults: List<LucidPluginItem> = emptyList(),
     val searching: Boolean = false,
+    val globalQuery: String = "",
+    val globalSearching: Boolean = false,
+    val globalResults: List<CloudStreamGlobalResult> = emptyList(),
 )
 
 @HiltViewModel
@@ -159,6 +170,52 @@ class CloudStreamViewModel @Inject constructor(
             if (_state.value.provider?.id != provider.id) return@launch
             _state.value = _state.value.copy(searching = false, searchResults = results)
         }
+    }
+
+    /** Search every enabled extension (used by Sports and the global CloudStream search). */
+    fun searchAll(query: String) {
+        val trimmed = query.trim()
+        _state.value = _state.value.copy(
+            globalQuery = trimmed,
+            globalSearching = trimmed.isNotBlank(),
+            globalResults = emptyList(),
+            error = null,
+        )
+        if (trimmed.isBlank()) return
+        viewModelScope.launch {
+            val providers = _state.value.providers.ifEmpty {
+                runCatching { bridge.extensions() }.getOrDefault(emptyList()).sortedBy { it.name.lowercase() }
+            }
+            val results = coroutineScope {
+                providers.map { provider ->
+                    async {
+                        runCatching { bridge.browseSearch(provider.id, trimmed) }
+                            .getOrDefault(emptyList())
+                            .map { CloudStreamGlobalResult(provider, it) }
+                    }
+                }.awaitAll().flatten()
+            }
+            _state.value = _state.value.copy(
+                globalSearching = false,
+                globalResults = results.distinctBy { "${it.provider.id}|${it.item.url}" },
+            )
+        }
+    }
+
+    fun openGlobalResult(result: CloudStreamGlobalResult) {
+        // Show the provider's own page behind the detail, but open the selected item now.
+        _state.value = _state.value.copy(
+            provider = result.provider,
+            items = emptyList(),
+            page = 0,
+            hasNext = false,
+            tabs = emptyList(),
+            activeTab = null,
+            detail = null,
+            error = null,
+        )
+        loadPage(1, null)
+        openItem(result.item)
     }
 
     fun openItem(item: LucidPluginItem) {

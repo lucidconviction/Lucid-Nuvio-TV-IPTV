@@ -310,13 +310,14 @@ object SideMenuPages {
     const val DISCOVER = "discover"
     const val MUSIC = "music"
     const val CLOUDSTREAM = "cloudstream"
+    const val BROWSER = "browser"
 
-    val DEFAULT_ORDER = listOf(HOME, DISCOVER, SEARCH, LIBRARY, CALENDAR, YOUTUBE, MUSIC, CLOUDSTREAM, LIVE_TV, SPORTS, ON_DEMAND, RECORDINGS)
+    val DEFAULT_ORDER = listOf(HOME, DISCOVER, SEARCH, LIBRARY, CALENDAR, YOUTUBE, MUSIC, CLOUDSTREAM, BROWSER, LIVE_TV, SPORTS, ON_DEMAND, RECORDINGS)
 
     val NAMES = mapOf(
         HOME to "Home", SEARCH to "Search", LIBRARY to "Library", CALENDAR to "Calendar", YOUTUBE to "YouTube",
         LIVE_TV to "Live TV", SPORTS to "Sports", ON_DEMAND to "On Demand", DISCOVER to "Discover",
-        MUSIC to "Music", CLOUDSTREAM to "CloudStream", RECORDINGS to "Recordings"
+        MUSIC to "Music", CLOUDSTREAM to "CloudStream", BROWSER to "Browser", RECORDINGS to "Recordings"
     )
 
     /** The order as saved, with any page it doesn't mention in its usual place. */

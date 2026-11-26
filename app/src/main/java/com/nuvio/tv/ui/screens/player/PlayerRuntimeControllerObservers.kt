@@ -406,7 +406,8 @@ internal fun PlayerRuntimeController.observeSubtitleSettings() {
             }
             streamReuseLastLinkEnabled = settings.streamReuseLastLinkEnabled
             autoSwitchInternalPlayerOnErrorEnabled = settings.autoSwitchInternalPlayerOnError
-            currentInternalPlayerEngine = resolvedInternalPlayerEngine
+            currentInternalPlayerEngine =
+                com.nuvio.tv.core.nativelib.LibmpvAvailabilityPolicy.engineFor(resolvedInternalPlayerEngine)
             streamAutoPlayModeSetting = settings.streamAutoPlayMode
             streamAutoPlayNextEpisodeEnabledSetting = settings.streamAutoPlayNextEpisodeEnabled
             streamAutoPlayTimeoutSecondsSetting = settings.streamAutoPlayTimeoutSeconds

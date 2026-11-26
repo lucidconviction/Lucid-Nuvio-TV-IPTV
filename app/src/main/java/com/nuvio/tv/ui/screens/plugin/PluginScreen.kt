@@ -347,6 +347,15 @@ fun PluginScreenContent(
         errorMessage = uiState.errorMessage
     )
 
+    if (showRepoIndex) {
+        RepoIndexOverlay(
+            installedRepos = uiState.repositories,
+            adding = uiState.isAddingRepo,
+            onAdd = { url -> viewModel.onEvent(PluginUiEvent.AddRepository(url)) },
+            onDismiss = { showRepoIndex = false },
+        )
+    }
+
     if (uiState.isQrModeActive || uiState.pendingRepoChange != null || uiState.pendingScraperEnable != null) {
         if (uiState.isQrModeActive) {
             QrCodeOverlay(
@@ -358,15 +367,6 @@ fun PluginScreenContent(
         }
 
         uiState.pendingRepoChange?.let { pending ->
-            if (showRepoIndex) {
-                RepoIndexOverlay(
-                    installedRepos = uiState.repositories,
-                    adding = uiState.isAddingRepo,
-                    onAdd = { url -> viewModel.onEvent(PluginUiEvent.AddRepository(url)) },
-                    onDismiss = { showRepoIndex = false },
-                )
-            }
-
             ConfirmRepoChangesDialog(
                 pendingChange = pending,
                 onConfirm = { viewModel.onEvent(PluginUiEvent.ConfirmPendingRepoChange) },

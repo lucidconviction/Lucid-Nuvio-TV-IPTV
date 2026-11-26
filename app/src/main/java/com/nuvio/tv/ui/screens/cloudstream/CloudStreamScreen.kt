@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -65,6 +66,7 @@ import com.nuvio.tv.livetv.lucid.LucidPluginDetail
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
 import com.nuvio.tv.livetv.lucid.LucidPluginItem
 import com.nuvio.tv.livetv.lucid.LucidPluginTab
+import com.nuvio.tv.ui.components.nuvioFocusRing
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 /**
@@ -90,6 +92,9 @@ fun CloudStreamScreen(
     LaunchedEffect(Unit) {
         viewModel.playback.collect { onPlay(it) }
     }
+    LaunchedEffect(Unit) {
+        CloudStreamLaunch.take()?.let { viewModel.searchAll(it) }
+    }
 
     Box(Modifier.fillMaxSize().background(NuvioTheme.colors.Background)) {
         if (state.provider == null) {
@@ -98,6 +103,8 @@ fun CloudStreamScreen(
                 onBack = onBack,
                 onOpen = viewModel::openProvider,
                 onRetry = viewModel::loadProviders,
+                onSearchAll = viewModel::searchAll,
+                onGlobalResult = viewModel::openGlobalResult,
             )
         } else {
             ProviderBrowse(
@@ -129,8 +136,16 @@ private fun ProviderList(
     onBack: () -> Unit,
     onOpen: (LucidPluginExtension) -> Unit,
     onRetry: () -> Unit,
+    onSearchAll: (String) -> Unit,
+    onGlobalResult: (CloudStreamGlobalResult) -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
+    val globalFocus = remember { FocusRequester() }
+    var globalQuery by remember { mutableStateOf("") }
+    var globalFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(state.globalQuery) {
+        if (state.globalQuery.isNotBlank()) globalQuery = state.globalQuery
+    }
     LaunchedEffect(state.providers, state.provider) {
         if (state.provider == null && state.providers.isNotEmpty()) {
             delay(200)
@@ -143,8 +158,75 @@ private fun ProviderList(
             subtitle = "Browse extension catalogues, search their own sites and play their streams",
             onBack = onBack,
         )
+        Spacer(Modifier.height(14.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            BasicTextField(
+                value = globalQuery,
+                onValueChange = {
+                    globalQuery = it
+                    if (it.isBlank()) onSearchAll("")
+                },
+                singleLine = true,
+                textStyle = NuvioTheme.textStyles.body.copy(color = NuvioTheme.colors.TextPrimary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearchAll(globalQuery) }),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(globalFocus)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(NuvioTheme.colors.BackgroundElevated)
+                    .onFocusChanged { globalFocused = it.isFocused }
+                    .then(
+                        if (globalFocused) {
+                            Modifier.border(2.dp, NuvioTheme.colors.FocusRing, RoundedCornerShape(14.dp))
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                decorationBox = { inner ->
+                    if (globalQuery.isBlank()) {
+                        Text("Search all extensions", color = NuvioTheme.colors.TextTertiary)
+                    }
+                    inner()
+                },
+            )
+            Button(onClick = { onSearchAll(globalQuery) }) {
+                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Search all")
+            }
+        }
         Spacer(Modifier.height(20.dp))
         when {
+            state.globalSearching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = NuvioTheme.colors.TextPrimary)
+            }
+            state.globalQuery.isNotBlank() && state.globalResults.isEmpty() -> Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("No extension results for \"${state.globalQuery}\".",
+                    color = NuvioTheme.colors.TextSecondary)
+            }
+            state.globalQuery.isNotBlank() -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 138.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                gridItems(
+                    state.globalResults,
+                    key = { "${it.provider.id}|${it.item.url}" },
+                ) { result ->
+                    GlobalResultCard(result, onClick = { onGlobalResult(result) })
+                }
+            }
             state.providersLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = NuvioTheme.colors.TextPrimary)
             }
@@ -182,7 +264,8 @@ private fun ProviderCard(
 ) {
     Card(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().height(106.dp),
+        modifier = modifier.fillMaxWidth().height(106.dp)
+            .nuvioFocusRing(RoundedCornerShape(18.dp)),
         shape = CardDefaults.shape(RoundedCornerShape(18.dp)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated,
@@ -226,6 +309,63 @@ private fun ProviderCard(
                 Text("Browse provider", color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.metadata)
             }
         }
+    }
+}
+
+@Composable
+private fun GlobalResultCard(result: CloudStreamGlobalResult, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Card(
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                .nuvioFocusRing(RoundedCornerShape(14.dp)),
+            shape = CardDefaults.shape(RoundedCornerShape(14.dp)),
+            colors = CardDefaults.colors(
+                containerColor = NuvioTheme.colors.BackgroundElevated,
+                focusedContainerColor = NuvioTheme.colors.BackgroundCard,
+            ),
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                if (!result.item.poster.isNullOrBlank()) {
+                    AsyncImage(
+                        model = result.item.poster,
+                        contentDescription = result.item.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Extension,
+                            contentDescription = null,
+                            tint = NuvioTheme.colors.TextSecondary,
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+                }
+                Text(
+                    result.provider.name,
+                    color = NuvioTheme.colors.TextPrimary,
+                    style = NuvioTheme.textStyles.metadata,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            result.item.name,
+            color = NuvioTheme.colors.TextPrimary,
+            style = NuvioTheme.textStyles.metadata,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -398,7 +538,7 @@ private fun ProviderBrowse(
 private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Button(
         onClick = onClick,
-        modifier = Modifier.height(46.dp),
+        modifier = Modifier.height(46.dp).nuvioFocusRing(RoundedCornerShape(50)),
         shape = ButtonDefaults.shape(RoundedCornerShape(50)),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated,
@@ -426,7 +566,8 @@ private fun ItemCard(
     Column(modifier.fillMaxWidth()) {
         Card(
             onClick = onClick,
-            modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+            modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                .nuvioFocusRing(RoundedCornerShape(14.dp)),
             shape = CardDefaults.shape(RoundedCornerShape(14.dp)),
             colors = CardDefaults.colors(
                 containerColor = NuvioTheme.colors.BackgroundElevated,

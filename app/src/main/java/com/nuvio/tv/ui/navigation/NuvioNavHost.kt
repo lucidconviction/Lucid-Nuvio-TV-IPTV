@@ -1417,6 +1417,24 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.Browser.route) {
+            com.nuvio.tv.ui.screens.browser.TvBrowserScreen(
+                onBack = { navController.popBackStack() },
+                onPlayInPlayer = { url, title ->
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            streamUrl = url,
+                            title = title,
+                            streamName = "Web video",
+                            contentType = "video",
+                            contentName = title,
+                            autoPlayNav = true,
+                        )
+                    )
+                },
+            )
+        }
+
         composable(Screen.CloudStream.route) {
             com.nuvio.tv.ui.screens.cloudstream.CloudStreamScreen(
                 onBack = { navController.popBackStack() },
@@ -1434,6 +1452,7 @@ private fun PlaybackNavHost(
                             episode = playback.episode,
                             episodeTitle = playback.title,
                             addonName = playback.providerName,
+                            autoPlayNav = true,
                         )
                     )
                 },
@@ -1621,6 +1640,12 @@ private fun PlaybackNavHost(
                     }
                 },
                 onOpenReplays = { navController.navigate(Screen.SportsReplays.route) { launchSingleTop = true } },
+                onSearchCloudStream = { event ->
+                    com.nuvio.tv.ui.screens.cloudstream.CloudStreamLaunch.request(
+                        listOfNotNull(event.title, event.subtitle).joinToString(" "),
+                    )
+                    navController.navigate(Screen.CloudStream.route)
+                },
             )
         }
 
