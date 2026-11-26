@@ -1256,6 +1256,7 @@ open class MainActivity : ComponentActivity() {
                             add(Screen.Search.route)
                             add(Screen.Library.route)
                             add(Screen.YouTube.route)
+                            add(Screen.Music.route)
                             add(Screen.Settings.route)
                             if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
                                 add(Screen.Discover.route)
@@ -1302,6 +1303,7 @@ open class MainActivity : ComponentActivity() {
                             pages.SEARCH -> if (id !in hiddenPages) DrawerItem(route = Screen.Search.route, label = strNavSearch, iconRes = R.raw.sidebar_search) else null
                             pages.LIBRARY -> if (id !in hiddenPages) DrawerItem(route = Screen.Library.route, label = strNavLibrary, iconRes = R.raw.sidebar_library) else null
                             pages.YOUTUBE -> if (id !in hiddenPages) DrawerItem(route = Screen.YouTube.route, label = strNavYouTube, icon = Icons.Default.SmartDisplay) else null
+                            pages.MUSIC -> if (id !in hiddenPages) DrawerItem(route = Screen.Music.route, label = strNavMusic, icon = Icons.Default.LibraryMusic) else null
                             pages.CALENDAR -> if (calendarInSidebar && id !in hiddenPages) DrawerItem(route = Screen.Calendar.route, label = "Calendar", icon = Icons.Default.DateRange) else null
                             // Live TV's dot: something is recording (Recordings opens from the guide).
                             pages.LIVE_TV -> if (liveTvInSidebar) DrawerItem(route = Screen.LiveTv.route, label = "Live TV", icon = Icons.Default.LiveTv, badge = recordingNow && !recordingsInSidebar) else null

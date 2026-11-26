@@ -1410,6 +1410,18 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.Music.route) {
+            com.nuvio.tv.ui.screens.music.MusicScreen(
+                onOpenPlayer = { navController.navigate(Screen.MusicPlayer.route) },
+            )
+        }
+
+        composable(Screen.MusicPlayer.route) {
+            com.nuvio.tv.ui.screens.music.MusicPlayerScreen(
+                onBack = { navController.popBackStack() },
+            )
+        }
+
         composable(Screen.Library.route) {
             LibraryScreen(
                 showBuiltInHeader = !hideBuiltInHeaders,
