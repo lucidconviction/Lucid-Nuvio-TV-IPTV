@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -93,12 +96,30 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import org.json.JSONObject
 import org.json.JSONTokener
 import kotlin.math.roundToInt
 
 private const val START_URL = "https://www.google.com"
 private const val POINTER_STEP = 30f
 private const val LONG_PRESS_MS = 600L
+
+private data class BrowserMarketApp(val name: String, val url: String)
+
+private fun loadMarketApps(context: android.content.Context): List<BrowserMarketApp> =
+    runCatching {
+        val text = context.assets.open("webapp_market_seed.json").bufferedReader().use { it.readText() }
+        val apps = JSONObject(text).optJSONArray("apps") ?: JSONArray()
+        buildList {
+            for (i in 0 until apps.length()) {
+                val app = apps.optJSONObject(i) ?: continue
+                if (app.optBoolean("adult", false)) continue
+                val name = app.optString("name").trim()
+                val url = app.optString("url").trim()
+                if (name.isNotBlank() && url.isNotBlank()) add(BrowserMarketApp(name, url))
+            }
+        }.distinctBy { it.url }
+    }.getOrDefault(emptyList())
 
 private data class BrowserTab(
     val id: Long,
@@ -136,6 +157,8 @@ fun TvBrowserScreen(
     var mediaOpen by remember { mutableStateOf(false) }
     var mediaUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var bookmarksOpen by remember { mutableStateOf(false) }
+    var marketOpen by remember { mutableStateOf(false) }
+    var marketApps by remember { mutableStateOf<List<BrowserMarketApp>>(emptyList()) }
     val prefs = remember { context.getSharedPreferences("tv_browser", android.content.Context.MODE_PRIVATE) }
     val bookmarks = remember {
         mutableStateListOf<String>().apply {
@@ -156,7 +179,7 @@ fun TvBrowserScreen(
     val menuFocus = remember { FocusRequester() }
     val tabsFocus = remember { FocusRequester() }
 
-    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen || bookmarksOpen
+    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen || bookmarksOpen || marketOpen
 
     fun refreshTab() {
         tabs.getOrNull(activeTab)?.let {
@@ -297,6 +320,7 @@ fun TvBrowserScreen(
         tabsOpen = false
         mediaOpen = false
         bookmarksOpen = false
+        marketOpen = false
         scope.launch { delay(100); runCatching { rootFocus.requestFocus() } }
     }
 
@@ -306,6 +330,7 @@ fun TvBrowserScreen(
             tabsOpen -> { tabsOpen = false; closeOverlays() }
             mediaOpen -> { mediaOpen = false; closeOverlays() }
             bookmarksOpen -> { bookmarksOpen = false; closeOverlays() }
+            marketOpen -> { marketOpen = false; closeOverlays() }
             menuOpen -> { menuOpen = false; closeOverlays() }
             webView?.canGoBack() == true -> {
                 webView?.goBack()
@@ -494,6 +519,11 @@ fun TvBrowserScreen(
                 },
                 onTabs = { menuOpen = false; tabsOpen = true; scope.launch { delay(80); runCatching { tabsFocus.requestFocus() } } },
                 onBookmarks = { menuOpen = false; bookmarksOpen = true },
+                onMarket = {
+                    menuOpen = false
+                    marketOpen = true
+                    if (marketApps.isEmpty()) marketApps = loadMarketApps(context)
+                },
                 onHome = {
                     menuOpen = false
                     webView?.loadUrl(START_URL)
@@ -538,6 +568,19 @@ fun TvBrowserScreen(
             )
         }
 
+        if (marketOpen) {
+            BrowserMarketOverlay(
+                apps = marketApps,
+                onOpen = { url ->
+                    marketOpen = false
+                    address = url
+                    webView?.loadUrl(url)
+                    closeOverlays()
+                },
+                onDismiss = { marketOpen = false; closeOverlays() },
+            )
+        }
+
         if (bookmarksOpen) {
             BookmarksOverlay(
                 bookmarks = bookmarks,
@@ -578,6 +621,7 @@ private fun BrowserMenu(
     onPlayInPlayer: () -> Unit,
     onBookmarks: () -> Unit,
     onHome: () -> Unit,
+    onMarket: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)), contentAlignment = Alignment.Center) {
@@ -609,7 +653,7 @@ private fun BrowserMenu(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     BrowserMenuButton("Bookmarks", Icons.Default.Language, Modifier.weight(1f), onBookmarks)
-                    BrowserMenuButton("Home", Icons.Default.Search, Modifier.weight(1f), onHome)
+                    BrowserMenuButton("Market", Icons.Default.Add, Modifier.weight(1f), onMarket)
                 }
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth().nuvioFocusRing(RoundedCornerShape(12.dp))) {
                     Text("Close menu")
@@ -903,6 +947,72 @@ private fun BookmarksOverlay(
     }
     LaunchedEffect(Unit) {
         delay(100)
+        runCatching { first.requestFocus() }
+    }
+}
+
+
+@Composable
+private fun BrowserMarketOverlay(
+    apps: List<BrowserMarketApp>,
+    onOpen: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    val first = remember { FocusRequester() }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 1200.dp)
+                .height(720.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(tokens.BackgroundElevated)
+                .padding(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Web app market", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                Text("Safe-for-work picks from the mobile market", color = tokens.TextSecondary, fontSize = 12.sp)
+                if (apps.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.CircularProgressIndicator(color = tokens.TextPrimary)
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 220.dp),
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                    ) {
+                        gridItems(apps, key = { it.url }) { app ->
+                            Button(
+                                onClick = { onOpen(app.url) },
+                                modifier = Modifier.fillMaxWidth().height(76.dp)
+                                    .then(if (app.url == apps.firstOrNull()?.url) Modifier.focusRequester(first) else Modifier)
+                                    .nuvioFocusRing(RoundedCornerShape(12.dp)),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = tokens.BackgroundCard,
+                                    contentColor = tokens.TextPrimary,
+                                    focusedContainerColor = tokens.FocusBackground,
+                                    focusedContentColor = tokens.TextPrimary,
+                                ),
+                            ) {
+                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                                    Text(app.url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+                Button(onClick = onDismiss, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(120)
         runCatching { first.requestFocus() }
     }
 }
