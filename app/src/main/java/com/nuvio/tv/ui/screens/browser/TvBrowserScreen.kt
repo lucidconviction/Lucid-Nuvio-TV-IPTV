@@ -135,6 +135,20 @@ fun TvBrowserScreen(
     var tabsOpen by remember { mutableStateOf(false) }
     var mediaOpen by remember { mutableStateOf(false) }
     var mediaUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var bookmarksOpen by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("tv_browser", android.content.Context.MODE_PRIVATE) }
+    val bookmarks = remember {
+        mutableStateListOf<String>().apply {
+            val saved = prefs.getStringSet("bookmarks", null)
+            addAll(
+                saved ?: setOf(
+                    "https://www.google.com",
+                    "https://www.youtube.com",
+                    "https://en.wikipedia.org",
+                ),
+            )
+        }
+    }
     var longPressFired by remember { mutableStateOf(false) }
     var longPressJob by remember { mutableStateOf<Job?>(null) }
     val rootFocus = remember { FocusRequester() }
@@ -142,7 +156,7 @@ fun TvBrowserScreen(
     val menuFocus = remember { FocusRequester() }
     val tabsFocus = remember { FocusRequester() }
 
-    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen
+    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen || bookmarksOpen
 
     fun refreshTab() {
         tabs.getOrNull(activeTab)?.let {
@@ -282,6 +296,7 @@ fun TvBrowserScreen(
         addressOpen = false
         tabsOpen = false
         mediaOpen = false
+        bookmarksOpen = false
         scope.launch { delay(100); runCatching { rootFocus.requestFocus() } }
     }
 
@@ -290,6 +305,7 @@ fun TvBrowserScreen(
             addressOpen -> { addressOpen = false; closeOverlays() }
             tabsOpen -> { tabsOpen = false; closeOverlays() }
             mediaOpen -> { mediaOpen = false; closeOverlays() }
+            bookmarksOpen -> { bookmarksOpen = false; closeOverlays() }
             menuOpen -> { menuOpen = false; closeOverlays() }
             webView?.canGoBack() == true -> {
                 webView?.goBack()
@@ -477,6 +493,13 @@ fun TvBrowserScreen(
                     closeOverlays()
                 },
                 onTabs = { menuOpen = false; tabsOpen = true; scope.launch { delay(80); runCatching { tabsFocus.requestFocus() } } },
+                onBookmarks = { menuOpen = false; bookmarksOpen = true },
+                onHome = {
+                    menuOpen = false
+                    webView?.loadUrl(START_URL)
+                    address = START_URL
+                    closeOverlays()
+                },
                 onAddress = { menuOpen = false; addressOpen = true },
                 onPlayInPlayer = { menuOpen = false; scanMedia() },
             )
@@ -514,6 +537,30 @@ fun TvBrowserScreen(
                 onDismiss = { mediaOpen = false; closeOverlays() },
             )
         }
+
+        if (bookmarksOpen) {
+            BookmarksOverlay(
+                bookmarks = bookmarks,
+                onOpen = { url ->
+                    bookmarksOpen = false
+                    address = url
+                    webView?.loadUrl(url)
+                    closeOverlays()
+                },
+                onAddCurrent = {
+                    val url = pageUrl
+                    if (url.isNotBlank() && url !in bookmarks) {
+                        bookmarks.add(url)
+                        prefs.edit().putStringSet("bookmarks", bookmarks.toSet()).apply()
+                    }
+                },
+                onRemove = { url ->
+                    bookmarks.remove(url)
+                    prefs.edit().putStringSet("bookmarks", bookmarks.toSet()).apply()
+                },
+                onDismiss = { bookmarksOpen = false; closeOverlays() },
+            )
+        }
     }
 }
 
@@ -529,6 +576,8 @@ private fun BrowserMenu(
     onTabs: () -> Unit,
     onAddress: () -> Unit,
     onPlayInPlayer: () -> Unit,
+    onBookmarks: () -> Unit,
+    onHome: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)), contentAlignment = Alignment.Center) {
@@ -557,6 +606,10 @@ private fun BrowserMenu(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     BrowserMenuButton("Address", Icons.Default.Search, Modifier.weight(1f), onAddress)
                     BrowserMenuButton("Play in player", Icons.Default.PlayArrow, Modifier.weight(1f), onPlayInPlayer)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BrowserMenuButton("Bookmarks", Icons.Default.Language, Modifier.weight(1f), onBookmarks)
+                    BrowserMenuButton("Home", Icons.Default.Search, Modifier.weight(1f), onHome)
                 }
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth().nuvioFocusRing(RoundedCornerShape(12.dp))) {
                     Text("Close menu")
@@ -784,5 +837,72 @@ private fun MediaOverlay(
                 }
             }
         }
+    }
+}
+
+
+@Composable
+private fun BookmarksOverlay(
+    bookmarks: List<String>,
+    onOpen: (String) -> Unit,
+    onAddCurrent: () -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    val first = remember { FocusRequester() }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 820.dp)
+                .height(620.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(tokens.BackgroundElevated)
+                .padding(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Bookmarks", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                Text("Saved pages", color = tokens.TextSecondary, fontSize = 12.sp)
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(bookmarks, key = { it }) { url ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { onOpen(url) },
+                                modifier = Modifier.weight(1f)
+                                    .then(if (url == bookmarks.firstOrNull()) Modifier.focusRequester(first) else Modifier)
+                                    .nuvioFocusRing(RoundedCornerShape(12.dp)),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = tokens.BackgroundCard,
+                                    contentColor = tokens.TextPrimary,
+                                    focusedContainerColor = tokens.FocusBackground,
+                                    focusedContentColor = tokens.TextPrimary,
+                                ),
+                            ) {
+                                Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(url, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Button(onClick = { onRemove(url) }, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove bookmark", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onAddCurrent, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Bookmark this page")
+                    }
+                    Button(onClick = onDismiss, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                        Text("Close")
+                    }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(100)
+        runCatching { first.requestFocus() }
     }
 }

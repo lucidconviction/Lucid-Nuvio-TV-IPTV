@@ -30,6 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,6 +43,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -163,6 +167,20 @@ fun RepoIndexOverlay(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var addingUrl by remember { mutableStateOf<String?>(null) }
+    val firstFocus = remember { FocusRequester() }
+    val closeFocus = remember { FocusRequester() }
+
+    val installedUrls = installedRepos.map { it.url.trimEnd('/') }.toSet()
+    val firstAddUrl = entries.firstOrNull { it.url.trimEnd('/') !in installedUrls }?.url
+
+    LaunchedEffect(loading, entries, installedRepos) {
+        if (!loading && error == null) {
+            delay(120)
+            runCatching {
+                if (firstAddUrl != null) firstFocus.requestFocus() else closeFocus.requestFocus()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         loading = true
@@ -177,7 +195,10 @@ fun RepoIndexOverlay(
     Box(Modifier.fillMaxSize().background(NuvioTheme.colors.Background)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 26.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(onClick = onDismiss) {
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(closeFocus),
+                ) {
                     Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Close")
@@ -200,7 +221,7 @@ fun RepoIndexOverlay(
                     Text(error.orEmpty(), color = NuvioTheme.colors.TextSecondary)
                 }
                 else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().focusRestorer(firstFocus),
                     contentPadding = PaddingValues(bottom = 40.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -260,6 +281,11 @@ fun RepoIndexOverlay(
                                                 onAdd(entry.url)
                                             },
                                             enabled = !adding,
+                                            modifier = if (entry.url == firstAddUrl) {
+                                                Modifier.focusRequester(firstFocus)
+                                            } else {
+                                                Modifier
+                                            },
                                         ) {
                                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
