@@ -107,6 +107,10 @@ class MusicPlaybackController @Inject constructor(
         }
     }
 
+    fun pause() {
+        playbacks.lastOrNull()?.player?.pause()
+    }
+
     fun toggle() {
         val player = playbacks.lastOrNull()?.player ?: return
         if (player.isPlaying) {

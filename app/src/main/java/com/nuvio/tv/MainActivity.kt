@@ -1671,6 +1671,11 @@ open class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // MUSIC-PORTING.md integration edge: the TV music session pauses when the app leaves
+        // the foreground; the mini player/session remains available when it returns.
+        if (::musicPlaybackController.isInitialized && musicPlaybackController.session.value.playing) {
+            musicPlaybackController.pause()
+        }
         externalPlaybackTracker.onExternalPlayerCoveredApp()
         super.onStop()
         startupSyncService.stopPeriodicSurfacePulls()
