@@ -10,11 +10,15 @@ import java.net.URL
 /** How the TV browser treats a navigation the page starts without a remote click. */
 enum class TvRedirectPolicy { AlwaysBlock, Ask, Allow }
 
+/** What to do when the page exposes a playable video. */
+enum class TvAutoPlayMode { Off, Ask, Best }
+
 data class TvBrowserSettings(
     val adBlockEnabled: Boolean = true,
     val cosmeticFiltering: Boolean = true,
     val popupProtection: Boolean = true,
     val redirectPolicy: TvRedirectPolicy = TvRedirectPolicy.AlwaysBlock,
+    val autoPlayMode: TvAutoPlayMode = TvAutoPlayMode.Off,
 )
 
 object TvBrowserSettingsStore {
@@ -23,6 +27,7 @@ object TvBrowserSettingsStore {
     private const val KEY_COSMETIC = "cosmetic_filtering"
     private const val KEY_POPUP = "popup_protection"
     private const val KEY_REDIRECT = "redirect_policy"
+    private const val KEY_AUTO_PLAY = "auto_play_mode"
     private const val KEY_ALLOWED_REDIRECTS = "allowed_redirect_hosts"
     private const val KEY_BLOCKED_REDIRECTS = "blocked_redirect_hosts"
 
@@ -37,6 +42,11 @@ object TvBrowserSettingsStore {
                     prefs.getString(KEY_REDIRECT, null) ?: TvRedirectPolicy.AlwaysBlock.name,
                 )
             }.getOrDefault(TvRedirectPolicy.AlwaysBlock),
+            autoPlayMode = runCatching {
+                TvAutoPlayMode.valueOf(
+                    prefs.getString(KEY_AUTO_PLAY, null) ?: TvAutoPlayMode.Off.name,
+                )
+            }.getOrDefault(TvAutoPlayMode.Off),
         )
     }
 
@@ -46,6 +56,7 @@ object TvBrowserSettingsStore {
             .putBoolean(KEY_COSMETIC, settings.cosmeticFiltering)
             .putBoolean(KEY_POPUP, settings.popupProtection)
             .putString(KEY_REDIRECT, settings.redirectPolicy.name)
+            .putString(KEY_AUTO_PLAY, settings.autoPlayMode.name)
             .apply()
     }
 

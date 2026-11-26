@@ -14,6 +14,7 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
@@ -57,6 +60,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,8 +83,13 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -95,6 +104,8 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.tv.material3.Text
 import com.nuvio.tv.ui.components.nuvioFocusRing
 import com.nuvio.tv.ui.screens.webapps.TvMarketApp
@@ -108,14 +119,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.ByteArrayInputStream
 import java.net.URI
 import kotlin.math.roundToInt
 
 private const val START_URL = "https://www.google.com"
-private const val POINTER_STEP = 30f
-private const val LONG_PRESS_MS = 600L
+private const val LONG_PRESS_MS = 500L
 private const val SHIELD_LOG = "TvBrowserShield"
 
 private const val TV_USER_AGENT =
@@ -157,6 +168,58 @@ private data class BrowserMedia(
 
 private data class RedirectPrompt(val url: String, val host: String)
 
+/** Survives the browser screen being disposed while the Nuvio player is open. */
+private object TvBrowserSession {
+    @Volatile var lastUrl: String? = null
+    @Volatile var autoPlayedUrl: String? = null
+    @Volatile var autoPlayedAt: Long = 0L
+}
+
+/** Rank the page's media so ads, prerolls and trackers lose to the real stream. */
+private fun mediaScore(
+    media: BrowserMedia,
+    domUrls: Set<String>,
+    playingUrl: String?,
+    pageHost: String?,
+): Int {
+    val url = media.url
+    val lower = url.lowercase()
+    var score = 0
+    if (playingUrl != null && url == playingUrl) score += 500
+    if (url in domUrls) score += 100
+    score += when {
+        lower.contains(".m3u8") -> 70
+        lower.contains(".mpd") -> 65
+        lower.contains(".mp4") -> 50
+        lower.contains(".webm") -> 35
+        else -> 10
+    }
+    if (lower.contains("master") || lower.contains("playlist") || lower.contains("manifest")) {
+        score += 20
+    }
+    if (lower.contains("preroll") || lower.contains("midroll") || lower.contains("postroll") ||
+        lower.contains("vast") || lower.contains("vmap") ||
+        lower.contains("/ads/") || lower.contains("/ad/") ||
+        lower.contains("popunder") || lower.contains("banner")
+    ) {
+        score -= 250
+    }
+    if (TvWebShield.matchesPatternUrl(url, pageHost, type = "media")) score -= 300
+    if (TvWebShield.isBlocked(url, includeExtra = true)) score -= 500
+    val host = TvWebShield.hostOf(url)
+    if (host != null && pageHost != null && TvWebShield.sameSite(host, pageHost)) score += 10
+    score += url.length.coerceAtMost(200) / 20
+    return score
+}
+
+/** Held D-pad directions and the 60 fps pointer-movement coroutine. */
+private class BrowserPointerState {
+    val directions = LinkedHashSet<Key>()
+    var job: Job? = null
+    var startedAt: Long = 0L
+    var lastFrameAt: Long = 0L
+}
+
 /** Values read by the WebView's background request thread. */
 private class BrowserSessionState {
     @Volatile var pageUrl: String = START_URL
@@ -176,12 +239,17 @@ fun TvBrowserScreen(
     onPlayInPlayer: (url: String, title: String, headers: Map<String, String>) -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
+    val browserPrefs = remember {
+        context.getSharedPreferences("tv_browser", android.content.Context.MODE_PRIVATE)
+    }
     val tokens = NuvioTheme.colors
     val accent = tokens.FocusRing
     val accentHex = "#%06X".format(0xFFFFFF and accent.toArgb())
-    val initialUrl = remember { BrowserLaunch.take() ?: START_URL }
+    val initialUrl = remember { BrowserLaunch.take() ?: TvBrowserSession.lastUrl ?: START_URL }
     val tabs = remember { mutableStateListOf(BrowserTab(id = 1L, url = initialUrl)) }
     var activeTab by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<WebView?>(null) }
@@ -198,12 +266,29 @@ fun TvBrowserScreen(
     var marketOpen by remember { mutableStateOf(false) }
     var marketApps by remember { mutableStateOf<List<TvMarketApp>>(emptyList()) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var mouseMode by remember { mutableStateOf(browserPrefs.getBoolean("mouse_mode", true)) }
+    var centerHeld by remember { mutableStateOf(false) }
+    var centerMoved by remember { mutableStateOf(false) }
+    val pointerState = remember { BrowserPointerState() }
+    var pageLoadId by remember { mutableIntStateOf(0) }
+    var autoPlayHandledLoadId by remember { mutableIntStateOf(-1) }
+    var appResumed by remember { mutableStateOf(true) }
+    val lastHoverAt = remember { longArrayOf(0L) }
     var browserSettings by remember { mutableStateOf(TvBrowserSettingsStore.load(context)) }
     var redirectPrompt by remember { mutableStateOf<RedirectPrompt?>(null) }
     var blockedCount by remember { mutableIntStateOf(0) }
     var notice by remember { mutableStateOf<String?>(null) }
     var updatingLists by remember { mutableStateOf(false) }
-    val sessionState = remember { BrowserSessionState() }
+    val sessionState = remember {
+        BrowserSessionState().apply {
+            // The first page is a user-requested navigation. Initialising the current
+            // host here stops the restored/first URL from looking like a cross-site
+            // redirect and asking for permission to open itself.
+            pageUrl = initialUrl
+            pendingUserUrl = initialUrl
+            lastUserActionAt = SystemClock.uptimeMillis()
+        }
+    }
     val liveSettings = remember { java.util.concurrent.atomic.AtomicReference(browserSettings) }
     val detectedMedia = remember {
         java.util.Collections.synchronizedMap(LinkedHashMap<String, Map<String, String>>())
@@ -290,8 +375,50 @@ fun TvBrowserScreen(
         )
     }
 
+    fun movePointerToPixels(x: Float, y: Float) {
+        val maxX = configuration.screenWidthDp.toFloat() - 26f
+        val maxY = configuration.screenHeightDp.toFloat() - 26f
+        val dpX = x / density.density
+        val dpY = y / density.density
+        pointer = Offset(dpX.coerceIn(0f, maxX), dpY.coerceIn(0f, maxY))
+    }
+
+    fun scrollPage(deltaPx: Int) {
+        val view = webView ?: return
+        view.evaluateJavascript(
+            """
+            (function(){
+              var d=$deltaPx;
+              try { window.scrollBy({top:d,left:0,behavior:'smooth'}); }
+              catch(err) { window.scrollBy(0,d); }
+            })()
+            """.trimIndent(),
+            null,
+        )
+    }
+
     fun clickAtPointer() {
         val view = webView ?: return
+        val width = configuration.screenWidthDp.toFloat()
+        val height = configuration.screenHeightDp.toFloat()
+        val centerY = height / 2f
+        // D-pad or mouse clicks on the floating scroll buttons.
+        if (pointer.x >= width - 72f) {
+            if (pointer.y in (centerY - 71f)..(centerY - 5f)) {
+                scrollPage(-(view.height * 4 / 5))
+                return
+            }
+            if (pointer.y in (centerY + 5f)..(centerY + 71f)) {
+                scrollPage(view.height * 4 / 5)
+                return
+            }
+        }
+        // The bottom toolbar is also a click target: OK on it opens the address bar.
+        if (pointer.y >= height - 62f && pointer.x <= 760f) {
+            addressOpen = true
+            scope.launch { delay(100); runCatching { addressFocus.requestFocus() } }
+            return
+        }
         val x = pointer.x.roundToInt()
         val y = pointer.y.roundToInt()
         sessionState.lastUserActionAt = SystemClock.uptimeMillis()
@@ -311,6 +438,51 @@ fun TvBrowserScreen(
             null,
         )
         scope.launch { delay(160); runCatching { rootFocus.requestFocus() } }
+    }
+
+    fun stopPointerMovement() {
+        pointerState.job?.cancel()
+        pointerState.job = null
+        pointerState.directions.clear()
+    }
+
+    fun startPointerMovement() {
+        if (pointerState.job?.isActive == true) return
+        pointerState.startedAt = SystemClock.uptimeMillis()
+        pointerState.lastFrameAt = pointerState.startedAt - 16L
+        pointerState.job = scope.launch {
+            val maxX = configuration.screenWidthDp.toFloat() - 20f
+            val maxY = configuration.screenHeightDp.toFloat() - 20f
+            while (pointerState.directions.isNotEmpty()) {
+                val now = SystemClock.uptimeMillis()
+                val dt = ((now - pointerState.lastFrameAt).coerceIn(0L, 50L)) / 1000f
+                pointerState.lastFrameAt = now
+                val held = ((now - pointerState.startedAt) / 700f).coerceIn(0f, 1f)
+                val speed = 300f + 1_100f * held
+                var dx = 0f
+                var dy = 0f
+                if (Key.DirectionLeft in pointerState.directions) dx -= 1f
+                if (Key.DirectionRight in pointerState.directions) dx += 1f
+                if (Key.DirectionUp in pointerState.directions) dy -= 1f
+                if (Key.DirectionDown in pointerState.directions) dy += 1f
+                if (dx != 0f && dy != 0f) {
+                    dx *= 0.7071f
+                    dy *= 0.7071f
+                }
+                if (dt > 0f) {
+                    pointer = Offset(
+                        (pointer.x + dx * speed * dt).coerceIn(0f, maxX),
+                        (pointer.y + dy * speed * dt).coerceIn(0f, maxY),
+                    )
+                    if (now - lastHoverAt[0] >= 60L) {
+                        lastHoverAt[0] = now
+                        highlightAtPointer()
+                    }
+                }
+                kotlinx.coroutines.delay(16)
+            }
+            pointerState.job = null
+        }
     }
 
     fun mediaHeaders(
@@ -413,7 +585,7 @@ fun TvBrowserScreen(
         notice = "Redirects to $host are blocked"
     }
 
-    fun finishMediaScan(domUrls: List<String>) {
+    fun mediaCandidates(domUrls: List<String>, playingUrl: String?): List<BrowserMedia> {
         val merged = LinkedHashMap<String, BrowserMedia>()
         synchronized(detectedMedia) {
             detectedMedia.forEach { (url, captured) ->
@@ -435,48 +607,98 @@ fun TvBrowserScreen(
                 )
             }
         }
-        mediaItems = merged.values.toList()
+        val domSet = domUrls.filter(::isMediaUrl).toSet()
+        val pageHost = TvWebShield.hostOf(sessionState.pageUrl)
+        return merged.values
+            .map { media -> media to mediaScore(media, domSet, playingUrl, pageHost) }
+            .filter { (_, score) -> score >= 0 }
+            .sortedByDescending { (_, score) -> score }
+            .map { (media, _) -> media }
+    }
+
+    fun finishMediaScan(domUrls: List<String>) {
+        mediaItems = mediaCandidates(domUrls, playingUrl = null)
         mediaOpen = true
     }
 
-    fun scanMedia() {
+    fun scanMediaInfo(onReady: (List<String>, String?) -> Unit) {
         val view = webView ?: run {
-            finishMediaScan(emptyList())
+            onReady(emptyList(), null)
             return
         }
         view.evaluateJavascript(
             """
             (function(){
-              var out=[];
-              document.querySelectorAll('video,source').forEach(function(e){
-                var u=e.currentSrc||e.src||e.getAttribute('src'); if(u) out.push(u);
+              var urls=[];
+              var playing='';
+              document.querySelectorAll('video').forEach(function(v){
+                var u=v.currentSrc||v.src||v.getAttribute('src')||'';
+                if(u) urls.push(u);
+                if(!v.paused && !v.ended && !playing) playing=u;
+              });
+              document.querySelectorAll('source').forEach(function(e){
+                var u=e.src||e.getAttribute('src'); if(u) urls.push(u);
               });
               document.querySelectorAll('a[href]').forEach(function(a){
-                var h=a.href; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(h)) out.push(h);
+                var h=a.href; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(h)) urls.push(h);
               });
               try{
                 performance.getEntriesByType('resource').forEach(function(e){
-                  var u=e.name; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(u)) out.push(u);
+                  var u=e.name; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(u)) urls.push(u);
                 });
               }catch(err){}
-              return JSON.stringify(Array.from(new Set(out)));
+              return JSON.stringify({urls:Array.from(new Set(urls)), playing: playing});
             })()
             """.trimIndent(),
             ValueCallback { value ->
                 val raw = runCatching {
                     (JSONTokener(value).nextValue() as? String) ?: value
                 }.getOrNull() ?: ""
-                val array = runCatching { JSONArray(raw) }.getOrNull()
+                val json = runCatching { JSONObject(raw) }.getOrNull()
+                val array = json?.optJSONArray("urls") ?: JSONArray()
                 val urls = buildList {
-                    if (array != null) {
-                        for (i in 0 until array.length()) {
-                            array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
-                        }
+                    for (i in 0 until array.length()) {
+                        array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
                     }
                 }
-                finishMediaScan(urls)
+                onReady(urls, json?.optString("playing")?.takeIf { it.isNotBlank() })
             },
         )
+    }
+
+    fun scanMedia() {
+        scanMediaInfo { urls, _ -> finishMediaScan(urls) }
+    }
+
+    fun considerAutoPlay(domUrls: List<String>, playingUrl: String?) {
+        val mode = liveSettings.get().autoPlayMode
+        if (mode == TvAutoPlayMode.Off) return
+        if (!appResumed || overlayOpen) return
+        if (autoPlayHandledLoadId == pageLoadId) return
+        val thisUrl = sessionState.pageUrl
+        if (TvBrowserSession.autoPlayedUrl == thisUrl &&
+            SystemClock.uptimeMillis() - TvBrowserSession.autoPlayedAt < 30_000L
+        ) {
+            return
+        }
+        val candidates = mediaCandidates(domUrls, playingUrl)
+        if (candidates.isEmpty()) return
+        autoPlayHandledLoadId = pageLoadId
+        TvBrowserSession.autoPlayedUrl = thisUrl
+        TvBrowserSession.autoPlayedAt = SystemClock.uptimeMillis()
+        if (mode == TvAutoPlayMode.Ask) {
+            mediaItems = candidates
+            mediaOpen = true
+            notice = "Choose a video to play in Nuvio"
+        } else {
+            val best = candidates.first()
+            webView?.evaluateJavascript(
+                "(function(){document.querySelectorAll('video,audio').forEach(function(v){try{v.pause();}catch(e){}});})()",
+                null,
+            )
+            notice = "Opening ${best.label} in Nuvio"
+            onPlayInPlayer(best.url, pageTitle.ifBlank { "Web video" }, best.headers)
+        }
     }
 
     /**
@@ -551,6 +773,7 @@ fun TvBrowserScreen(
     }
 
     fun openMenu() {
+        stopPointerMovement()
         menuOpen = true
         scope.launch { delay(100); runCatching { menuFocus.requestFocus() } }
     }
@@ -564,6 +787,9 @@ fun TvBrowserScreen(
         marketOpen = false
         settingsOpen = false
         redirectPrompt = null
+        centerHeld = false
+        centerMoved = false
+        stopPointerMovement()
         scope.launch { delay(100); runCatching { rootFocus.requestFocus() } }
     }
 
@@ -600,6 +826,66 @@ fun TvBrowserScreen(
         if (browserSettings.cosmeticFiltering) injectCosmeticFilter()
     }
 
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    appResumed = true
+                    webView?.let {
+                        runCatching { it.resumeTimers() }
+                        runCatching { it.onResume() }
+                    }
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    appResumed = false
+                    webView?.let {
+                        runCatching {
+                            it.evaluateJavascript(
+                                "(function(){document.querySelectorAll('video,audio').forEach(function(v){try{v.pause();}catch(e){}});})()",
+                                null,
+                            )
+                        }
+                        runCatching { it.onPause() }
+                        runCatching { it.pauseTimers() }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(overlayOpen, appResumed, webView) {
+        val view = webView
+        if (view != null) {
+            if (overlayOpen || !appResumed) {
+                // Freeze the page while the browser chrome is up or the app is in the
+                // background: scripts, timers, redirects, popups and video all stop.
+                runCatching {
+                    view.evaluateJavascript(
+                        "(function(){document.querySelectorAll('video,audio').forEach(function(v){try{v.pause();}catch(e){}});})()",
+                        null,
+                    )
+                }
+                runCatching { view.onPause() }
+                runCatching { view.pauseTimers() }
+            } else {
+                runCatching { view.resumeTimers() }
+                runCatching { view.onResume() }
+            }
+            // The WebView must never own D-pad focus while the virtual cursor is
+            // active: Chromium would swallow the keys before the menu/pointer sees
+            // them. Touch and mouse clicks still reach the page.
+            view.isFocusable = false
+            view.isFocusableInTouchMode = false
+        }
+        if (!overlayOpen) {
+            delay(80)
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
+
     LaunchedEffect(notice) {
         if (notice != null) {
             delay(3_500)
@@ -614,22 +900,53 @@ fun TvBrowserScreen(
             .focusRequester(rootFocus)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (overlayOpen) return@onPreviewKeyEvent false
                 val down = event.type == KeyEventType.KeyDown
+                val centerKey = event.key == Key.DirectionCenter || event.key == Key.Enter
+                // A long press owns the whole OK cycle. The repeats while holding and the
+                // final key-up are consumed here so the freshly focused menu button cannot
+                // activate from the same hold and close the menu straight away.
+                if (centerHeld && centerKey) {
+                    if (!down) {
+                        centerHeld = false
+                        longPressJob?.cancel()
+                        longPressJob = null
+                        if (!longPressFired && !centerMoved) clickAtPointer()
+                        longPressFired = false
+                        centerMoved = false
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (overlayOpen) return@onPreviewKeyEvent false
+                val directionKey = event.key in listOf(
+                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown,
+                )
                 when {
-                    down && event.key in listOf(Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown) -> {
-                        val maxX = configuration.screenWidthDp.toFloat() - 26f
-                        val maxY = configuration.screenHeightDp.toFloat() - 26f
-                        pointer = when (event.key) {
-                            Key.DirectionLeft -> pointer.copy(x = (pointer.x - POINTER_STEP).coerceAtLeast(0f))
-                            Key.DirectionRight -> pointer.copy(x = (pointer.x + POINTER_STEP).coerceAtMost(maxX))
-                            Key.DirectionUp -> pointer.copy(y = (pointer.y - POINTER_STEP).coerceAtLeast(0f))
-                            else -> pointer.copy(y = (pointer.y + POINTER_STEP).coerceAtMost(maxY))
+                    directionKey -> {
+                        if (down) {
+                            if (centerHeld) {
+                                // Moving while OK is held cancels the menu timer: hold + move
+                                // is a drag gesture, not a request for the menu.
+                                longPressJob?.cancel()
+                                longPressJob = null
+                                centerMoved = true
+                            }
+                            if (pointerState.directions.isEmpty()) {
+                                pointerState.startedAt = SystemClock.uptimeMillis()
+                            }
+                            pointerState.directions += event.key
+                            startPointerMovement()
+                        } else {
+                            pointerState.directions -= event.key
+                            if (pointerState.directions.isEmpty()) {
+                                pointerState.job?.cancel()
+                                pointerState.job = null
+                            }
                         }
-                        highlightAtPointer()
                         true
                     }
-                    down && (event.key == Key.DirectionCenter || event.key == Key.Enter) -> {
+                    down && centerKey -> {
+                        centerHeld = true
+                        centerMoved = false
                         if (longPressJob?.isActive != true) {
                             longPressFired = false
                             longPressJob = scope.launch {
@@ -638,13 +955,6 @@ fun TvBrowserScreen(
                                 openMenu()
                             }
                         }
-                        true
-                    }
-                    !down && (event.key == Key.DirectionCenter || event.key == Key.Enter) -> {
-                        longPressJob?.cancel()
-                        longPressJob = null
-                        if (!longPressFired) clickAtPointer()
-                        longPressFired = false
                         true
                     }
                     down && event.key == Key.Menu -> {
@@ -714,10 +1024,19 @@ fun TvBrowserScreen(
                         }
 
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                            url?.let {
-                                sessionState.pageUrl = it
-                                pageUrl = it
-                                address = it
+                            pageLoadId += 1
+                            url?.let { newUrl ->
+                                val oldUrl = sessionState.pageUrl
+                                if (oldUrl != newUrl && oldUrl.substringBefore('#') != newUrl.substringBefore('#')) {
+                                    // Do not carry a previous page's streams into this page's
+                                    // auto-play or Play in Nuvio candidate list.
+                                    synchronized(detectedMedia) { detectedMedia.clear() }
+                                    mediaItems = emptyList()
+                                }
+                                sessionState.pageUrl = newUrl
+                                TvBrowserSession.lastUrl = newUrl
+                                pageUrl = newUrl
+                                address = newUrl
                                 refreshTab()
                             }
                         }
@@ -725,6 +1044,7 @@ fun TvBrowserScreen(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             url?.let {
                                 sessionState.pageUrl = it
+                                TvBrowserSession.lastUrl = it
                                 pageUrl = it
                                 address = it
                                 refreshTab()
@@ -734,6 +1054,23 @@ fun TvBrowserScreen(
                                 injectCosmeticFilter(it)
                             }
                             scope.launch { delay(120); runCatching { rootFocus.requestFocus() } }
+                            if (liveSettings.get().autoPlayMode != TvAutoPlayMode.Off) {
+                                val loadId = pageLoadId
+                                scope.launch {
+                                    delay(3_000)
+                                    if (loadId != pageLoadId) return@launch
+                                    scanMediaInfo { urls, playing ->
+                                        if (loadId == pageLoadId) considerAutoPlay(urls, playing)
+                                    }
+                                }
+                                scope.launch {
+                                    delay(7_000)
+                                    if (loadId != pageLoadId) return@launch
+                                    scanMediaInfo { urls, playing ->
+                                        if (loadId == pageLoadId) considerAutoPlay(urls, playing)
+                                    }
+                                }
+                            }
                         }
 
                         override fun shouldOverrideUrlLoading(
@@ -789,14 +1126,13 @@ fun TvBrowserScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // URL / title pill.
+        // Bottom address / status toolbar.
         Row(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.68f))
+                .padding(horizontal = 20.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -816,8 +1152,9 @@ fun TvBrowserScreen(
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 380.dp),
+                modifier = Modifier.widthIn(max = 520.dp),
             )
+            Spacer(Modifier.weight(1f))
             Text(
                 if (browserSettings.adBlockEnabled && blockedCount > 0) {
                     "Shield $blockedCount"
@@ -832,14 +1169,50 @@ fun TvBrowserScreen(
         notice?.let { message ->
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(24.dp)
+                    .align(Alignment.TopCenter)
+                    .padding(top = 20.dp)
                     .clip(RoundedCornerShape(50))
                     .background(Color.Black.copy(alpha = 0.72f))
                     .padding(horizontal = 18.dp, vertical = 9.dp),
             ) {
                 Text(message, color = tokens.TextPrimary, fontSize = 12.sp)
             }
+        }
+
+        if (mouseMode && !overlayOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                when (event.type) {
+                                    PointerEventType.Move -> {
+                                        val position = event.changes.firstOrNull()?.position ?: continue
+                                        movePointerToPixels(position.x, position.y)
+                                        val now = SystemClock.uptimeMillis()
+                                        if (now - lastHoverAt[0] >= 60L) {
+                                            lastHoverAt[0] = now
+                                            highlightAtPointer()
+                                        }
+                                    }
+                                    PointerEventType.Press -> {
+                                        val position = event.changes.firstOrNull()?.position ?: continue
+                                        movePointerToPixels(position.x, position.y)
+                                        clickAtPointer()
+                                    }
+                                    PointerEventType.Scroll -> {
+                                        val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                        if (delta != 0f) {
+                                            scrollPage((delta * 120f).roundToInt())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+            )
         }
 
         if (!overlayOpen) {
@@ -852,6 +1225,20 @@ fun TvBrowserScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Box(Modifier.size(6.dp).background(accent, CircleShape))
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                BrowserScrollButton(up = true) {
+                    scrollPage(-(webView?.height ?: 0) * 4 / 5)
+                }
+                BrowserScrollButton(up = false) {
+                    scrollPage((webView?.height ?: 0) * 4 / 5)
+                }
             }
         }
 
@@ -875,11 +1262,11 @@ fun TvBrowserScreen(
                     closeOverlays()
                 },
                 onScrollUp = {
-                    webView?.scrollBy(0, -(webView?.height ?: 0) * 3 / 4)
+                    scrollPage(-(webView?.height ?: 0) * 3 / 4)
                     closeOverlays()
                 },
                 onScrollDown = {
-                    webView?.scrollBy(0, (webView?.height ?: 0) * 3 / 4)
+                    scrollPage((webView?.height ?: 0) * 3 / 4)
                     closeOverlays()
                 },
                 onTabs = { menuOpen = false; tabsOpen = true; scope.launch { delay(80); runCatching { tabsFocus.requestFocus() } } },
@@ -900,6 +1287,12 @@ fun TvBrowserScreen(
                     menuOpen = false
                     settingsOpen = true
                     scope.launch { delay(100); runCatching { settingsFocus.requestFocus() } }
+                },
+                mouseMode = mouseMode,
+                onToggleMouse = {
+                    val next = !mouseMode
+                    mouseMode = next
+                    browserPrefs.edit().putBoolean("mouse_mode", next).apply()
                 },
             )
         }
@@ -956,6 +1349,7 @@ fun TvBrowserScreen(
                 onToggleCosmetic = { browserSettings = browserSettings.copy(cosmeticFiltering = it) },
                 onTogglePopup = { browserSettings = browserSettings.copy(popupProtection = it) },
                 onPolicy = { browserSettings = browserSettings.copy(redirectPolicy = it) },
+                onAutoPlayMode = { browserSettings = browserSettings.copy(autoPlayMode = it) },
                 onUpdateLists = {
                     if (!updatingLists) {
                         updatingLists = true
@@ -1044,9 +1438,11 @@ private fun BrowserMenu(
     onHome: () -> Unit,
     onMarket: () -> Unit,
     onShield: () -> Unit,
+    mouseMode: Boolean,
+    onToggleMouse: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.52f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 560.dp)
@@ -1083,6 +1479,12 @@ private fun BrowserMenu(
                     Modifier.fillMaxWidth(),
                     onShield,
                 )
+                BrowserMenuButton(
+                    if (mouseMode) "Mouse: ON" else "Mouse: OFF",
+                    Icons.Default.Mouse,
+                    Modifier.fillMaxWidth(),
+                    onToggleMouse,
+                )
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth().nuvioFocusRing(RoundedCornerShape(12.dp))) {
                     Text("Close menu")
                 }
@@ -1092,6 +1494,32 @@ private fun BrowserMenu(
     LaunchedEffect(Unit) {
         delay(100)
         runCatching { focusRequester.requestFocus() }
+    }
+}
+
+@Composable
+private fun BrowserScrollButton(up: Boolean, onClick: () -> Unit) {
+    val tokens = NuvioTheme.colors
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .width(54.dp)
+            .height(66.dp)
+            .nuvioFocusRing(RoundedCornerShape(14.dp)),
+        shape = ButtonDefaults.shape(RoundedCornerShape(14.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Black.copy(alpha = 0.40f),
+            contentColor = Color.White.copy(alpha = 0.92f),
+            focusedContainerColor = tokens.FocusBackground.copy(alpha = 0.70f),
+            focusedContentColor = Color.White,
+        ),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Icon(
+            imageVector = if (up) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (up) "Scroll up" else "Scroll down",
+            modifier = Modifier.size(30.dp),
+        )
     }
 }
 
@@ -1131,7 +1559,7 @@ private fun AddressOverlay(
     var query by remember(value) { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
     val goFocus = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 760.dp)
@@ -1203,7 +1631,7 @@ private fun TabsOverlay(
     onDismiss: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 780.dp)
@@ -1281,7 +1709,7 @@ private fun MediaOverlay(
 ) {
     val tokens = NuvioTheme.colors
     val first = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 960.dp)
@@ -1363,12 +1791,13 @@ private fun ShieldSettingsOverlay(
     onToggleCosmetic: (Boolean) -> Unit,
     onTogglePopup: (Boolean) -> Unit,
     onPolicy: (TvRedirectPolicy) -> Unit,
+    onAutoPlayMode: (TvAutoPlayMode) -> Unit,
     onUpdateLists: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
     val rules = TvWebShield.ruleCount
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 820.dp)
@@ -1443,6 +1872,30 @@ private fun ShieldSettingsOverlay(
                     color = tokens.TextSecondary,
                     fontSize = 11.sp,
                 )
+                Spacer(Modifier.height(2.dp))
+                Text("Auto-play detected videos in Nuvio", color = tokens.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PolicyButton(
+                        label = "Off",
+                        selected = settings.autoPlayMode == TvAutoPlayMode.Off,
+                        modifier = Modifier.weight(1f),
+                    ) { onAutoPlayMode(TvAutoPlayMode.Off) }
+                    PolicyButton(
+                        label = "Ask me",
+                        selected = settings.autoPlayMode == TvAutoPlayMode.Ask,
+                        modifier = Modifier.weight(1f),
+                    ) { onAutoPlayMode(TvAutoPlayMode.Ask) }
+                    PolicyButton(
+                        label = "Best match",
+                        selected = settings.autoPlayMode == TvAutoPlayMode.Best,
+                        modifier = Modifier.weight(1f),
+                    ) { onAutoPlayMode(TvAutoPlayMode.Best) }
+                }
+                Text(
+                    "Ask opens the detected videos so you can choose. Best match ranks streams, drops ad and preroll paths, and opens the strongest candidate automatically.",
+                    color = tokens.TextSecondary,
+                    fontSize = 11.sp,
+                )
                 Button(onClick = onDismiss, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
                     Text("Close")
                 }
@@ -1513,7 +1966,7 @@ private fun RedirectPromptOverlay(
 ) {
     val tokens = NuvioTheme.colors
     val first = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.68f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 820.dp)
@@ -1574,7 +2027,7 @@ private fun BookmarksOverlay(
 ) {
     val tokens = NuvioTheme.colors
     val first = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 820.dp)
@@ -1641,7 +2094,14 @@ private fun BrowserMarketOverlay(
 ) {
     val tokens = NuvioTheme.colors
     val first = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+    var groupId by remember { mutableStateOf(TvWebMarket.groups.first().id) }
+    var categoryId by remember {
+        mutableStateOf(TvWebMarket.groups.first().categories.first().id)
+    }
+    val group = TvWebMarket.groups.firstOrNull { it.id == groupId } ?: TvWebMarket.groups.first()
+    val category = group.categories.firstOrNull { it.id == categoryId } ?: group.categories.first()
+    val visible = apps.filter { it.categoryId == category.id }
+    Box(Modifier.fillMaxSize().focusGroup().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .widthIn(max = 1200.dp)
@@ -1657,9 +2117,30 @@ private fun BrowserMarketOverlay(
                     color = tokens.TextSecondary,
                     fontSize = 12.sp,
                 )
-                if (apps.isEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(TvWebMarket.groups, key = { it.id }) { marketGroup ->
+                        BrowserMarketChip(
+                            label = marketGroup.label,
+                            selected = marketGroup.id == group.id,
+                        ) {
+                            groupId = marketGroup.id
+                            categoryId = marketGroup.categories.first().id
+                        }
+                    }
+                }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(group.categories, key = { it.id }) { marketCategory ->
+                        BrowserMarketChip(
+                            label = marketCategory.label,
+                            selected = marketCategory.id == category.id,
+                        ) {
+                            categoryId = marketCategory.id
+                        }
+                    }
+                }
+                if (visible.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        androidx.compose.material3.CircularProgressIndicator(color = tokens.TextPrimary)
+                        Text("No apps in this category.", color = tokens.TextSecondary)
                     }
                 } else {
                     LazyVerticalGrid(
@@ -1669,7 +2150,7 @@ private fun BrowserMarketOverlay(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(bottom = 12.dp),
                     ) {
-                        gridItems(apps, key = { it.url }) { app ->
+                        gridItems(visible, key = { it.url }) { app ->
                             val saved = app.url in savedUrls
                             Row(
                                 Modifier.fillMaxWidth(),
@@ -1679,7 +2160,7 @@ private fun BrowserMarketOverlay(
                                 Button(
                                     onClick = { onOpen(app.url) },
                                     modifier = Modifier.weight(1f).height(76.dp)
-                                        .then(if (app == apps.first()) Modifier.focusRequester(first) else Modifier)
+                                        .then(if (app == visible.first()) Modifier.focusRequester(first) else Modifier)
                                         .nuvioFocusRing(RoundedCornerShape(12.dp)),
                                     colors = ButtonDefaults.colors(
                                         containerColor = tokens.BackgroundCard,
@@ -1716,5 +2197,29 @@ private fun BrowserMarketOverlay(
     LaunchedEffect(Unit) {
         delay(120)
         runCatching { first.requestFocus() }
+    }
+}
+
+
+@Composable
+private fun BrowserMarketChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    Button(
+        onClick = onClick,
+        modifier = Modifier.height(38.dp).nuvioFocusRing(RoundedCornerShape(50)),
+        shape = ButtonDefaults.shape(RoundedCornerShape(50)),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) tokens.TextPrimary else tokens.BackgroundCard,
+            contentColor = if (selected) tokens.TextInverse else tokens.TextPrimary,
+            focusedContainerColor = tokens.FocusBackground,
+            focusedContentColor = tokens.TextPrimary,
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp),
+    ) {
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
