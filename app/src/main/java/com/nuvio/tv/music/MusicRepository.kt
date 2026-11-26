@@ -39,7 +39,7 @@ class MusicRepository @Inject constructor(
         val data = coroutineScope {
             val trending = async { deezer.chartTracks(30) }
             val releases = async { deezer.newReleases(20) }
-            val artists = async { deezer.chartArtists(20) }
+            val artists = async { deezer.chartArtists(25) }
             val playlists = async { deezer.chartPlaylists(20) }
             val genres = async { deezer.genres() }
             val videos = async { youtubeTracks("trending music videos 2026", 12) }

@@ -69,6 +69,7 @@ fun MusicMiniPlayer(
     val current by player.current.collectAsStateWithLifecycle()
     val session by playback.session.collectAsStateWithLifecycle()
     val track = current ?: return
+    if (!session.playing && !session.loading) return
 
     Box(
         modifier = modifier

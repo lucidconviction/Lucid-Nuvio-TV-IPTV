@@ -138,6 +138,7 @@ fun PluginScreenContent(
 ) {
     var repoUrl by remember { mutableStateOf("") }
     var repoPendingRemoval by remember { mutableStateOf<PluginRepository?>(null) }
+    var showRepoIndex by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val manageFromPhoneFocusRequester = remember { FocusRequester() }
     var hasEnteredQrMode by remember { mutableStateOf(false) }
@@ -221,6 +222,10 @@ fun PluginScreenContent(
                         },
                         isLoading = uiState.isAddingRepo
                     )
+                }
+
+                item {
+                    RepoIndexCard(onClick = { showRepoIndex = true })
                 }
 
                 // Manage from phone card
@@ -353,6 +358,15 @@ fun PluginScreenContent(
         }
 
         uiState.pendingRepoChange?.let { pending ->
+            if (showRepoIndex) {
+                RepoIndexOverlay(
+                    installedRepos = uiState.repositories,
+                    adding = uiState.isAddingRepo,
+                    onAdd = { url -> viewModel.onEvent(PluginUiEvent.AddRepository(url)) },
+                    onDismiss = { showRepoIndex = false },
+                )
+            }
+
             ConfirmRepoChangesDialog(
                 pendingChange = pending,
                 onConfirm = { viewModel.onEvent(PluginUiEvent.ConfirmPendingRepoChange) },

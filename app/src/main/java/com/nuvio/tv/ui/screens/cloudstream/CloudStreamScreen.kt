@@ -44,6 +44,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -155,7 +156,7 @@ private fun ProviderList(
                 }
             }
             else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 220.dp),
+                columns = GridCells.Adaptive(minSize = 176.dp),
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 40.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -181,7 +182,7 @@ private fun ProviderCard(
 ) {
     Card(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().height(132.dp),
+        modifier = modifier.fillMaxWidth().height(106.dp),
         shape = CardDefaults.shape(RoundedCornerShape(18.dp)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated,
@@ -194,7 +195,7 @@ private fun ProviderCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Box(
-                Modifier.size(84.dp).clip(RoundedCornerShape(14.dp)).background(NuvioTheme.colors.BackgroundCard),
+                Modifier.size(67.dp).clip(RoundedCornerShape(12.dp)).background(NuvioTheme.colors.BackgroundCard),
                 contentAlignment = Alignment.Center,
             ) {
                 if (!provider.logo.isNullOrBlank()) {
@@ -209,7 +210,7 @@ private fun ProviderCard(
                         Icons.Default.Extension,
                         contentDescription = null,
                         tint = NuvioTheme.colors.TextPrimary,
-                        modifier = Modifier.size(34.dp),
+                        modifier = Modifier.size(27.dp),
                     )
                 }
             }
@@ -240,7 +241,15 @@ private fun ProviderBrowse(
     val provider = state.provider ?: return
     var query by remember(provider.id) { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
+    var searchOpen by remember(provider.id) { mutableStateOf(false) }
+    val searchFocus = remember { FocusRequester() }
     val firstItemFocus = remember { FocusRequester() }
+    LaunchedEffect(searchOpen) {
+        if (searchOpen) {
+            delay(150)
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(state.activeTab, state.items, state.searchResults) {
         if (state.items.isNotEmpty() || state.searchResults.isNotEmpty()) {
             delay(200)
@@ -253,52 +262,71 @@ private fun ProviderBrowse(
             title = provider.name,
             subtitle = "CloudStream extension",
             onBack = onBack,
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            BasicTextField(
-                value = query,
-                onValueChange = {
-                    query = it
-                    if (it.isBlank()) onSearch("")
-                },
-                singleLine = true,
-                textStyle = NuvioTheme.textStyles.body.copy(color = NuvioTheme.colors.TextPrimary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(NuvioTheme.colors.BackgroundElevated)
-                    .onFocusChanged { searchFocused = it.isFocused }
-                    .then(
-                        if (searchFocused) {
-                            Modifier.border(2.dp, NuvioTheme.colors.FocusRing, RoundedCornerShape(14.dp))
-                        } else {
-                            Modifier
-                        }
-                    )
-                    .padding(horizontal = 16.dp, vertical = 13.dp),
-                decorationBox = { inner ->
-                    if (query.isBlank()) {
-                        Text("Search this extension", color = NuvioTheme.colors.TextTertiary)
+            trailing = {
+                Button(onClick = {
+                    searchOpen = !searchOpen
+                    if (!searchOpen && query.isNotBlank()) {
+                        query = ""
+                        onSearch("")
                     }
-                    inner()
-                },
-            )
-            Button(onClick = { onSearch(query) }) {
-                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Search")
+                }) {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (searchOpen) "Hide search" else "Search")
+                }
+            },
+        )
+        if (searchOpen) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                BasicTextField(
+                    value = query,
+                    onValueChange = {
+                        query = it
+                        if (it.isBlank()) onSearch("")
+                    },
+                    singleLine = true,
+                    textStyle = NuvioTheme.textStyles.body.copy(color = NuvioTheme.colors.TextPrimary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(searchFocus)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(NuvioTheme.colors.BackgroundElevated)
+                        .onFocusChanged { searchFocused = it.isFocused }
+                        .then(
+                            if (searchFocused) {
+                                Modifier.border(2.dp, NuvioTheme.colors.FocusRing, RoundedCornerShape(14.dp))
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(horizontal = 16.dp, vertical = 13.dp),
+                    decorationBox = { inner ->
+                        if (query.isBlank()) {
+                            Text("Search this extension", color = NuvioTheme.colors.TextTertiary)
+                        }
+                        inner()
+                    },
+                )
+                Button(onClick = { onSearch(query) }) {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Search")
+                }
             }
         }
         if (state.tabs.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 items(state.tabs, key = { "${it.apiIndex}|${it.tabName}" }) { tab ->
                     TabChip(
                         label = tab.label,
@@ -331,7 +359,7 @@ private fun ProviderBrowse(
                 )
             }
             else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 172.dp),
+                columns = GridCells.Adaptive(minSize = 138.dp),
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 40.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -370,6 +398,7 @@ private fun ProviderBrowse(
 private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Button(
         onClick = onClick,
+        modifier = Modifier.height(46.dp),
         shape = ButtonDefaults.shape(RoundedCornerShape(50)),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated,
@@ -377,9 +406,14 @@ private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
             focusedContainerColor = NuvioTheme.colors.FocusBackground,
             focusedContentColor = NuvioTheme.colors.TextPrimary,
         ),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp),
     ) {
-        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -566,7 +600,12 @@ private fun EpisodeRow(
 }
 
 @Composable
-private fun ScreenHeader(title: String, subtitle: String, onBack: () -> Unit) {
+private fun ScreenHeader(
+    title: String,
+    subtitle: String,
+    onBack: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Button(onClick = onBack) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
@@ -577,5 +616,6 @@ private fun ScreenHeader(title: String, subtitle: String, onBack: () -> Unit) {
             Text(title, color = NuvioTheme.colors.TextPrimary, style = NuvioTheme.textStyles.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, color = NuvioTheme.colors.TextSecondary, style = NuvioTheme.textStyles.metadata, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        trailing?.invoke()
     }
 }

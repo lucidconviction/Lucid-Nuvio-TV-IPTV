@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -90,6 +92,7 @@ private enum class MusicTab(val label: String) {
     SEARCH("Search"),
     BROWSE("Browse"),
     LIBRARY("Library"),
+    PLAYLISTS("Playlists"),
     DOWNLOADS("Downloads"),
 }
 
@@ -146,14 +149,23 @@ fun MusicScreen(
             .background(NuvioTheme.colors.Background)
             .padding(start = 48.dp, end = 48.dp, top = 18.dp, bottom = 28.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("Music", style = NuvioTheme.textStyles.headline, color = NuvioTheme.colors.TextPrimary)
-                Text(
-                    "Songs, artists, albums and videos",
-                    style = NuvioTheme.textStyles.metadata,
-                    color = NuvioTheme.colors.TextSecondary,
-                )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MusicTab.entries.forEachIndexed { index, entry ->
+                    MusicChip(
+                        label = entry.label,
+                        selected = tab == entry,
+                        focusRequester = if (index == 0) firstTabFocus else null,
+                        onClick = { tab = entry },
+                    )
+                }
             }
             if (currentTrack != null) {
                 Button(onClick = onOpenPlayer) {
@@ -164,18 +176,7 @@ fun MusicScreen(
             }
             MusicModeToggle(viewModel.player)
         }
-        Spacer(Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MusicTab.entries.forEachIndexed { index, entry ->
-                MusicChip(
-                    label = entry.label,
-                    selected = tab == entry,
-                    focusRequester = if (index == 0) firstTabFocus else null,
-                    onClick = { tab = entry },
-                )
-            }
-        }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
         if (loading && home == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -203,6 +204,11 @@ fun MusicScreen(
                 )
                 MusicTab.BROWSE -> MusicBrowse(home ?: MusicHomeData(), onOpenDestination = { destination = it })
                 MusicTab.LIBRARY -> MusicLibraryContent(viewModel, onOpenDestination = { destination = it }, onOpenPlayer = onOpenPlayer)
+                MusicTab.PLAYLISTS -> MusicPlaylistsContent(
+                    home = home ?: MusicHomeData(),
+                    viewModel = viewModel,
+                    onOpenDestination = { destination = it },
+                )
                 MusicTab.DOWNLOADS -> MusicDownloadsContent(viewModel, onOpenPlayer = onOpenPlayer)
             }
         }
@@ -247,6 +253,157 @@ private fun MusicChip(
 }
 
 @Composable
+private fun TopArtistHeader(
+    artists: List<MusicArtist>,
+    onOpenArtist: (MusicArtist) -> Unit,
+) {
+    if (artists.isEmpty()) return
+    val pagerState = rememberPagerState(pageCount = { artists.size })
+    LaunchedEffect(artists.size) {
+        if (artists.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(4_500L)
+            if (!pagerState.isScrollInProgress) {
+                pagerState.animateScrollToPage((pagerState.currentPage + 1) % artists.size)
+            }
+        }
+    }
+    Card(
+        onClick = { onOpenArtist(artists[pagerState.currentPage]) },
+        modifier = Modifier.fillMaxWidth().height(300.dp),
+        shape = CardDefaults.shape(RoundedCornerShape(NuvioTheme.radii.lg)),
+        colors = CardDefaults.colors(
+            containerColor = NuvioTheme.colors.BackgroundElevated,
+            focusedContainerColor = NuvioTheme.colors.BackgroundElevated,
+        ),
+        scale = CardDefaults.scale(focusedScale = 1.01f),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            HorizontalPager(
+                state = pagerState,
+                userScrollEnabled = false,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                val artist = artists[page]
+                Box(Modifier.fillMaxSize()) {
+                    AsyncImage(
+                        model = artist.pictureUrl,
+                        contentDescription = artist.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(
+                                0f to Color.Black.copy(alpha = 0.05f),
+                                0.45f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.92f),
+                            ),
+                        ),
+                    )
+                    Column(
+                        Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(24.dp),
+                    ) {
+                        Text(
+                            "TOP 25 ARTISTS",
+                            color = NuvioTheme.colors.TextPrimary,
+                            style = NuvioTheme.textStyles.metadata,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            artist.name,
+                            color = NuvioTheme.colors.TextPrimary,
+                            style = NuvioTheme.textStyles.headline,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Open artist",
+                            color = NuvioTheme.colors.TextSecondary,
+                            style = NuvioTheme.textStyles.metadata,
+                        )
+                    }
+                }
+            }
+            Text(
+                "${pagerState.currentPage + 1} / ${artists.size}",
+                color = NuvioTheme.colors.TextPrimary,
+                style = NuvioTheme.textStyles.metadata,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(14.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MusicPlaylistsContent(
+    home: MusicHomeData,
+    viewModel: MusicViewModel,
+    onOpenDestination: (MusicDestination) -> Unit,
+) {
+    val playlists by viewModel.library.playlists.collectAsStateWithLifecycle()
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(bottom = 44.dp),
+    ) {
+        item("your-playlists-header") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Your playlists",
+                    color = NuvioTheme.colors.TextPrimary,
+                    style = NuvioTheme.textStyles.sectionTitle,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(onClick = { viewModel.library.createPlaylist("My Playlist ${playlists.size + 1}") }) {
+                    Text("New playlist")
+                }
+            }
+        }
+        if (playlists.isEmpty()) {
+            item("empty") {
+                Text(
+                    "No playlists yet. Create one, then add songs from the player or a track card.",
+                    color = NuvioTheme.colors.TextSecondary,
+                    style = NuvioTheme.textStyles.body,
+                )
+            }
+        } else {
+            item("your-playlists") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    items(playlists, key = { it.id }) { playlist ->
+                        MusicCard(
+                            title = playlist.title,
+                            subtitle = "${playlist.tracks.size} songs",
+                            imageUrl = playlist.tracks.firstOrNull()?.thumbnail,
+                            wide = false,
+                            onClick = { onOpenDestination(MusicDestination.LocalPlaylist(playlist.id)) },
+                        )
+                    }
+                }
+            }
+        }
+        if (home.playlists.isNotEmpty()) {
+            item("deezer-playlists") {
+                MusicSection("Deezer playlists") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(home.playlists, key = { "deezer-${it.id}" }) { playlist ->
+                            MusicPlaylistCard(playlist) { onOpenDestination(MusicDestination.Playlist(playlist.id)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MusicHome(
     home: MusicHomeData,
     viewModel: MusicViewModel,
@@ -258,12 +415,22 @@ private fun MusicHome(
         verticalArrangement = Arrangement.spacedBy(24.dp),
         contentPadding = PaddingValues(bottom = 48.dp),
     ) {
-        val featured = home.trending.firstOrNull()
-        if (featured != null) {
-            item("hero") {
-                MusicHero(featured, queue = home.trending) {
-                    viewModel.play(featured, home.trending)
-                    onOpenPlayer()
+        if (home.artists.isNotEmpty()) {
+            item("top-artists") {
+                TopArtistHeader(
+                    artists = home.artists.take(25),
+                    onOpenArtist = { onOpenDestination(MusicDestination.Artist(it.id)) },
+                )
+            }
+        }
+        if (home.genres.isNotEmpty()) {
+            item("genres") {
+                MusicSection("Browse by genre") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(home.genres, key = { it.id }) { genre ->
+                            MusicGenreCard(genre) { onOpenDestination(MusicDestination.Genre(genre)) }
+                        }
+                    }
                 }
             }
         }
@@ -323,17 +490,6 @@ private fun MusicHome(
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(home.playlists, key = { it.id }) { playlist ->
                             MusicPlaylistCard(playlist) { onOpenDestination(MusicDestination.Playlist(playlist.id)) }
-                        }
-                    }
-                }
-            }
-        }
-        if (home.genres.isNotEmpty()) {
-            item("genres") {
-                MusicSection("Browse by genre") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(home.genres, key = { it.id }) { genre ->
-                            MusicGenreCard(genre) { onOpenDestination(MusicDestination.Genre(genre)) }
                         }
                     }
                 }
