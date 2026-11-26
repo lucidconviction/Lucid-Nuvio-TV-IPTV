@@ -105,6 +105,7 @@ fun SideMenuSettingsContent(initialFocusRequester: FocusRequester? = null) {
         SideMenuPages.LIBRARY -> PageRow("Library", "Your saved movies and shows", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.YOUTUBE -> PageRow("YouTube", "Subscriptions, history, playlists, live and search", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.MUSIC -> PageRow("Music", "Songs, artists, albums, videos, playlists and downloads", id !in hidden) { setHidden(id, id !in hidden) }
+        SideMenuPages.CLOUDSTREAM -> PageRow("CloudStream", "Browse extension catalogues, search providers and play their streams", id !in hidden) { setHidden(id, id !in hidden) }
         SideMenuPages.DISCOVER -> PageRow(
             "Discover", "Browse by genre, network and more", discover != DiscoverLocation.OFF,
             value = when (discover) { DiscoverLocation.IN_SIDEBAR -> "In the menu"; DiscoverLocation.IN_SEARCH -> "Inside Search"; DiscoverLocation.OFF -> "Off" }
@@ -160,6 +161,7 @@ fun SideMenuSettingsContent(initialFocusRequester: FocusRequester? = null) {
         if (SideMenuPages.LIBRARY !in hidden) add("LIBRARY" to "Library")
         if (SideMenuPages.YOUTUBE !in hidden) add("YOUTUBE" to "YouTube")
         if (SideMenuPages.MUSIC !in hidden) add("MUSIC" to "Music")
+        if (SideMenuPages.CLOUDSTREAM !in hidden) add("CLOUDSTREAM" to "CloudStream")
         if (SideMenuPages.SEARCH !in hidden) add("SEARCH" to "Search")
     }
     val startLabel = if (startRoute == null) "Home" else startChoices.firstOrNull { it.first == s.openOn }?.second ?: "Home"

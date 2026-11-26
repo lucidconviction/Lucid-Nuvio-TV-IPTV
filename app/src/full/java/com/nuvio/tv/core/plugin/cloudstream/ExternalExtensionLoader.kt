@@ -429,6 +429,11 @@ class ExternalExtensionLoader @Inject constructor(
         }
     }
 
+    /** All providers in a package, in registration order. */
+    fun getApis(scraperId: String): List<MainAPI> {
+        return apisCache[scraperId] ?: loadExtension(scraperId)
+    }
+
     /**
      * Return the settings callback registered by the extension, if it has one.
      * Uses the same plugin instance that registered the providers and attached its resources.

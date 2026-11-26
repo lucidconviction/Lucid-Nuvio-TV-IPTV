@@ -141,6 +141,7 @@ sealed class Screen(val route: String) {
     data object Search : Screen("search")
     data object Discover : Screen("discover")
     data object Library : Screen("library")
+    data object CloudStream : Screen("cloudstream")
     data object Music : Screen("music")
     data object MusicPlayer : Screen("music/player")
     data object MultiView : Screen("multiview")

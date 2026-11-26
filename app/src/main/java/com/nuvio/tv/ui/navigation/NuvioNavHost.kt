@@ -1417,6 +1417,29 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.CloudStream.route) {
+            com.nuvio.tv.ui.screens.cloudstream.CloudStreamScreen(
+                onBack = { navController.popBackStack() },
+                onPlay = { playback ->
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            streamUrl = playback.url,
+                            title = playback.title,
+                            streamName = playback.providerName,
+                            headers = playback.headers,
+                            contentType = playback.contentType,
+                            contentName = playback.title,
+                            poster = playback.poster,
+                            season = playback.season,
+                            episode = playback.episode,
+                            episodeTitle = playback.title,
+                            addonName = playback.providerName,
+                        )
+                    )
+                },
+            )
+        }
+
         composable(Screen.Music.route) {
             com.nuvio.tv.ui.screens.music.MusicScreen(
                 onOpenPlayer = { navController.navigate(Screen.MusicPlayer.route) },
