@@ -154,15 +154,16 @@ fun MusicScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
+            LazyRow(
                 modifier = Modifier.weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                MusicTab.entries.forEachIndexed { index, entry ->
+                items(MusicTab.entries, key = { it.name }) { entry ->
                     MusicChip(
                         label = entry.label,
                         selected = tab == entry,
-                        focusRequester = if (index == 0) firstTabFocus else null,
+                        focusRequester = if (entry == MusicTab.HOME) firstTabFocus else null,
                         onClick = { tab = entry },
                     )
                 }
