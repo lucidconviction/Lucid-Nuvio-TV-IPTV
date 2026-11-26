@@ -2,9 +2,12 @@ package com.nuvio.tv.ui.screens.browser
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -41,15 +44,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tab
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -91,41 +97,72 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.ui.components.nuvioFocusRing
+import com.nuvio.tv.ui.screens.webapps.TvMarketApp
+import com.nuvio.tv.ui.screens.webapps.TvSavedSite
+import com.nuvio.tv.ui.screens.webapps.TvWebAppsStore
+import com.nuvio.tv.ui.screens.webapps.TvWebMarket
 import com.nuvio.tv.ui.theme.NuvioTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import org.json.JSONObject
 import org.json.JSONTokener
+import java.io.ByteArrayInputStream
+import java.net.URI
 import kotlin.math.roundToInt
 
 private const val START_URL = "https://www.google.com"
 private const val POINTER_STEP = 30f
 private const val LONG_PRESS_MS = 600L
+private const val SHIELD_LOG = "TvBrowserShield"
 
-private data class BrowserMarketApp(val name: String, val url: String)
+private const val TV_USER_AGENT =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-private fun loadMarketApps(context: android.content.Context): List<BrowserMarketApp> =
-    runCatching {
-        val text = context.assets.open("webapp_market_seed.json").bufferedReader().use { it.readText() }
-        val apps = JSONObject(text).optJSONArray("apps") ?: JSONArray()
-        buildList {
-            for (i in 0 until apps.length()) {
-                val app = apps.optJSONObject(i) ?: continue
-                if (app.optBoolean("adult", false)) continue
-                val name = app.optString("name").trim()
-                val url = app.optString("url").trim()
-                if (name.isNotBlank() && url.isNotBlank()) add(BrowserMarketApp(name, url))
-            }
-        }.distinctBy { it.url }
-    }.getOrDefault(emptyList())
+private val MEDIA_URL_RE = Regex(
+    "\\.(m3u8|mp4|webm|mpd)(\\?|#|$)",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun isMediaUrl(url: String): Boolean =
+    !url.startsWith("blob:") && !url.startsWith("data:") && MEDIA_URL_RE.containsMatchIn(url)
+
+private fun emptyResourceResponse(): WebResourceResponse =
+    WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+
+private fun blockedNoContentResponse(): WebResourceResponse =
+    WebResourceResponse(
+        "text/plain",
+        "utf-8",
+        204,
+        "No Content",
+        emptyMap(),
+        ByteArrayInputStream(ByteArray(0)),
+    )
 
 private data class BrowserTab(
     val id: Long,
     var url: String,
     var title: String = "New tab",
 )
+
+private data class BrowserMedia(
+    val url: String,
+    val headers: Map<String, String>,
+    val label: String,
+)
+
+private data class RedirectPrompt(val url: String, val host: String)
+
+/** Values read by the WebView's background request thread. */
+private class BrowserSessionState {
+    @Volatile var pageUrl: String = START_URL
+    @Volatile var lastUserActionAt: Long = 0L
+    @Volatile var pendingUserUrl: String? = null
+}
 
 /**
  * TV-first WebView: D-pad moves an on-page cursor, OK clicks, long-press opens the browser
@@ -136,7 +173,7 @@ private data class BrowserTab(
 @Composable
 fun TvBrowserScreen(
     onBack: () -> Unit,
-    onPlayInPlayer: (url: String, title: String) -> Unit,
+    onPlayInPlayer: (url: String, title: String, headers: Map<String, String>) -> Unit,
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
@@ -144,33 +181,57 @@ fun TvBrowserScreen(
     val tokens = NuvioTheme.colors
     val accent = tokens.FocusRing
     val accentHex = "#%06X".format(0xFFFFFF and accent.toArgb())
-    val tabs = remember { mutableStateListOf(BrowserTab(id = 1L, url = START_URL)) }
+    val initialUrl = remember { BrowserLaunch.take() ?: START_URL }
+    val tabs = remember { mutableStateListOf(BrowserTab(id = 1L, url = initialUrl)) }
     var activeTab by remember { mutableIntStateOf(0) }
     var webView by remember { mutableStateOf<WebView?>(null) }
-    var address by remember { mutableStateOf(START_URL) }
-    var pageUrl by remember { mutableStateOf(START_URL) }
+    var address by remember { mutableStateOf(initialUrl) }
+    var pageUrl by remember { mutableStateOf(initialUrl) }
     var pageTitle by remember { mutableStateOf("Browser") }
     var pointer by remember { mutableStateOf(Offset(520f, 360f)) }
     var menuOpen by remember { mutableStateOf(false) }
     var addressOpen by remember { mutableStateOf(false) }
     var tabsOpen by remember { mutableStateOf(false) }
     var mediaOpen by remember { mutableStateOf(false) }
-    var mediaUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mediaItems by remember { mutableStateOf<List<BrowserMedia>>(emptyList()) }
     var bookmarksOpen by remember { mutableStateOf(false) }
     var marketOpen by remember { mutableStateOf(false) }
-    var marketApps by remember { mutableStateOf<List<BrowserMarketApp>>(emptyList()) }
-    val prefs = remember { context.getSharedPreferences("tv_browser", android.content.Context.MODE_PRIVATE) }
+    var marketApps by remember { mutableStateOf<List<TvMarketApp>>(emptyList()) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var browserSettings by remember { mutableStateOf(TvBrowserSettingsStore.load(context)) }
+    var redirectPrompt by remember { mutableStateOf<RedirectPrompt?>(null) }
+    var blockedCount by remember { mutableIntStateOf(0) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var updatingLists by remember { mutableStateOf(false) }
+    val sessionState = remember { BrowserSessionState() }
+    val liveSettings = remember { java.util.concurrent.atomic.AtomicReference(browserSettings) }
+    val detectedMedia = remember {
+        java.util.Collections.synchronizedMap(LinkedHashMap<String, Map<String, String>>())
+    }
+    val allowedRedirects = remember {
+        java.util.Collections.synchronizedSet(TvBrowserSettingsStore.allowedRedirectHosts(context))
+    }
+    val blockedRedirects = remember {
+        java.util.Collections.synchronizedSet(TvBrowserSettingsStore.blockedRedirectHosts(context))
+    }
     val bookmarks = remember {
         mutableStateListOf<String>().apply {
-            val saved = prefs.getStringSet("bookmarks", null)
-            addAll(
-                saved ?: setOf(
-                    "https://www.google.com",
-                    "https://www.youtube.com",
-                    "https://en.wikipedia.org",
-                ),
-            )
+            addAll(TvWebAppsStore.loadOrSeed(context).map { it.url })
         }
+    }
+
+    fun persistBookmarks() {
+        val existing = TvWebAppsStore.load(context).associateBy { it.url }
+        TvWebAppsStore.save(
+            context,
+            bookmarks.map { url ->
+                existing[url] ?: TvSavedSite(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = TvWebShield.hostOf(url) ?: url,
+                    url = url,
+                )
+            },
+        )
     }
     var longPressFired by remember { mutableStateOf(false) }
     var longPressJob by remember { mutableStateOf<Job?>(null) }
@@ -178,8 +239,10 @@ fun TvBrowserScreen(
     val addressFocus = remember { FocusRequester() }
     val menuFocus = remember { FocusRequester() }
     val tabsFocus = remember { FocusRequester() }
+    val settingsFocus = remember { FocusRequester() }
 
-    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen || bookmarksOpen || marketOpen
+    val overlayOpen = menuOpen || addressOpen || tabsOpen || mediaOpen || bookmarksOpen ||
+        marketOpen || settingsOpen || redirectPrompt != null
 
     fun refreshTab() {
         tabs.getOrNull(activeTab)?.let {
@@ -204,6 +267,12 @@ fun TvBrowserScreen(
         )
     }
 
+    fun injectCosmeticFilter(view: WebView? = webView) {
+        val target = view ?: return
+        if (!liveSettings.get().cosmeticFiltering) return
+        target.evaluateJavascript(TvWebShield.cosmeticJavaScript, null)
+    }
+
     fun highlightAtPointer(view: WebView? = webView) {
         val target = view ?: return
         val x = pointer.x.roundToInt()
@@ -225,6 +294,7 @@ fun TvBrowserScreen(
         val view = webView ?: return
         val x = pointer.x.roundToInt()
         val y = pointer.y.roundToInt()
+        sessionState.lastUserActionAt = SystemClock.uptimeMillis()
         view.evaluateJavascript(
             """
             (function(){
@@ -232,6 +302,10 @@ fun TvBrowserScreen(
               if(!e) return;
               try { e.focus(); } catch(err) {}
               try { e.click(); } catch(err) {}
+              try {
+                var v = e.tagName === 'VIDEO' ? e : (e.closest ? e.closest('video') : null);
+                if (v) { v.setAttribute('playsinline',''); if (v.paused) v.play(); }
+              } catch(err) {}
             })()
             """.trimIndent(),
             null,
@@ -239,15 +313,54 @@ fun TvBrowserScreen(
         scope.launch { delay(160); runCatching { rootFocus.requestFocus() } }
     }
 
-    fun loadAddress() {
-        val view = webView ?: return
-        val raw = address.trim()
-        if (raw.isBlank()) return
-        val url = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
-        tabs.getOrNull(activeTab)?.url = url
+    fun mediaHeaders(
+        url: String,
+        referer: String = sessionState.pageUrl,
+        captured: Map<String, String> = emptyMap(),
+    ): Map<String, String> {
+        val headers = LinkedHashMap<String, String>()
+        captured.forEach { (key, value) -> if (value.isNotBlank()) headers[key] = value }
+        val keys = headers.keys.map { it.lowercase() }.toSet()
+        fun put(key: String, value: String?) {
+            if (!value.isNullOrBlank() && key.lowercase() !in keys) headers[key] = value
+        }
+        put("Referer", referer.takeIf { it.startsWith("http") })
+        put(
+            "Origin",
+            runCatching {
+                val u = URI(referer)
+                "${u.scheme}://${u.host}"
+            }.getOrNull(),
+        )
+        put("User-Agent", TV_USER_AGENT)
+        put("Cookie", runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull())
+        return headers
+    }
+
+    fun rememberDetectedMedia(url: String, headers: Map<String, String>) {
+        if (!isMediaUrl(url)) return
+        synchronized(detectedMedia) {
+            if (!detectedMedia.containsKey(url)) detectedMedia[url] = headers
+        }
+    }
+
+    fun userLoad(rawUrl: String) {
+        val url = when {
+            rawUrl.isBlank() -> return
+            rawUrl == "about:blank" -> rawUrl
+            rawUrl.startsWith("http://") || rawUrl.startsWith("https://") -> rawUrl
+            else -> "https://$rawUrl"
+        }
+        sessionState.lastUserActionAt = SystemClock.uptimeMillis()
+        sessionState.pendingUserUrl = url
         address = url
+        webView?.loadUrl(url)
+    }
+
+    fun loadAddress() {
+        if (address.isBlank()) return
         addressOpen = false
-        view.loadUrl(url)
+        userLoad(address.trim())
         scope.launch { delay(150); rootFocus.requestFocus() }
     }
 
@@ -255,7 +368,7 @@ fun TvBrowserScreen(
         if (index !in tabs.indices) return
         activeTab = index
         address = tabs[index].url
-        webView?.loadUrl(tabs[index].url)
+        userLoad(tabs[index].url)
         tabsOpen = false
         scope.launch { delay(120); rootFocus.requestFocus() }
     }
@@ -265,6 +378,7 @@ fun TvBrowserScreen(
         tabs.add(newTab)
         activeTab = tabs.lastIndex
         address = ""
+        webView?.loadUrl("about:blank")
         addressOpen = true
         tabsOpen = false
     }
@@ -274,11 +388,62 @@ fun TvBrowserScreen(
         tabs.removeAt(index)
         activeTab = activeTab.coerceAtMost(tabs.lastIndex)
         address = tabs[activeTab].url
-        webView?.loadUrl(tabs[activeTab].url)
+        userLoad(tabs[activeTab].url)
+    }
+
+    fun allowRedirect(prompt: RedirectPrompt, always: Boolean) {
+        if (always) {
+            allowedRedirects.add(prompt.host)
+            blockedRedirects.remove(prompt.host)
+            TvBrowserSettingsStore.setAllowedRedirectHosts(context, allowedRedirects)
+            TvBrowserSettingsStore.setBlockedRedirectHosts(context, blockedRedirects)
+        }
+        sessionState.pendingUserUrl = prompt.url
+        sessionState.lastUserActionAt = SystemClock.uptimeMillis()
+        redirectPrompt = null
+        webView?.loadUrl(prompt.url)
+    }
+
+    fun blockRedirectHost(host: String) {
+        blockedRedirects.add(host)
+        allowedRedirects.remove(host)
+        TvBrowserSettingsStore.setBlockedRedirectHosts(context, blockedRedirects)
+        TvBrowserSettingsStore.setAllowedRedirectHosts(context, allowedRedirects)
+        redirectPrompt = null
+        notice = "Redirects to $host are blocked"
+    }
+
+    fun finishMediaScan(domUrls: List<String>) {
+        val merged = LinkedHashMap<String, BrowserMedia>()
+        synchronized(detectedMedia) {
+            detectedMedia.forEach { (url, captured) ->
+                if (isMediaUrl(url)) {
+                    merged[url] = BrowserMedia(
+                        url = url,
+                        headers = mediaHeaders(url, captured = captured),
+                        label = TvWebShield.hostOf(url) ?: "Detected video",
+                    )
+                }
+            }
+        }
+        domUrls.filter(::isMediaUrl).forEach { url ->
+            if (!merged.containsKey(url)) {
+                merged[url] = BrowserMedia(
+                    url = url,
+                    headers = mediaHeaders(url),
+                    label = TvWebShield.hostOf(url) ?: "Video",
+                )
+            }
+        }
+        mediaItems = merged.values.toList()
+        mediaOpen = true
     }
 
     fun scanMedia() {
-        val view = webView ?: return
+        val view = webView ?: run {
+            finishMediaScan(emptyList())
+            return
+        }
         view.evaluateJavascript(
             """
             (function(){
@@ -287,26 +452,102 @@ fun TvBrowserScreen(
                 var u=e.currentSrc||e.src||e.getAttribute('src'); if(u) out.push(u);
               });
               document.querySelectorAll('a[href]').forEach(function(a){
-                var h=a.href; if(/\.(m3u8|mp4|webm)(\?|$)/i.test(h)) out.push(h);
+                var h=a.href; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(h)) out.push(h);
               });
+              try{
+                performance.getEntriesByType('resource').forEach(function(e){
+                  var u=e.name; if(/\.(m3u8|mp4|webm|mpd)(\?|#|$)/i.test(u)) out.push(u);
+                });
+              }catch(err){}
               return JSON.stringify(Array.from(new Set(out)));
             })()
             """.trimIndent(),
             ValueCallback { value ->
                 val raw = runCatching {
                     (JSONTokener(value).nextValue() as? String) ?: value
-                }.getOrNull() ?: return@ValueCallback
+                }.getOrNull() ?: ""
                 val array = runCatching { JSONArray(raw) }.getOrNull()
-                mediaUrls = buildList {
+                val urls = buildList {
                     if (array != null) {
                         for (i in 0 until array.length()) {
                             array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
                         }
                     }
                 }
-                mediaOpen = true
+                finishMediaScan(urls)
             },
         )
+    }
+
+    /**
+     * The shared redirect decision for BrowserClient's shouldOverrideUrlLoading and
+     * shouldInterceptRequest. Returning true cancels the navigation before the target loads.
+     */
+    fun shouldBlockRedirect(url: String, hasGesture: Boolean): Boolean {
+        if (url == "about:blank") return false
+        if (TvWebShield.isCloudflareInfra(url)) return false
+        if (isMediaUrl(url)) return false
+        val host = TvWebShield.hostOf(url) ?: return false
+        val currentHost = TvWebShield.hostOf(sessionState.pageUrl)
+        val config = liveSettings.get()
+        android.util.Log.d(
+            SHIELD_LOG,
+            "check url=$url host=$host current=$currentHost policy=${config.redirectPolicy} " +
+                "gesture=$hasGesture pending=${sessionState.pendingUserUrl} " +
+                "ageMs=${SystemClock.uptimeMillis() - sessionState.lastUserActionAt}",
+        )
+        if (host in blockedRedirects) {
+            android.util.Log.d(SHIELD_LOG, "block host rule $host")
+            webView?.post { notice = "Blocked redirect to $host" }
+            return true
+        }
+        val pending = sessionState.pendingUserUrl
+        if (pending != null && pending == url) {
+            sessionState.pendingUserUrl = null
+            android.util.Log.d(SHIELD_LOG, "allow pending $url")
+            return false
+        }
+        if (host in allowedRedirects || TvWebShield.isAlwaysAllowedRedirect(host)) {
+            android.util.Log.d(SHIELD_LOG, "allow host rule $host")
+            return false
+        }
+        if (currentHost != null && TvWebShield.sameSite(host, currentHost)) {
+            android.util.Log.d(SHIELD_LOG, "allow same-site $host / $currentHost")
+            return false
+        }
+        if (SystemClock.uptimeMillis() - sessionState.lastUserActionAt <= 2_500L) {
+            android.util.Log.d(SHIELD_LOG, "allow recent gesture window $url")
+            return false
+        }
+        if (hasGesture) {
+            android.util.Log.d(SHIELD_LOG, "allow gesture flag $url")
+            return false
+        }
+        if (config.redirectPolicy == TvRedirectPolicy.Allow) {
+            android.util.Log.d(SHIELD_LOG, "allow policy $url")
+            return false
+        }
+        if (TvWebShield.isAdNavigation(url, currentHost)) {
+            android.util.Log.d(SHIELD_LOG, "block ad navigation $url")
+            webView?.post {
+                blockedCount += 1
+                notice = "Shield blocked an ad redirect to $host"
+            }
+            return true
+        }
+        when (config.redirectPolicy) {
+            TvRedirectPolicy.AlwaysBlock -> {
+                android.util.Log.d(SHIELD_LOG, "block always $url")
+                webView?.post { notice = "Blocked redirect to $host" }
+                return true
+            }
+            TvRedirectPolicy.Ask -> {
+                android.util.Log.d(SHIELD_LOG, "ask prompt $url")
+                webView?.post { redirectPrompt = RedirectPrompt(url, host) }
+                return true
+            }
+            TvRedirectPolicy.Allow -> return false
+        }
     }
 
     fun openMenu() {
@@ -321,6 +562,8 @@ fun TvBrowserScreen(
         mediaOpen = false
         bookmarksOpen = false
         marketOpen = false
+        settingsOpen = false
+        redirectPrompt = null
         scope.launch { delay(100); runCatching { rootFocus.requestFocus() } }
     }
 
@@ -331,8 +574,11 @@ fun TvBrowserScreen(
             mediaOpen -> { mediaOpen = false; closeOverlays() }
             bookmarksOpen -> { bookmarksOpen = false; closeOverlays() }
             marketOpen -> { marketOpen = false; closeOverlays() }
+            settingsOpen -> { settingsOpen = false; closeOverlays() }
+            redirectPrompt != null -> { redirectPrompt = null; closeOverlays() }
             menuOpen -> { menuOpen = false; closeOverlays() }
             webView?.canGoBack() == true -> {
+                sessionState.lastUserActionAt = SystemClock.uptimeMillis()
                 webView?.goBack()
                 scope.launch { delay(250); rootFocus.requestFocus() }
             }
@@ -341,8 +587,24 @@ fun TvBrowserScreen(
     }
 
     LaunchedEffect(Unit) {
+        liveSettings.set(browserSettings)
+        TvWebShield.load(context)
         delay(120)
         runCatching { rootFocus.requestFocus() }
+    }
+
+    LaunchedEffect(browserSettings) {
+        liveSettings.set(browserSettings)
+        TvBrowserSettingsStore.save(context, browserSettings)
+        webView?.settings?.javaScriptCanOpenWindowsAutomatically = !browserSettings.popupProtection
+        if (browserSettings.cosmeticFiltering) injectCosmeticFilter()
+    }
+
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(3_500)
+            notice = null
+        }
     }
 
     BoxWithConstraints(
@@ -401,25 +663,87 @@ fun TvBrowserScreen(
                     settings.databaseEnabled = true
                     settings.loadsImagesAutomatically = true
                     settings.mediaPlaybackRequiresUserGesture = false
+                    settings.javaScriptCanOpenWindowsAutomatically = false
+                    settings.setSupportMultipleWindows(false)
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                    settings.userAgentString =
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    settings.userAgentString = TV_USER_AGENT
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                        ): WebResourceResponse? {
+                            val req = request ?: return null
+                            val url = req.url.toString()
+                            if (isMediaUrl(url) && !TvWebShield.isBlocked(url, includeExtra = true)) {
+                                val captured = LinkedHashMap<String, String>()
+                                req.requestHeaders?.forEach { (key, value) ->
+                                    if (key.equals("User-Agent", true) || key.equals("Referer", true) ||
+                                        key.equals("Origin", true) || key.equals("Cookie", true)
+                                    ) {
+                                        captured[key] = value
+                                    }
+                                }
+                                rememberDetectedMedia(url, mediaHeaders(url, captured = captured))
+                            }
+                            if (req.isForMainFrame) {
+                                return if (shouldBlockRedirect(url, req.hasGesture())) {
+                                    blockedNoContentResponse()
+                                } else {
+                                    null
+                                }
+                            }
+                            val config = liveSettings.get()
+                            if (!config.adBlockEnabled) return null
+                            val pageHost = TvWebShield.hostOf(pageUrl)
+                            val host = req.url.host?.lowercase()
+                            if (host != null && TvWebShield.isAlwaysAllowedHost(host)) return null
+                            val type = TvWebShield.requestType(req)
+                            val sameParty = host != null && pageHost != null &&
+                                TvWebShield.sameSite(host, pageHost)
+                            val blocked = runCatching {
+                                (!sameParty && TvWebShield.isBlocked(url, includeExtra = true)) ||
+                                    TvWebShield.matchesPatternUrl(url, pageHost, type)
+                            }.getOrDefault(false)
+                            if (blocked) {
+                                view?.post { blockedCount += 1 }
+                                return emptyResourceResponse()
+                            }
+                            return null
+                        }
+
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                            url?.let { pageUrl = it; address = it; refreshTab() }
+                            url?.let {
+                                sessionState.pageUrl = it
+                                pageUrl = it
+                                address = it
+                                refreshTab()
+                            }
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            url?.let { pageUrl = it; address = it; refreshTab() }
-                            view?.let { injectFocusCss(it) }
+                            url?.let {
+                                sessionState.pageUrl = it
+                                pageUrl = it
+                                address = it
+                                refreshTab()
+                            }
+                            view?.let {
+                                injectFocusCss(it)
+                                injectCosmeticFilter(it)
+                            }
                             scope.launch { delay(120); runCatching { rootFocus.requestFocus() } }
                         }
 
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?,
-                        ): Boolean = false
+                        ): Boolean {
+                            val req = request ?: return false
+                            if (!req.isForMainFrame) return false
+                            return shouldBlockRedirect(req.url.toString(), req.hasGesture())
+                        }
                     }
                     webChromeClient = object : WebChromeClient() {
                         override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -428,8 +752,29 @@ fun TvBrowserScreen(
                                 refreshTab()
                             }
                         }
+
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: android.os.Message?,
+                        ): Boolean = false
+
+                        override fun onJsAlert(
+                            view: WebView?,
+                            url: String?,
+                            message: String?,
+                            result: android.webkit.JsResult?,
+                        ): Boolean {
+                            // Page-load alerts are a common popup-ad tactic; accept them silently.
+                            if (SystemClock.uptimeMillis() - sessionState.lastUserActionAt > 2_500L) {
+                                result?.confirm()
+                                return true
+                            }
+                            return false
+                        }
                     }
-                    loadUrl(START_URL)
+                    loadUrl(initialUrl)
                     webView = this
                 }
             },
@@ -474,10 +819,27 @@ fun TvBrowserScreen(
                 modifier = Modifier.widthIn(max = 380.dp),
             )
             Text(
-                "Hold OK for menu",
+                if (browserSettings.adBlockEnabled && blockedCount > 0) {
+                    "Shield $blockedCount"
+                } else {
+                    "Hold OK for menu"
+                },
                 color = tokens.TextTertiary,
                 fontSize = 10.sp,
             )
+        }
+
+        notice?.let { message ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
+            ) {
+                Text(message, color = tokens.TextPrimary, fontSize = 12.sp)
+            }
         }
 
         if (!overlayOpen) {
@@ -498,14 +860,17 @@ fun TvBrowserScreen(
                 focusRequester = menuFocus,
                 onDismiss = { closeOverlays() },
                 onBackNavigation = {
+                    sessionState.lastUserActionAt = SystemClock.uptimeMillis()
                     webView?.goBack()
                     closeOverlays()
                 },
                 onForward = {
+                    sessionState.lastUserActionAt = SystemClock.uptimeMillis()
                     webView?.goForward()
                     closeOverlays()
                 },
                 onReload = {
+                    sessionState.lastUserActionAt = SystemClock.uptimeMillis()
                     webView?.reload()
                     closeOverlays()
                 },
@@ -522,16 +887,20 @@ fun TvBrowserScreen(
                 onMarket = {
                     menuOpen = false
                     marketOpen = true
-                    if (marketApps.isEmpty()) marketApps = loadMarketApps(context)
+                    if (marketApps.isEmpty()) marketApps = TvWebMarket.load(context)
                 },
                 onHome = {
                     menuOpen = false
-                    webView?.loadUrl(START_URL)
-                    address = START_URL
+                    userLoad(START_URL)
                     closeOverlays()
                 },
                 onAddress = { menuOpen = false; addressOpen = true },
                 onPlayInPlayer = { menuOpen = false; scanMedia() },
+                onShield = {
+                    menuOpen = false
+                    settingsOpen = true
+                    scope.launch { delay(100); runCatching { settingsFocus.requestFocus() } }
+                },
             )
         }
 
@@ -559,23 +928,64 @@ fun TvBrowserScreen(
 
         if (mediaOpen) {
             MediaOverlay(
-                urls = mediaUrls,
-                onPlay = { url ->
+                media = mediaItems,
+                onPlay = { media ->
                     mediaOpen = false
-                    onPlayInPlayer(url, pageTitle.ifBlank { "Web video" })
+                    // Do not leave the page's own player running under Nuvio's player.
+                    webView?.evaluateJavascript(
+                        "(function(){document.querySelectorAll('video,audio').forEach(function(v){try{v.pause();}catch(e){}});})()",
+                        null,
+                    )
+                    onPlayInPlayer(
+                        media.url,
+                        pageTitle.ifBlank { "Web video" },
+                        media.headers,
+                    )
                 },
                 onDismiss = { mediaOpen = false; closeOverlays() },
+            )
+        }
+
+        if (settingsOpen) {
+            ShieldSettingsOverlay(
+                settings = browserSettings,
+                blockedCount = blockedCount,
+                updating = updatingLists,
+                focusRequester = settingsFocus,
+                onToggleAdBlock = { browserSettings = browserSettings.copy(adBlockEnabled = it) },
+                onToggleCosmetic = { browserSettings = browserSettings.copy(cosmeticFiltering = it) },
+                onTogglePopup = { browserSettings = browserSettings.copy(popupProtection = it) },
+                onPolicy = { browserSettings = browserSettings.copy(redirectPolicy = it) },
+                onUpdateLists = {
+                    if (!updatingLists) {
+                        updatingLists = true
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { TvWebShield.update(context) } }
+                            updatingLists = false
+                            notice = "Shield lists updated (${TvWebShield.ruleCount} rules)"
+                        }
+                    }
+                },
+                onDismiss = { settingsOpen = false; closeOverlays() },
             )
         }
 
         if (marketOpen) {
             BrowserMarketOverlay(
                 apps = marketApps,
+                savedUrls = bookmarks.toSet(),
                 onOpen = { url ->
                     marketOpen = false
-                    address = url
-                    webView?.loadUrl(url)
+                    userLoad(url)
                     closeOverlays()
+                },
+                onToggleSaved = { url ->
+                    if (url in bookmarks) {
+                        bookmarks.remove(url)
+                    } else if (url.isNotBlank()) {
+                        bookmarks.add(url)
+                    }
+                    persistBookmarks()
                 },
                 onDismiss = { marketOpen = false; closeOverlays() },
             )
@@ -586,24 +996,35 @@ fun TvBrowserScreen(
                 bookmarks = bookmarks,
                 onOpen = { url ->
                     bookmarksOpen = false
-                    address = url
-                    webView?.loadUrl(url)
+                    userLoad(url)
                     closeOverlays()
                 },
                 onAddCurrent = {
                     val url = pageUrl
                     if (url.isNotBlank() && url !in bookmarks) {
                         bookmarks.add(url)
-                        prefs.edit().putStringSet("bookmarks", bookmarks.toSet()).apply()
+                        persistBookmarks()
+                        notice = "Saved to Web-Apps"
                     }
                 },
                 onRemove = { url ->
                     bookmarks.remove(url)
-                    prefs.edit().putStringSet("bookmarks", bookmarks.toSet()).apply()
+                    persistBookmarks()
                 },
                 onDismiss = { bookmarksOpen = false; closeOverlays() },
             )
         }
+
+        redirectPrompt?.let { prompt ->
+            RedirectPromptOverlay(
+                prompt = prompt,
+                onAllowOnce = { allowRedirect(prompt, always = false) },
+                onAlwaysAllow = { allowRedirect(prompt, always = true) },
+                onBlockHost = { blockRedirectHost(prompt.host) },
+                onDismiss = { redirectPrompt = null; closeOverlays() },
+            )
+        }
+
     }
 }
 
@@ -622,6 +1043,7 @@ private fun BrowserMenu(
     onBookmarks: () -> Unit,
     onHome: () -> Unit,
     onMarket: () -> Unit,
+    onShield: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)), contentAlignment = Alignment.Center) {
@@ -655,11 +1077,21 @@ private fun BrowserMenu(
                     BrowserMenuButton("Bookmarks", Icons.Default.Language, Modifier.weight(1f), onBookmarks)
                     BrowserMenuButton("Market", Icons.Default.Add, Modifier.weight(1f), onMarket)
                 }
+                BrowserMenuButton(
+                    "Shield & browser settings",
+                    Icons.Default.Settings,
+                    Modifier.fillMaxWidth(),
+                    onShield,
+                )
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth().nuvioFocusRing(RoundedCornerShape(12.dp))) {
                     Text("Close menu")
                 }
             }
         }
+    }
+    LaunchedEffect(Unit) {
+        delay(100)
+        runCatching { focusRequester.requestFocus() }
     }
 }
 
@@ -698,6 +1130,7 @@ private fun AddressOverlay(
     val tokens = NuvioTheme.colors
     var query by remember(value) { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
+    val goFocus = remember { FocusRequester() }
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
@@ -722,6 +1155,14 @@ private fun AddressOverlay(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged { focused = it.isFocused }
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                                runCatching { goFocus.requestFocus() }
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         .clip(RoundedCornerShape(12.dp))
                         .background(tokens.BackgroundCard)
                         .then(if (focused) Modifier.border(2.dp, tokens.FocusRing, RoundedCornerShape(12.dp)) else Modifier)
@@ -732,7 +1173,10 @@ private fun AddressOverlay(
                     },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = onGo, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                    Button(
+                        onClick = onGo,
+                        modifier = Modifier.focusRequester(goFocus).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                    ) {
                         Text("Go")
                     }
                     Button(onClick = onDismiss, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
@@ -831,47 +1275,68 @@ private fun TabsOverlay(
 
 @Composable
 private fun MediaOverlay(
-    urls: List<String>,
-    onPlay: (String) -> Unit,
+    media: List<BrowserMedia>,
+    onPlay: (BrowserMedia) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
+    val first = remember { FocusRequester() }
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
-                .widthIn(max = 900.dp)
-                .height(600.dp)
+                .widthIn(max = 960.dp)
+                .height(620.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(tokens.BackgroundElevated)
                 .padding(20.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Play in player", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
-                Text("Detected media on this page", color = tokens.TextSecondary, fontSize = 12.sp)
-                if (urls.isEmpty()) {
+                Text("Play in Nuvio", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Detected videos and playlists from this page. Choosing one opens the normal Nuvio player with the page Referer and cookies.",
+                    color = tokens.TextSecondary,
+                    fontSize = 12.sp,
+                )
+                if (media.isEmpty()) {
                     Text(
-                        "No video or playlist link was found on this page. Start the video once in the browser, then open this menu again.",
+                        "No video or playlist link was found. Start the video once in the browser, then open Play in Nuvio again.",
                         color = tokens.TextSecondary,
                     )
                 } else {
                     LazyColumn(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(urls, key = { it }) { url ->
+                        items(media, key = { it.url }) { item ->
                             Button(
-                                onClick = { onPlay(url) },
-                                modifier = Modifier.fillMaxWidth().nuvioFocusRing(RoundedCornerShape(12.dp)),
+                                onClick = { onPlay(item) },
+                                modifier = Modifier.fillMaxWidth()
+                                    .then(if (item == media.first()) Modifier.focusRequester(first) else Modifier)
+                                    .nuvioFocusRing(RoundedCornerShape(12.dp)),
                                 colors = ButtonDefaults.colors(
                                     containerColor = tokens.BackgroundCard,
                                     contentColor = tokens.TextPrimary,
                                     focusedContainerColor = tokens.FocusBackground,
                                     focusedContentColor = tokens.TextPrimary,
                                 ),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                             ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(url, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        item.label,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        item.url,
+                                        fontSize = 10.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -882,8 +1347,222 @@ private fun MediaOverlay(
             }
         }
     }
+    LaunchedEffect(Unit) {
+        delay(100)
+        runCatching { first.requestFocus() }
+    }
 }
 
+@Composable
+private fun ShieldSettingsOverlay(
+    settings: TvBrowserSettings,
+    blockedCount: Int,
+    updating: Boolean,
+    focusRequester: FocusRequester,
+    onToggleAdBlock: (Boolean) -> Unit,
+    onToggleCosmetic: (Boolean) -> Unit,
+    onTogglePopup: (Boolean) -> Unit,
+    onPolicy: (TvRedirectPolicy) -> Unit,
+    onUpdateLists: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    val rules = TvWebShield.ruleCount
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 820.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(tokens.BackgroundElevated)
+                .padding(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("Shield & browser settings", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "${if (settings.adBlockEnabled) "Ad blocking on" else "Ad blocking off"} · $rules rules · $blockedCount requests blocked this session",
+                    color = tokens.TextSecondary,
+                    fontSize = 12.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShieldToggle(
+                        label = "uBlock / AdGuard-style ad blocking",
+                        value = settings.adBlockEnabled,
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                    ) { onToggleAdBlock(!settings.adBlockEnabled) }
+                    ShieldToggle(
+                        label = "Hide ad placeholders",
+                        value = settings.cosmeticFiltering,
+                        modifier = Modifier.weight(1f),
+                    ) { onToggleCosmetic(!settings.cosmeticFiltering) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShieldToggle(
+                        label = "Ask before cross-site popups",
+                        value = settings.popupProtection,
+                        modifier = Modifier.weight(1f),
+                    ) { onTogglePopup(!settings.popupProtection) }
+                    Button(
+                        onClick = onUpdateLists,
+                        enabled = !updating,
+                        modifier = Modifier.weight(1f).height(50.dp).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                        colors = ButtonDefaults.colors(
+                            containerColor = tokens.BackgroundCard,
+                            contentColor = tokens.TextPrimary,
+                            focusedContainerColor = tokens.FocusBackground,
+                            focusedContentColor = tokens.TextPrimary,
+                        ),
+                    ) {
+                        Text(
+                            if (updating) "Updating filter lists…" else "Update filter lists",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text("Automatic page & app redirects", color = tokens.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PolicyButton(
+                        label = "Always block",
+                        selected = settings.redirectPolicy == TvRedirectPolicy.AlwaysBlock,
+                        modifier = Modifier.weight(1f),
+                    ) { onPolicy(TvRedirectPolicy.AlwaysBlock) }
+                    PolicyButton(
+                        label = "Ask",
+                        selected = settings.redirectPolicy == TvRedirectPolicy.Ask,
+                        modifier = Modifier.weight(1f),
+                    ) { onPolicy(TvRedirectPolicy.Ask) }
+                    PolicyButton(
+                        label = "Allow",
+                        selected = settings.redirectPolicy == TvRedirectPolicy.Allow,
+                        modifier = Modifier.weight(1f),
+                    ) { onPolicy(TvRedirectPolicy.Allow) }
+                }
+                Text(
+                    "Automatic cross-site redirects are cancelled before the target page loads. Ask offers once, always and block choices; same-site hops, logins and Cloudflare challenges stay allowed.",
+                    color = tokens.TextSecondary,
+                    fontSize = 11.sp,
+                )
+                Button(onClick = onDismiss, modifier = Modifier.nuvioFocusRing(RoundedCornerShape(12.dp))) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(100)
+        runCatching { focusRequester.requestFocus() }
+    }
+}
+
+@Composable
+private fun ShieldToggle(
+    label: String,
+    value: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(50.dp).nuvioFocusRing(RoundedCornerShape(12.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = if (value) tokens.FocusBackground else tokens.BackgroundCard,
+            contentColor = tokens.TextPrimary,
+            focusedContainerColor = tokens.FocusBackground,
+            focusedContentColor = tokens.TextPrimary,
+        ),
+    ) {
+        Text(
+            "$label: ${if (value) "ON" else "OFF"}",
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun PolicyButton(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(46.dp).nuvioFocusRing(RoundedCornerShape(12.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) tokens.TextPrimary else tokens.BackgroundCard,
+            contentColor = if (selected) tokens.TextInverse else tokens.TextPrimary,
+            focusedContainerColor = tokens.FocusBackground,
+            focusedContentColor = tokens.TextPrimary,
+        ),
+    ) {
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun RedirectPromptOverlay(
+    prompt: RedirectPrompt,
+    onAllowOnce: () -> Unit,
+    onAlwaysAllow: () -> Unit,
+    onBlockHost: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = NuvioTheme.colors
+    val first = remember { FocusRequester() }
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 820.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(tokens.BackgroundElevated)
+                .padding(22.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Redirect blocked", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "This page tried to open another site automatically.",
+                    color = tokens.TextSecondary,
+                )
+                Text(prompt.host, color = tokens.TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text(
+                    prompt.url,
+                    color = tokens.TextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onAllowOnce,
+                        modifier = Modifier.weight(1f).focusRequester(first).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                    ) { Text("Open once", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Button(
+                        onClick = onAlwaysAllow,
+                        modifier = Modifier.weight(1f).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                    ) { Text("Always allow ${prompt.host}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onBlockHost,
+                        modifier = Modifier.weight(1f).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                    ) { Text("Always block ${prompt.host}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                    ) { Text("Stay here") }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(100)
+        runCatching { first.requestFocus() }
+    }
+}
 
 @Composable
 private fun BookmarksOverlay(
@@ -954,8 +1633,10 @@ private fun BookmarksOverlay(
 
 @Composable
 private fun BrowserMarketOverlay(
-    apps: List<BrowserMarketApp>,
+    apps: List<TvMarketApp>,
+    savedUrls: Set<String>,
     onOpen: (String) -> Unit,
+    onToggleSaved: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val tokens = NuvioTheme.colors
@@ -971,35 +1652,56 @@ private fun BrowserMarketOverlay(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Web app market", color = tokens.TextPrimary, style = MaterialTheme.typography.headlineSmall)
-                Text("Safe-for-work picks from the mobile market", color = tokens.TextSecondary, fontSize = 12.sp)
+                Text(
+                    "Safe-for-work picks from the mobile market. Bookmark one to add it to Web-Apps.",
+                    color = tokens.TextSecondary,
+                    fontSize = 12.sp,
+                )
                 if (apps.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         androidx.compose.material3.CircularProgressIndicator(color = tokens.TextPrimary)
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 220.dp),
+                        columns = GridCells.Adaptive(minSize = 240.dp),
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(bottom = 12.dp),
                     ) {
                         gridItems(apps, key = { it.url }) { app ->
-                            Button(
-                                onClick = { onOpen(app.url) },
-                                modifier = Modifier.fillMaxWidth().height(76.dp)
-                                    .then(if (app.url == apps.firstOrNull()?.url) Modifier.focusRequester(first) else Modifier)
-                                    .nuvioFocusRing(RoundedCornerShape(12.dp)),
-                                colors = ButtonDefaults.colors(
-                                    containerColor = tokens.BackgroundCard,
-                                    contentColor = tokens.TextPrimary,
-                                    focusedContainerColor = tokens.FocusBackground,
-                                    focusedContentColor = tokens.TextPrimary,
-                                ),
+                            val saved = app.url in savedUrls
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                                    Text(app.url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp)
+                                Button(
+                                    onClick = { onOpen(app.url) },
+                                    modifier = Modifier.weight(1f).height(76.dp)
+                                        .then(if (app == apps.first()) Modifier.focusRequester(first) else Modifier)
+                                        .nuvioFocusRing(RoundedCornerShape(12.dp)),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = tokens.BackgroundCard,
+                                        contentColor = tokens.TextPrimary,
+                                        focusedContainerColor = tokens.FocusBackground,
+                                        focusedContentColor = tokens.TextPrimary,
+                                    ),
+                                ) {
+                                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                                        Text(TvWebMarket.hostOf(app.url), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp)
+                                    }
+                                }
+                                Button(
+                                    onClick = { onToggleSaved(app.url) },
+                                    modifier = Modifier.height(76.dp).nuvioFocusRing(RoundedCornerShape(12.dp)),
+                                ) {
+                                    Icon(
+                                        if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                        contentDescription = if (saved) "Remove ${app.name} from Web-Apps" else "Save ${app.name}",
+                                        modifier = Modifier.size(20.dp),
+                                    )
                                 }
                             }
                         }

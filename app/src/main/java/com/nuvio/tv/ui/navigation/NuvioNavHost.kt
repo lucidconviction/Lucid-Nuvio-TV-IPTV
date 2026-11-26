@@ -1417,15 +1417,26 @@ private fun PlaybackNavHost(
             )
         }
 
+        composable(Screen.WebApps.route) {
+            com.nuvio.tv.ui.screens.webapps.WebAppsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenBrowser = { url ->
+                    com.nuvio.tv.ui.screens.browser.BrowserLaunch.request(url)
+                    navController.navigate(Screen.Browser.route)
+                },
+            )
+        }
+
         composable(Screen.Browser.route) {
             com.nuvio.tv.ui.screens.browser.TvBrowserScreen(
                 onBack = { navController.popBackStack() },
-                onPlayInPlayer = { url, title ->
+                onPlayInPlayer = { url, title, headers ->
                     navController.navigate(
                         Screen.Player.createRoute(
                             streamUrl = url,
                             title = title,
                             streamName = "Web video",
+                            headers = headers,
                             contentType = "video",
                             contentName = title,
                             autoPlayNav = true,
