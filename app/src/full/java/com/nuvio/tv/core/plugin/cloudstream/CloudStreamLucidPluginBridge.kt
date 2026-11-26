@@ -20,7 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val CATALOG_TIMEOUT_MS = 45_000L
+private const val CATALOG_TIMEOUT_MS = 25_000L
 private const val LINKS_TIMEOUT_MS = 60_000L
 
 /**

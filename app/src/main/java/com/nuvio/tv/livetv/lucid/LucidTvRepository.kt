@@ -282,7 +282,7 @@ class LucidTvRepository @Inject constructor(
         val scraperId = spec.pluginScraperId ?: return emptyList()
         val items = buildList {
             for (page in 1..3) {
-                val pageItems = withTimeoutOrNull(25_000L) {
+                val pageItems = withTimeoutOrNull(60_000L) {
                     pluginBridge.latest(scraperId, page)
                 }.orEmpty()
                 if (pageItems.isEmpty()) break
