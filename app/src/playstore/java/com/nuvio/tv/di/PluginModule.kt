@@ -1,6 +1,8 @@
 package com.nuvio.tv.di
 
 import com.nuvio.tv.core.plugin.PluginManager
+import com.nuvio.tv.livetv.lucid.LucidPluginBridge
+import com.nuvio.tv.livetv.lucid.NoOpLucidPluginBridge
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,4 +17,8 @@ object PluginModule {
     fun providePluginManager(): PluginManager {
         return PluginManager()
     }
+
+    @Provides
+    @Singleton
+    fun provideLucidPluginBridge(): LucidPluginBridge = NoOpLucidPluginBridge
 }

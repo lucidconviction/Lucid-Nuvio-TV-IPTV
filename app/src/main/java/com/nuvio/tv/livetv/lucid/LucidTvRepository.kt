@@ -68,6 +68,7 @@ class LucidTvRepository @Inject constructor(
     private val metaRepository: MetaRepository,
     private val liveTvRepository: LiveTvRepository,
     private val prefs: LiveTvPreferences,
+    private val pluginBridge: LucidPluginBridge,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -192,7 +193,24 @@ class LucidTvRepository @Inject constructor(
             spec.addonBaseUrl?.let { base -> catalogSourceKey(base, spec.catalogId.orEmpty(), spec.contentType) }
         }.toSet()
         val discovered = discover(input.addons, customCatalogSources, input.autoSeries)
-        val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() }
+        val pluginChannels = runCatching {
+            withTimeoutOrNull(12_000L) { pluginBridge.extensions() }.orEmpty()
+        }.getOrDefault(emptyList()).map { extension ->
+            LucidChannelSpec(
+                id = "plugin-${extension.id}",
+                name = extension.name,
+                catalogName = "CloudStream",
+                addonName = "CloudStream",
+                addonBaseUrl = "",
+                addonId = extension.id,
+                kind = LucidChannelKind.PLUGIN_ROTATE,
+                group = "CloudStream",
+                pluginScraperId = extension.id,
+                pluginScraperName = extension.name,
+                auto = true,
+            )
+        }
+        val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() } + pluginChannels
         specs = allSpecs
         Log.d(TAG, "load: ${allSpecs.size} channel(s), ${allSpecs.count { it.auto }} automatic, autoSeries=${input.autoSeries}")
         val liveIds = allSpecs.mapTo(HashSet()) { it.id }
@@ -233,6 +251,7 @@ class LucidTvRepository @Inject constructor(
                                 LucidChannelKind.RELAY_LOOP -> buildRelayPool(spec, input.liveChannels)
                                 LucidChannelKind.MANUAL_LOOP -> buildManualPool(spec)
                                 LucidChannelKind.ADDON_LIVE -> buildManualPool(spec)
+                                LucidChannelKind.PLUGIN_ROTATE -> loadPluginPool(spec)
                             }
                         }.onFailure {
                             Log.w(TAG, "pool load failed for ${spec.name} (${spec.kind})", it)
@@ -255,9 +274,59 @@ class LucidTvRepository @Inject constructor(
             .associate { it.channelKey to emptyPoolMessage(it) }
     }
 
+    /**
+     * A CloudStream extension channel: its latest pages, flattened into a movie pool. Series
+     * and live items are skipped for now; they need an episode/relay resolver of their own.
+     */
+    private suspend fun loadPluginPool(spec: LucidChannelSpec): List<LucidItem> {
+        val scraperId = spec.pluginScraperId ?: return emptyList()
+        val items = buildList {
+            for (page in 1..3) {
+                val pageItems = withTimeoutOrNull(25_000L) {
+                    pluginBridge.latest(scraperId, page)
+                }.orEmpty()
+                if (pageItems.isEmpty()) break
+                addAll(pageItems)
+                if (pageItems.size < 20) break
+            }
+        }
+        return items
+            .filter { it.type == "movie" }
+            .distinctBy { it.url }
+            .take(60)
+            .map { item ->
+                LucidItem(
+                    id = "plugin:$scraperId:${item.url}",
+                    streamId = item.url,
+                    type = "movie",
+                    title = item.name,
+                    poster = item.poster,
+                    backdrop = null,
+                    description = null,
+                    year = item.year,
+                    runtimeMs = item.runtimeMs?.takeIf { it > 0L } ?: DEFAULT_PLUGIN_RUNTIME_MS,
+                    addonId = scraperId,
+                    addonName = spec.pluginScraperName ?: spec.name,
+                    addonBaseUrl = "",
+                    pluginScraperId = scraperId,
+                    pluginUrl = item.url,
+                )
+            }
+    }
+
+    /** Resolve one CloudStream item when its Lucid slot is tuned. */
+    suspend fun resolvePluginLinks(item: LucidItem): List<LucidPluginLink> {
+        val scraperId = item.pluginScraperId ?: return emptyList()
+        val url = item.pluginUrl ?: return emptyList()
+        return runCatching {
+            withTimeoutOrNull(65_000L) { pluginBridge.links(scraperId, url) }.orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
     private fun emptyPoolMessage(spec: LucidChannelSpec): String = when (spec.kind) {
         LucidChannelKind.RELAY_LOOP -> "No channels were found in this relay group."
         LucidChannelKind.ADDON_LIVE -> "This live addon channel is no longer available."
+        LucidChannelKind.PLUGIN_ROTATE -> "The CloudStream extension returned no playable movies."
         LucidChannelKind.MANUAL_LOOP -> "This channel has no items."
         LucidChannelKind.SERIES_LOOP -> "The series returned no episodes."
         LucidChannelKind.CATALOG_ROTATE, LucidChannelKind.CATALOG_LOOP -> when {
@@ -276,6 +345,7 @@ class LucidTvRepository @Inject constructor(
             "relay|${spec.relayGroupId}|${spec.relayKeys.joinToString(",")}"
         LucidChannelKind.ADDON_LIVE ->
             "live|${spec.manualItems.firstOrNull()?.id}|${spec.manualItems.firstOrNull()?.type}"
+        LucidChannelKind.PLUGIN_ROTATE -> "plugin|${spec.pluginScraperId}"
     }
 
     private fun restorePoolCache() {
@@ -890,6 +960,7 @@ class LucidTvRepository @Inject constructor(
         const val META_CONCURRENCY = 3
         const val META_TIMEOUT_MS = 12_000L
         const val UNPLAYABLE_TTL_MS = 60 * 60_000L
+        const val DEFAULT_PLUGIN_RUNTIME_MS = 90L * 60_000L
 
         private val HOURS = Regex("(\\d+)\\s*h", RegexOption.IGNORE_CASE)
         private val MINUTES = Regex("(\\d+)\\s*m", RegexOption.IGNORE_CASE)

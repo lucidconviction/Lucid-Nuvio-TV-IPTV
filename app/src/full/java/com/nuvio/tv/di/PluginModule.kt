@@ -5,8 +5,10 @@ import com.nuvio.tv.core.plugin.PluginManager
 import com.nuvio.tv.core.plugin.PluginRuntime
 import com.nuvio.tv.core.plugin.cloudstream.ExternalExtensionLoader
 import com.nuvio.tv.core.plugin.cloudstream.ExternalExtensionRunner
+import com.nuvio.tv.core.plugin.cloudstream.CloudStreamLucidPluginBridge
 import com.nuvio.tv.core.plugin.cloudstream.ExternalRepoParser
 import com.nuvio.tv.core.sync.PluginSyncService
+import com.nuvio.tv.livetv.lucid.LucidPluginBridge
 import com.nuvio.tv.data.local.PluginDataStore
 import dagger.Module
 import dagger.Provides
@@ -23,6 +25,10 @@ object PluginModule {
     fun providePluginRuntime(): PluginRuntime {
         return PluginRuntime()
     }
+
+    @Provides
+    @Singleton
+    fun provideLucidPluginBridge(bridge: CloudStreamLucidPluginBridge): LucidPluginBridge = bridge
 
     @Provides
     @Singleton

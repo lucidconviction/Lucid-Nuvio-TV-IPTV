@@ -32,6 +32,9 @@ data class LucidItem(
     /** Relays: the existing live channel this item tunes. */
     val streamUrl: String? = null,
     val headers: Map<String, String> = emptyMap(),
+    /** CloudStream extension items resolve through the full-flavor plugin bridge. */
+    val pluginScraperId: String? = null,
+    val pluginUrl: String? = null,
     @Transient val drm: DrmInfo? = null,
 )
 
@@ -49,6 +52,8 @@ enum class LucidChannelKind {
     ADDON_LIVE,
     /** A hand-picked list of films, 24/7. */
     MANUAL_LOOP,
+    /** An enabled CloudStream extension's latest feed, as a 24/7 queue. */
+    PLUGIN_ROTATE,
 }
 
 @Serializable
@@ -80,6 +85,9 @@ data class LucidChannelSpec(
     val relayKeys: List<String> = emptyList(),
     val relaySegmentMinutes: Int = 30,
     val manualItems: List<LucidStoredItem> = emptyList(),
+    /** CloudStream extension id/name for PLUGIN_ROTATE channels. */
+    val pluginScraperId: String? = null,
+    val pluginScraperName: String? = null,
     val auto: Boolean = true,
 ) {
     val channelKey: String get() = "virtual:$id"

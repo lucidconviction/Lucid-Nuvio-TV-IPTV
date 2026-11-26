@@ -990,6 +990,31 @@ class LiveTvPlaybackController @Inject constructor(
                         )
                         return@launch
                     }
+                    // A CloudStream extension item resolves its own provider link. There is no
+                    // addon id to search, so the extension host hands back the stream directly.
+                    if (!item.pluginScraperId.isNullOrBlank() && !item.pluginUrl.isNullOrBlank()) {
+                        val links = lucid.resolvePluginLinks(item)
+                        val playable = links.firstOrNull()
+                        if (playable != null) {
+                            lucid.clearError(channel.key)
+                            play(
+                                channel = channel.copy(headers = playable.headers),
+                                overrideUrl = playable.url,
+                                fallbacks = links.drop(1).map { it.url },
+                                virtualTune = tune,
+                            )
+                            return@launch
+                        }
+                        if (skipped < MAX_VIRTUAL_SKIPS && lucid.markUnplayable(channel.key, item.id)) {
+                            skipped++
+                            tuneAt = System.currentTimeMillis()
+                            continue
+                        }
+                        val message = "No playable source was found for ${item.title}."
+                        lucid.reportError(channel.key, message)
+                        _state.value = LivePlaybackState(channelKey = channel.key, error = message)
+                        return@launch
+                    }
                     // A catalog can surface a series as a single item. Without a season/episode
                     // no stream addon can answer, so skip it instead of asking with a half id.
                     if (item.type == "series" && (item.season == null || item.episode == null)) {

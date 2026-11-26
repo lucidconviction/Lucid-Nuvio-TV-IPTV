@@ -997,6 +997,7 @@ private fun kindLabel(kind: LucidChannelKind): String = when (kind) {
     LucidChannelKind.RELAY_LOOP -> "Live channel relay · 24/7"
     LucidChannelKind.ADDON_LIVE -> "Addon live channel"
     LucidChannelKind.MANUAL_LOOP -> "Movie collection · 24/7"
+    LucidChannelKind.PLUGIN_ROTATE -> "CloudStream extension · 24/7"
 }
 
 private fun orderLabel(order: LucidOrder): String = when (order) {
