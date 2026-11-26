@@ -311,6 +311,9 @@ open class MainActivity : ComponentActivity() {
     lateinit var themeDataStore: ThemeDataStore
 
     @Inject
+    lateinit var musicPlaybackController: com.nuvio.tv.music.MusicPlaybackController
+
+    @Inject
     lateinit var liveTvPreferences: com.nuvio.tv.livetv.data.LiveTvPreferences
 
     @Inject
@@ -1540,6 +1543,29 @@ open class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (::musicPlaybackController.isInitialized) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_HEADSETHOOK,
+                KeyEvent.KEYCODE_MEDIA_PLAY,
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    musicPlaybackController.toggle()
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    musicPlaybackController.next()
+                    return true
+                }
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    musicPlaybackController.previous()
+                    return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onResume() {

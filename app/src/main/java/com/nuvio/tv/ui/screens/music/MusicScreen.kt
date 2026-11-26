@@ -109,6 +109,7 @@ fun MusicScreen(
     viewModel: MusicViewModel = hiltViewModel(),
 ) {
     val home by viewModel.home.collectAsStateWithLifecycle()
+    val currentTrack by viewModel.player.current.collectAsStateWithLifecycle()
     val loading by viewModel.loadingHome.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     var tab by remember { mutableStateOf(MusicTab.HOME) }
@@ -153,6 +154,13 @@ fun MusicScreen(
                     style = NuvioTheme.textStyles.metadata,
                     color = NuvioTheme.colors.TextSecondary,
                 )
+            }
+            if (currentTrack != null) {
+                Button(onClick = onOpenPlayer) {
+                    Icon(Icons.Default.LibraryMusic, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Now playing")
+                }
             }
             MusicModeToggle(viewModel.player)
         }

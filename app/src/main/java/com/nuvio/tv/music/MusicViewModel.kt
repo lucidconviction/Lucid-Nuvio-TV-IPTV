@@ -15,6 +15,7 @@ class MusicViewModel @Inject constructor(
     val library: MusicLibraryRepository,
     val downloads: MusicDownloadsRepository,
     val player: MusicPlayerRepository,
+    val playback: MusicPlaybackController,
 ) : ViewModel() {
     private val _home = MutableStateFlow<MusicHomeData?>(null)
     val home: StateFlow<MusicHomeData?> = _home.asStateFlow()
@@ -38,12 +39,12 @@ class MusicViewModel @Inject constructor(
     }
 
     fun play(track: MusicTrack, queue: List<MusicTrack>) {
-        player.play(track, queue)
+        playback.play(track, queue)
     }
 
     fun playPlaylist(tracks: List<MusicTrack>, startIndex: Int = 0) {
         val track = tracks.getOrNull(startIndex) ?: tracks.firstOrNull() ?: return
-        player.play(track, tracks)
+        playback.play(track, tracks)
     }
 
     fun clearError() {

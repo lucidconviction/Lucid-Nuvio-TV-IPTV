@@ -108,19 +108,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
-private const val CROSSFADE_MS = 1200
-
-private class MusicPlayback(
-    val trackId: String,
-    val stream: MusicStream,
-    val player: ExoPlayer,
-) {
-    var alpha by mutableFloatStateOf(1f)
-}
-
 /**
- * The full-screen music player. Video uses a TextureView surface so two pictures can crossfade;
- * audio always crossfades, and the outgoing player is released after the overlap.
+ * The full-screen view over the app-wide music session. Leaving this screen does not stop
+ * playback; the TV mini player and this view share the same controller.
  */
 @Composable
 fun MusicPlayerScreen(
@@ -133,15 +123,9 @@ fun MusicPlayerScreen(
     val shuffle by viewModel.player.shuffle.collectAsStateWithLifecycle()
     val repeat by viewModel.player.repeat.collectAsStateWithLifecycle()
     val favorites by viewModel.library.favorites.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val playbackSession by viewModel.playback.session.collectAsStateWithLifecycle()
+    val playbacks = viewModel.playback.playbacks
     val pip = LocalPictureInPicture.current
-    val scope = rememberCoroutineScope()
-    val playbacks = remember { mutableStateListOf<MusicPlayback>() }
-    val active = playbacks.lastOrNull()
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var isPlaying by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     var showLyrics by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
@@ -150,7 +134,11 @@ fun MusicPlayerScreen(
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val lyricsState = rememberLazyListState()
-    val scopeRef = rememberCoroutineScope()
+
+    val positionMs = playbackSession.positionMs
+    val durationMs = playbackSession.durationMs
+    val isPlaying = playbackSession.playing
+    val error = playbackSession.error
 
     // Controls and overlays disappear after five seconds; any remote key brings them back.
     LaunchedEffect(Unit) {
@@ -175,101 +163,11 @@ fun MusicPlayerScreen(
         }
     }
 
-    val resolved by produceState<Pair<String, Result<MusicStream>>?>(null, current?.id) {
-        value = null
-        val track = current ?: return@produceState
-        value = track.id to viewModel.repository.resolve(track)
-    }
-
     LaunchedEffect(current?.id) {
         if (current == null) onBack()
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            playbacks.forEach { runCatching { it.player.release() } }
-            playbacks.clear()
-        }
-    }
-
-    // Add the new track's player, then crossfade once it is ready.
-    LaunchedEffect(current?.id, resolved) {
-        val track = current ?: return@LaunchedEffect
-        val resolution = resolved ?: return@LaunchedEffect
-        if (resolution.first != track.id) return@LaunchedEffect
-        val stream = resolution.second.getOrNull() ?: return@LaunchedEffect
-        if (playbacks.any { it.trackId == track.id }) return@LaunchedEffect
-        val player = com.nuvio.tv.music.MusicPlaybackFactory.create(context, stream, audioOnly)
-        val playback = MusicPlayback(track.id, stream, player)
-        playback.alpha = if (playbacks.isEmpty()) 1f else 0f
-        player.volume = if (playbacks.isEmpty()) 1f else 0f
-        playbacks.add(playback)
-        error = null
-        player.addListener(object : Player.Listener {
-            override fun onPlayerError(playerError: androidx.media3.common.PlaybackException) {
-                if (playbacks.lastOrNull() === playback) {
-                    error = playerError.message ?: "Couldn't play this track."
-                }
-            }
-        })
-        player.prepare()
-        player.play()
-        val outgoing = playbacks.filter { it !== playback }
-        if (outgoing.isNotEmpty()) {
-            // Let the new stream buffer before touching the old one.
-            withTimeoutOrNull(6_000L) {
-                while (playback.player.playbackState != Player.STATE_READY &&
-                    playback.player.playbackState != Player.STATE_ENDED
-                ) {
-                    delay(60)
-                }
-            }
-            coroutineScope {
-                launch {
-                    animate(0f, 1f, animationSpec = tween(CROSSFADE_MS, easing = LinearEasing)) { value, _ ->
-                        playback.alpha = value
-                    }
-                }
-                launch { rampVolume(playback.player, 0f, 1f, CROSSFADE_MS) }
-                outgoing.forEach { old ->
-                    launch {
-                        animate(old.alpha, 0f, animationSpec = tween(CROSSFADE_MS, easing = LinearEasing)) { value, _ ->
-                            old.alpha = value
-                        }
-                    }
-                    launch { rampVolume(old.player, old.player.volume, 0f, CROSSFADE_MS) }
-                }
-            }
-            delay(CROSSFADE_MS.toLong() + 100L)
-            outgoing.forEach { old ->
-                runCatching { old.player.release() }
-                playbacks.remove(old)
-            }
-        }
-    }
-
-    // Keep the position, duration and play state in sync with the newest player.
-    LaunchedEffect(active) {
-        val player = active?.player ?: return@LaunchedEffect
-        while (true) {
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            durationMs = player.duration.coerceAtLeast(0L)
-            isPlaying = player.isPlaying
-            if (player.playbackState == Player.STATE_ENDED) {
-                when (repeat) {
-                    MusicRepeatMode.ONE -> {
-                        player.seekTo(0L)
-                        player.play()
-                    }
-                    else -> viewModel.player.advanceOnEnd()
-                }
-            }
-            delay(400L)
-        }
-    }
-
     BackHandler {
-        viewModel.player.close()
         onBack()
     }
 
@@ -298,15 +196,15 @@ fun MusicPlayerScreen(
                 controlsTick++
                 when (event.key) {
                     Key.MediaPlayPause -> {
-                        active?.player?.let { if (it.isPlaying) it.pause() else it.play() }
+                        viewModel.playback.toggle()
                         true
                     }
                     Key.MediaNext -> {
-                        viewModel.player.next()
+                        viewModel.playback.next()
                         true
                     }
                     Key.MediaPrevious -> {
-                        viewModel.player.previous()
+                        viewModel.playback.previous()
                         true
                     }
                     else -> false
@@ -363,10 +261,7 @@ fun MusicPlayerScreen(
                     modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp))
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
-                Button(onClick = {
-                    viewModel.player.close()
-                    onBack()
-                }) {
+                Button(onClick = onBack) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Back")
@@ -388,7 +283,7 @@ fun MusicPlayerScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Button(onClick = { viewModel.player.setAudioOnly(!audioOnly) }) {
+                Button(onClick = { viewModel.playback.setAudioOnly(!audioOnly) }) {
                     Text(if (audioOnly) "Audio" else "Video")
                 }
                 Button(onClick = { pip.enter() }) {
@@ -418,14 +313,14 @@ fun MusicPlayerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     MusicPlayerButton(Icons.Default.Shuffle, "Shuffle", active = shuffle) { viewModel.player.toggleShuffle() }
-                    MusicPlayerButton(Icons.Default.SkipPrevious, "Previous") { viewModel.player.previous() }
+                    MusicPlayerButton(Icons.Default.SkipPrevious, "Previous") { viewModel.playback.previous() }
                     MusicPlayerButton(
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         if (isPlaying) "Pause" else "Play",
                         big = true,
                         modifier = Modifier.focusRequester(playFocus),
-                    ) { active?.player?.let { if (it.isPlaying) it.pause() else it.play() } }
-                    MusicPlayerButton(Icons.Default.SkipNext, "Next") { viewModel.player.next() }
+                    ) { viewModel.playback.toggle() }
+                    MusicPlayerButton(Icons.Default.SkipNext, "Next") { viewModel.playback.next() }
                     MusicPlayerButton(
                         if (repeat == MusicRepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                         "Repeat",
@@ -657,13 +552,3 @@ private fun AddToPlaylistPanel(viewModel: MusicViewModel, track: MusicTrack, onD
     }
 }
 
-private suspend fun rampVolume(player: ExoPlayer, from: Float, to: Float, durationMs: Int) {
-    val steps = (durationMs / 40).coerceAtLeast(1)
-    val start = from.coerceIn(0f, 1f)
-    val end = to.coerceIn(0f, 1f)
-    for (step in 0..steps) {
-        val fraction = step.toFloat() / steps
-        player.volume = start + (end - start) * fraction
-        delay(40L)
-    }
-}
