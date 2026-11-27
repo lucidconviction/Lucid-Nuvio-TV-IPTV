@@ -5,11 +5,15 @@ import android.net.Uri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultAllocator
 import java.io.File
 
 /** Builds the ExoPlayer used by the Music player and the YouTube video screens. */
@@ -17,8 +21,42 @@ object MusicPlaybackFactory {
     private const val DEFAULT_USER_AGENT =
         "Mozilla/5.0 (Linux; Android 12; TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
-    fun create(context: Context, stream: MusicStream, audioOnly: Boolean): ExoPlayer {
-        val player = ExoPlayer.Builder(context).build()
+    fun create(
+        context: Context,
+        stream: MusicStream,
+        audioOnly: Boolean,
+        capVideoForTv: Boolean = false,
+    ): ExoPlayer {
+        // Music videos should not chase 4K/AV1 on weak TV decoders. H.264 1080p is the
+        // most compatible shape for Amlogic and similar boxes, and the bigger read buffer
+        // absorbs the bursts from YouTube's CDN. Other video screens keep their own cap.
+        val lowRamDevice = com.nuvio.tv.ui.screens.player.NuvioExoPlayerPerformanceHelper
+            .getDevicePhysicalRamGb(context) <= 2.3
+        val trackSelector = DefaultTrackSelector(context).apply {
+            val parameters = buildUponParameters()
+                .setMaxAudioBitrate(256_000)
+                .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                .setAllowVideoNonSeamlessAdaptiveness(true)
+            if (capVideoForTv || lowRamDevice) {
+                parameters
+                    .setMaxVideoSize(1_920, 1_080)
+                    .setMaxVideoBitrate(8_000_000)
+                    .setMaxVideoFrameRate(60)
+                    .setPreferredVideoMimeTypes(MimeTypes.VIDEO_H264)
+                    .setExceedRendererCapabilitiesIfNecessary(false)
+            }
+            setParameters(parameters)
+        }
+        val loadControl = DefaultLoadControl.Builder()
+            .setAllocator(DefaultAllocator(true, 256 * 1024))
+            .setBufferDurationsMs(20_000, 60_000, 3_000, 8_000)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        val player = ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
+            .setWakeMode(C.WAKE_MODE_NETWORK)
+            .build()
         val attrs = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(if (audioOnly) C.AUDIO_CONTENT_TYPE_MUSIC else C.AUDIO_CONTENT_TYPE_MOVIE)

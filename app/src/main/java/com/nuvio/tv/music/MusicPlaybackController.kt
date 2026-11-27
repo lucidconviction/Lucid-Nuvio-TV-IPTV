@@ -169,7 +169,24 @@ class MusicPlaybackController @Inject constructor(
                 )
                 return@launch
             }
-            val player = MusicPlaybackFactory.create(context, stream, playerRepo.audioOnly.value)
+            val videoMode = !playerRepo.audioOnly.value
+            if (videoMode) {
+                // Video crossfade needs two hardware decoders at once. Several TV SoCs
+                // (notably Amlogic) abort inside the vendor codec when that happens, so a
+                // video change releases the old player before the new one is created.
+                playbacks.toList().forEach { old ->
+                    runCatching { old.player.clearVideoSurface() }
+                    runCatching { old.player.stop() }
+                    runCatching { old.player.release() }
+                }
+                playbacks.clear()
+            }
+            val player = MusicPlaybackFactory.create(
+                context = context,
+                stream = stream,
+                audioOnly = playerRepo.audioOnly.value,
+                capVideoForTv = !playerRepo.audioOnly.value,
+            )
             val playback = MusicPlayback(track.id, player)
             val first = playbacks.isEmpty()
             playback.alpha = if (first) 1f else 0f
@@ -191,7 +208,7 @@ class MusicPlaybackController @Inject constructor(
             player.prepare()
             if (startPositionMs > 0L) player.seekTo(startPositionMs)
             player.play()
-            if (!first) {
+            if (!first && !videoMode) {
                 withTimeoutOrNull(6_000L) {
                     while (
                         player.playbackState != Player.STATE_READY &&

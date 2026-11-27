@@ -850,6 +850,19 @@ internal fun PlayerRuntimeController.initializePlayer(
                         )
                     )
                 }
+                // 2 GB TV boxes cannot sustain 4K/high-bitrate streams reliably. Keep
+                // the adaptive choice below that ceiling; the decoder and Wi-Fi queue
+                // stay far enough ahead to avoid constant rebuffering.
+                val ramGb = context?.let {
+                    NuvioExoPlayerPerformanceHelper.getDevicePhysicalRamGb(it)
+                } ?: 0.0
+                if (ramGb > 0.0 && ramGb <= 2.3) {
+                    setParameters(
+                        buildUponParameters()
+                            .setMaxVideoSize(1_920, 1_080)
+                            .setMaxVideoBitrate(12_000_000),
+                    )
+                }
             }
 
             // ── Extractors & DV Hook ──

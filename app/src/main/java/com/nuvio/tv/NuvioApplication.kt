@@ -2,6 +2,7 @@ package com.nuvio.tv
 
 import android.app.ActivityManager
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Build
 import android.os.StrictMode
@@ -100,6 +101,23 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
         LocaleCache.localeTag = tag ?: ""
     }
 
+    /**
+     * The TV boxes this app targets have 2 GB of RAM and a largeHeap. When the system
+     * reports pressure, drop the decoded-image cache before the low-memory killer takes
+     * the whole process (the browser is the usual trigger).
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            runCatching { SingletonImageLoader.get(this).memoryCache?.clear() }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        runCatching { SingletonImageLoader.get(this).memoryCache?.clear() }
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun newImageLoader(context: android.content.Context): ImageLoader {
         val imageOkHttpClient by lazy {
@@ -156,13 +174,14 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
                 val memoryInfo = ActivityManager.MemoryInfo()
                 activityManager.getMemoryInfo(memoryInfo)
                 val totalRamMb = memoryInfo.totalMem / (1024 * 1024)
-                // Low-RAM devices (≤2GB): use 0.15 — larger cache reduces GC pressure
-                // from rapid bitmap eviction during scrolling.
+                // Low-RAM devices (≤2GB): use 0.10. A bigger cache reduced GC churn
+                // but left too little headroom for WebView and the system low-memory
+                // killer on 2 GB TV boxes.
                 // Mid-range devices (≤3GB): use 0.20 for decent image caching.
                 // Normal devices (>3GB): use 0.25 for snappy image loading.
                 // - allowHardware(false) keeps bitmaps on heap instead of GPU memory
                 val cachePercent = when {
-                    totalRamMb <= 2048 -> 0.15
+                    totalRamMb <= 2048 -> 0.10
                     totalRamMb <= 3072 -> 0.20
                     else -> 0.25
                 }

@@ -64,7 +64,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -217,10 +216,11 @@ fun MusicPlayerScreen(
                 if (!audioOnly) {
                     LivePlayerSurface(
                         player = playback.player,
-                        useSurfaceView = false,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = playback.alpha },
+                        // SurfaceView avoids the extra GPU copy TextureView needs. Video
+                        // crossfade is disabled, so there is only ever one video surface
+                        // and no alpha compositing to lose.
+                        useSurfaceView = true,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
