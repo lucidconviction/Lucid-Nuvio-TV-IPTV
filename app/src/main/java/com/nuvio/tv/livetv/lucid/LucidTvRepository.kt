@@ -252,6 +252,7 @@ class LucidTvRepository @Inject constructor(
                                 LucidChannelKind.MANUAL_LOOP -> buildManualPool(spec)
                                 LucidChannelKind.ADDON_LIVE -> buildManualPool(spec)
                                 LucidChannelKind.PLUGIN_ROTATE -> loadPluginPool(spec)
+                                LucidChannelKind.PLUGIN_SERIES -> loadPluginSeriesPool(spec)
                             }
                         }.onFailure {
                             Log.w(TAG, "pool load failed for ${spec.name} (${spec.kind})", it)
@@ -337,10 +338,39 @@ class LucidTvRepository @Inject constructor(
         }.getOrDefault(emptyList())
     }
 
+    private suspend fun loadPluginSeriesPool(spec: LucidChannelSpec): List<LucidItem> {
+        val scraperId = spec.pluginScraperId ?: return emptyList()
+        val url = spec.pluginItemUrl ?: return emptyList()
+        val episodes = withTimeoutOrNull(75_000L) {
+            pluginBridge.episodes(scraperId, url)
+        }.orEmpty()
+        return episodes.map { episode ->
+            LucidItem(
+                id = "plugin:$scraperId:${episode.url}",
+                streamId = episode.url,
+                type = "series",
+                title = episode.name,
+                poster = episode.poster ?: spec.poster,
+                backdrop = null,
+                description = null,
+                year = null,
+                runtimeMs = episode.runtimeMs?.takeIf { it > 0L } ?: DEFAULT_PLUGIN_RUNTIME_MS,
+                addonId = scraperId,
+                addonName = spec.pluginScraperName ?: spec.name,
+                addonBaseUrl = "",
+                season = episode.season,
+                episode = episode.episode,
+                pluginScraperId = scraperId,
+                pluginUrl = episode.url,
+            )
+        }
+    }
+
     private fun emptyPoolMessage(spec: LucidChannelSpec): String = when (spec.kind) {
         LucidChannelKind.RELAY_LOOP -> "No channels were found in this relay group."
         LucidChannelKind.ADDON_LIVE -> "This live addon channel is no longer available."
         LucidChannelKind.PLUGIN_ROTATE -> "The CloudStream extension returned no playable movies."
+        LucidChannelKind.PLUGIN_SERIES -> "The CloudStream series returned no episodes."
         LucidChannelKind.MANUAL_LOOP -> "This channel has no items."
         LucidChannelKind.SERIES_LOOP -> "The series returned no episodes."
         LucidChannelKind.CATALOG_ROTATE, LucidChannelKind.CATALOG_LOOP -> when {
@@ -359,7 +389,8 @@ class LucidTvRepository @Inject constructor(
             "relay|${spec.relayGroupId}|${spec.relayKeys.joinToString(",")}"
         LucidChannelKind.ADDON_LIVE ->
             "live|${spec.manualItems.firstOrNull()?.id}|${spec.manualItems.firstOrNull()?.type}"
-        LucidChannelKind.PLUGIN_ROTATE -> "plugin|${spec.pluginScraperId}"
+        LucidChannelKind.PLUGIN_ROTATE -> "plugin|${spec.pluginScraperId}|${spec.pluginTabName.orEmpty()}"
+        LucidChannelKind.PLUGIN_SERIES -> "plugin-series|${spec.pluginScraperId}|${spec.pluginItemUrl}"
     }
 
     private fun restorePoolCache() {
@@ -501,6 +532,8 @@ class LucidTvRepository @Inject constructor(
         pluginTabApiName = pluginTabApiName,
         pluginTabName = pluginTabName,
         pluginTabLabel = pluginTabLabel,
+        pluginItemUrl = pluginItemUrl,
+        pluginItemTitle = pluginItemTitle,
         auto = false,
     )
 

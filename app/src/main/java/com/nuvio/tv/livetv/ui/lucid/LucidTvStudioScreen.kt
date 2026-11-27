@@ -39,6 +39,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -62,6 +63,7 @@ import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
+import com.nuvio.tv.livetv.lucid.LucidPluginItem
 import com.nuvio.tv.livetv.lucid.LucidPluginTab
 import com.nuvio.tv.livetv.lucid.LucidStoredSpec
 import com.nuvio.tv.livetv.model.EpgProgram
@@ -86,6 +88,7 @@ private enum class StudioMode {
     LIVE_ITEM,
     PLUGIN_EXTENSION,
     PLUGIN_CATALOG,
+    PLUGIN_SERIES_ITEM,
     RELAY_GROUP,
     EDIT,
 }
@@ -129,6 +132,9 @@ fun LucidTvStudioScreen(
     var pluginTabs by remember { mutableStateOf<List<LucidPluginTab>>(emptyList()) }
     var pluginTabsLoading by remember { mutableStateOf(false) }
     var pluginTabsError by remember { mutableStateOf<String?>(null) }
+    var pluginSeriesItems by remember { mutableStateOf<List<LucidPluginItem>>(emptyList()) }
+    var pluginSeriesLoading by remember { mutableStateOf(false) }
+    var pluginSeriesError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var shareOpen by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
@@ -151,7 +157,7 @@ fun LucidTvStudioScreen(
         mode, specs.size, addons.size, relayGroups.size, addonPick,
         seriesItems.size, seriesLoading, manualItems.size, manualLoading,
         liveItems.size, liveLoading, pluginExtensions.size, pluginLoading,
-        pluginPick, pluginTabs.size, pluginTabsLoading,
+        pluginPick, pluginTabs.size, pluginTabsLoading, pluginSeriesItems.size, pluginSeriesLoading,
     ) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
@@ -164,6 +170,7 @@ fun LucidTvStudioScreen(
             StudioMode.MANUAL_ITEM -> { mode = StudioMode.CATALOG_CATALOG; manualItems = emptyList(); manualSelected = emptySet() }
             StudioMode.LIVE_ITEM -> { mode = StudioMode.LIVE_CATALOG; liveItems = emptyList() }
             StudioMode.LIVE_CATALOG -> mode = StudioMode.LIVE_ADDON
+            StudioMode.PLUGIN_SERIES_ITEM -> mode = StudioMode.PLUGIN_CATALOG
             StudioMode.PLUGIN_CATALOG -> mode = StudioMode.PLUGIN_EXTENSION
             StudioMode.PLUGIN_EXTENSION -> mode = StudioMode.ADD_MENU
             StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> {
@@ -340,7 +347,34 @@ fun LucidTvStudioScreen(
                 firstFocus = firstFocus,
                 onPick = { tab ->
                     val extension = pluginPick ?: return@PluginCatalogList
-                    draft = viewModel.newPluginSpec(extension, tab)
+                    if (pendingKind == LucidChannelKind.PLUGIN_SERIES) {
+                        pluginSeriesItems = emptyList()
+                        pluginSeriesError = null
+                        pluginSeriesLoading = true
+                        mode = StudioMode.PLUGIN_SERIES_ITEM
+                        scope.launch {
+                            pluginSeriesItems = viewModel.pluginSeriesItems(extension.id, tab)
+                            pluginSeriesLoading = false
+                            if (pluginSeriesItems.isEmpty()) {
+                                pluginSeriesError = "No series were found in this catalog."
+                            }
+                        }
+                    } else {
+                        draft = viewModel.newPluginSpec(extension, tab)
+                        mode = StudioMode.EDIT
+                    }
+                },
+            )
+            StudioMode.PLUGIN_SERIES_ITEM -> PluginSeriesList(
+                extension = pluginPick,
+                tab = null,
+                items = pluginSeriesItems,
+                loading = pluginSeriesLoading,
+                error = pluginSeriesError,
+                firstFocus = firstFocus,
+                onPick = { item ->
+                    val extension = pluginPick ?: return@PluginSeriesList
+                    draft = viewModel.newPluginSeriesSpec(extension, null, item)
                     mode = StudioMode.EDIT
                 },
             )
@@ -576,6 +610,7 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
         Triple("Movie collection · 24/7", "Pick films from a catalog into a hand-made 24/7 marathon.", LucidChannelKind.MANUAL_LOOP to StudioMode.CATALOG_ADDON),
         Triple("Addon live channel", "One channel from an addon live, TV or sport catalog. Its stream is resolved when tuned.", LucidChannelKind.ADDON_LIVE to StudioMode.LIVE_ADDON),
         Triple("CloudStream extension · catalog 24/7", "Pick an enabled CloudStream extension, then one of its catalogs, as a continuous channel.", LucidChannelKind.PLUGIN_ROTATE to StudioMode.PLUGIN_EXTENSION),
+        Triple("CloudStream series · 24/7", "Pick an extension, a catalog and one series. Every episode plays in order.", LucidChannelKind.PLUGIN_SERIES to StudioMode.PLUGIN_EXTENSION),
         Triple("Live channel relay · 24/7", "Relay an existing IPTV group as a Lucid TV channel and switch at segment boundaries.", LucidChannelKind.RELAY_LOOP to StudioMode.RELAY_GROUP),
     )
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -706,6 +741,62 @@ private fun PluginCatalogList(
                         )
                     }
                     if (tab == null) Text("Default", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginSeriesList(
+    extension: LucidPluginExtension?,
+    tab: LucidPluginTab?,
+    items: List<LucidPluginItem>,
+    loading: Boolean,
+    error: String?,
+    firstFocus: FocusRequester,
+    onPick: (LucidPluginItem) -> Unit,
+) {
+    when {
+        loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text("Loading series from ${extension?.name.orEmpty()}…", color = NuvioTheme.colors.TextSecondary)
+        }
+        error != null -> Text(error, color = NuvioTheme.colors.TextSecondary)
+        items.isEmpty() -> Text("No series are available in this catalog.", color = NuvioTheme.colors.TextSecondary)
+        else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "series-head") {
+                Text(
+                    extension?.name.orEmpty(),
+                    style = NuvioTheme.textStyles.sectionTitle,
+                    color = NuvioTheme.colors.TextPrimary,
+                )
+            }
+            itemsIndexed(items, key = { _, it -> it.url }) { index, item ->
+                Button(
+                    onClick = { onPick(item) },
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.colors(
+                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),
+                        contentColor = NuvioTheme.colors.TextPrimary,
+                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                    ),
+                ) {
+                    if (!item.poster.isNullOrBlank()) {
+                        AsyncImage(
+                            model = item.poster,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.width(46.dp).height(66.dp).clip(RoundedCornerShape(7.dp)),
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.name, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text("Series · episodes in air order", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                    }
                 }
             }
         }
@@ -1174,6 +1265,7 @@ private fun kindLabel(kind: LucidChannelKind): String = when (kind) {
     LucidChannelKind.ADDON_LIVE -> "Addon live channel"
     LucidChannelKind.MANUAL_LOOP -> "Movie collection · 24/7"
     LucidChannelKind.PLUGIN_ROTATE -> "CloudStream extension · 24/7"
+    LucidChannelKind.PLUGIN_SERIES -> "CloudStream series · 24/7"
 }
 
 private fun orderLabel(order: LucidOrder): String = when (order) {

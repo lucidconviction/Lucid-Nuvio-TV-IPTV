@@ -54,6 +54,8 @@ enum class LucidChannelKind {
     MANUAL_LOOP,
     /** An enabled CloudStream extension's latest feed, as a 24/7 queue. */
     PLUGIN_ROTATE,
+    /** One CloudStream series, every episode in order. */
+    PLUGIN_SERIES,
 }
 
 @Serializable
@@ -92,6 +94,8 @@ data class LucidChannelSpec(
     val pluginTabApiName: String? = null,
     val pluginTabName: String? = null,
     val pluginTabLabel: String? = null,
+    val pluginItemUrl: String? = null,
+    val pluginItemTitle: String? = null,
     val auto: Boolean = true,
 ) {
     val channelKey: String get() = "virtual:$id"
@@ -161,6 +165,8 @@ data class LucidStoredSpec(
     val pluginTabApiName: String? = null,
     val pluginTabName: String? = null,
     val pluginTabLabel: String? = null,
+    val pluginItemUrl: String? = null,
+    val pluginItemTitle: String? = null,
     val createdAtMs: Long = 0L,
     val updatedAtMs: Long = 0L,
 ) {

@@ -15,6 +15,7 @@ import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
 import com.nuvio.tv.livetv.lucid.LucidPluginBridge
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
+import com.nuvio.tv.livetv.lucid.LucidPluginItem
 import com.nuvio.tv.livetv.lucid.LucidPluginTab
 import com.nuvio.tv.livetv.lucid.LucidSpecCodec
 import com.nuvio.tv.livetv.lucid.LucidStoredItem
@@ -151,6 +152,54 @@ class LucidTvStudioViewModel @Inject constructor(
 
     suspend fun pluginTabs(extensionId: String): List<LucidPluginTab> =
         withContext(Dispatchers.IO) { runCatching { pluginBridge.tabs(extensionId) }.getOrDefault(emptyList()) }
+
+    suspend fun pluginSeriesItems(
+        extensionId: String,
+        tab: LucidPluginTab?,
+    ): List<LucidPluginItem> = withContext(Dispatchers.IO) {
+        val pageItems = if (tab != null) {
+            runCatching { pluginBridge.browseLatest(extensionId, 1, tab) }.getOrNull()?.items
+        } else {
+            runCatching { pluginBridge.latest(extensionId, 1) }.getOrNull()
+        }.orEmpty()
+        pageItems.filter { it.type == "series" }.distinctBy { it.url }
+    }
+
+    fun newPluginSeriesSpec(
+        extension: LucidPluginExtension,
+        tab: LucidPluginTab?,
+        item: LucidPluginItem,
+    ): LucidStoredSpec {
+        val now = System.currentTimeMillis()
+        return LucidStoredSpec(
+            id = "vc_" + UUID.randomUUID().toString().replace("-", "").take(12),
+            name = item.name,
+            kind = LucidChannelKind.PLUGIN_SERIES,
+            group = "CloudStream",
+            addonName = "CloudStream",
+            addonBaseUrl = "",
+            catalogName = tab?.label ?: "CloudStream",
+            contentType = "series",
+            seriesTitle = item.name,
+            poster = item.poster ?: extension.logo,
+            description = "24/7 episodes of ${item.name} from ${extension.name}",
+            slotMinutes = 45,
+            maxStartPercent = -1,
+            jitter = true,
+            order = LucidOrder.AIR,
+            anchorMs = now,
+            pluginScraperId = extension.id,
+            pluginScraperName = extension.name,
+            pluginTabApiIndex = tab?.apiIndex,
+            pluginTabApiName = tab?.apiName,
+            pluginTabName = tab?.tabName,
+            pluginTabLabel = tab?.label,
+            pluginItemUrl = item.url,
+            pluginItemTitle = item.name,
+            createdAtMs = now,
+            updatedAtMs = now,
+        )
+    }
 
     fun newPluginSpec(
         extension: LucidPluginExtension,
