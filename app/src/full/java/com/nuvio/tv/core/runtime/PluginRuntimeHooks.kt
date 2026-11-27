@@ -41,6 +41,9 @@ object PluginRuntimeHooks {
         synchronized(this) {
             if (isCloudstreamInitialized) return
             val currentApp = application ?: return
+            // OkHttp 5's public-suffix database needs the application context in every
+            // process. The normal startup initializer is absent in :streamhost.
+            runCatching { okhttp3.OkHttp.initialize(currentApp) }
 
             try {
                 Security.insertProviderAt(Conscrypt.newProvider(), 1)

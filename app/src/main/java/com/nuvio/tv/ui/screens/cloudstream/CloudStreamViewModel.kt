@@ -65,6 +65,8 @@ class CloudStreamViewModel @Inject constructor(
     private val _state = MutableStateFlow(CloudStreamUiState())
     val state: StateFlow<CloudStreamUiState> = _state.asStateFlow()
 
+    private val detailStack = ArrayDeque<LucidPluginDetail>()
+
     private val _playback = MutableSharedFlow<CloudStreamPlayback>(extraBufferCapacity = 1)
     val playback: SharedFlow<CloudStreamPlayback> = _playback.asSharedFlow()
 
@@ -223,6 +225,16 @@ class CloudStreamViewModel @Inject constructor(
     }
 
     fun openItem(item: LucidPluginItem) {
+        detailStack.clear()
+        loadDetail(item)
+    }
+
+    fun openRecommendation(item: LucidPluginItem) {
+        _state.value.detail?.let { detailStack.addLast(it) }
+        loadDetail(item)
+    }
+
+    private fun loadDetail(item: LucidPluginItem) {
         val provider = _state.value.provider ?: return
         _state.value = _state.value.copy(detailLoading = true, error = null)
         viewModelScope.launch {
@@ -243,7 +255,33 @@ class CloudStreamViewModel @Inject constructor(
     }
 
     fun closeDetail() {
-        _state.value = _state.value.copy(detail = null, detailLoading = false, error = null)
+        val previous = detailStack.removeLastOrNull()
+        if (previous != null) {
+            _state.value = _state.value.copy(detail = previous, detailLoading = false, error = null)
+        } else {
+            _state.value = _state.value.copy(detail = null, detailLoading = false, error = null)
+        }
+    }
+
+    /** Cast in a CloudStream detail: search this provider for the actor's other work. */
+    fun searchCast(name: String) {
+        val provider = _state.value.provider ?: return
+        val query = name.trim()
+        if (query.isBlank()) return
+        detailStack.clear()
+        _state.value = _state.value.copy(
+            detail = null,
+            detailLoading = false,
+            searchQuery = query,
+            searchResults = emptyList(),
+            searching = true,
+            error = null,
+        )
+        viewModelScope.launch {
+            val results = runCatching { bridge.browseSearch(provider.id, query) }.getOrDefault(emptyList())
+            if (_state.value.provider?.id != provider.id) return@launch
+            _state.value = _state.value.copy(searching = false, searchResults = results)
+        }
     }
 
     fun playDetail() {

@@ -140,6 +140,12 @@ object NuvioExoPlayerPerformanceHelper {
         )
     }
 
+    private const val CACHE_FLOOR_MB = 128
+    private const val CACHE_MIN_BUFFER_MS = 60_000
+    private const val CACHE_MAX_BUFFER_MS = 120_000
+    private const val CACHE_BUFFER_FOR_PLAYBACK_MS = 5_000
+    private const val CACHE_BUFFER_AFTER_REBUFFER_MS = 10_000
+
     private const val SEEK_BACK_BUFFER_THRESHOLD_MS = 10_000L
     private const val SEEK_BACKWARD_TOLERANCE_MS = 2_000L
     const val SEEK_SUPPRESS_TIMEOUT_MS = 800L
@@ -283,6 +289,7 @@ object NuvioExoPlayerPerformanceHelper {
         return if (enabled) {
             val effectiveTargetBufferMb = (targetBufferSizeMb - chunkOverheadMb)
                 .coerceAtLeast(MemoryBudget.MIN_BUFFER_MB)
+                .coerceAtLeast(CACHE_FLOOR_MB)
             val targetBufferBytes = (effectiveTargetBufferMb.toLong() * 1024L * 1024L)
                 .coerceAtMost(Int.MAX_VALUE.toLong())
                 .toInt()
@@ -305,10 +312,10 @@ object NuvioExoPlayerPerformanceHelper {
                 .setAllocator(allocator)
                 .setTargetBufferBytes(targetBufferBytes)
                 .setBufferDurationsMs(
-                    minBufferMs,
-                    maxBufferMs,
-                    bufferForPlaybackMs,
-                    bufferForPlaybackAfterRebufferMs
+                    minBufferMs.coerceAtLeast(CACHE_MIN_BUFFER_MS),
+                    maxBufferMs.coerceAtLeast(CACHE_MAX_BUFFER_MS),
+                    bufferForPlaybackMs.coerceAtLeast(CACHE_BUFFER_FOR_PLAYBACK_MS),
+                    bufferForPlaybackAfterRebufferMs.coerceAtLeast(CACHE_BUFFER_AFTER_REBUFFER_MS)
                 )
                 // The byte target has to gate everything the allocator holds, or the back buffer
                 // is charged on top of it and the configured size is not a limit at all.
@@ -319,12 +326,12 @@ object NuvioExoPlayerPerformanceHelper {
                 .build()
         } else {
             DefaultLoadControl.Builder()
-                .setTargetBufferBytes(100 * 1024 * 1024)
+                .setTargetBufferBytes(CACHE_FLOOR_MB * 1024 * 1024)
                 .setBufferDurationsMs(
-                    DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
-                    70_000,
-                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                    5_000
+                    CACHE_MIN_BUFFER_MS,
+                    CACHE_MAX_BUFFER_MS,
+                    CACHE_BUFFER_FOR_PLAYBACK_MS,
+                    CACHE_BUFFER_AFTER_REBUFFER_MS
                 )
                 .build()
         }

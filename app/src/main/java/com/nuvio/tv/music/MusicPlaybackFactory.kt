@@ -49,8 +49,9 @@ object MusicPlaybackFactory {
         }
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, 256 * 1024))
-            .setBufferDurationsMs(20_000, 60_000, 3_000, 8_000)
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setTargetBufferBytes(128 * 1024 * 1024)
+            .setBufferDurationsMs(60_000, 120_000, 5_000, 10_000)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
         val player = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)

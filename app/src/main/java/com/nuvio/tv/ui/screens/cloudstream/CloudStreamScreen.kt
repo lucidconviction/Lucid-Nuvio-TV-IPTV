@@ -3,6 +3,8 @@ package com.nuvio.tv.ui.screens.cloudstream
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -135,7 +137,8 @@ fun CloudStreamScreen(
                 onPlay = viewModel::playDetail,
                 onEpisode = viewModel::playEpisode,
                 onTrailer = onTrailer,
-                onRecommendation = viewModel::openItem,
+                onRecommendation = viewModel::openRecommendation,
+                onCastSearch = viewModel::searchCast,
             )
         }
     }
@@ -630,6 +633,7 @@ private fun DetailOverlay(
     onEpisode: (LucidPluginItem) -> Unit,
     onTrailer: (url: String, title: String, headers: Map<String, String>) -> Unit,
     onRecommendation: (LucidPluginItem) -> Unit,
+    onCastSearch: (String) -> Unit,
 ) {
     val playFocus = remember { FocusRequester() }
     val episodes = remember(detail) {
@@ -676,157 +680,151 @@ private fun DetailOverlay(
             ),
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 44.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 44.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item(key = "hero-space") { Spacer(Modifier.height(180.dp)) }
-            item(key = "hero") {
-                Column(Modifier.fillMaxWidth(0.72f)) {
+            Spacer(Modifier.height(150.dp))
+            Column(Modifier.fillMaxWidth(0.72f)) {
+                Text(
+                    detail.name,
+                    color = Color.White,
+                    style = NuvioTheme.textStyles.headline.copy(
+                        fontSize = 42.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        shadow = Shadow(Color.Black, Offset(0f, 2f), 12f),
+                    ),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(9.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    detail.year?.let { DetailBadge(it.toString()) }
+                    DetailBadge(if (detail.isSeries) "Series" else "Movie")
+                    detail.rating?.let { DetailBadge("★ $it") }
+                    detail.durationMinutes?.takeIf { it > 0 }?.let { DetailBadge("${it}m") }
+                    detail.status?.let { DetailBadge(it) }
+                    if (detail.isSeries && episodes.isNotEmpty()) {
+                        DetailBadge("${episodes.size} episodes")
+                    }
+                }
+                if (detail.genres.isNotEmpty()) {
+                    Spacer(Modifier.height(7.dp))
                     Text(
-                        detail.name,
-                        color = Color.White,
-                        style = NuvioTheme.textStyles.headline.copy(
-                            fontSize = 42.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            shadow = Shadow(Color.Black, Offset(0f, 2f), 12f),
-                        ),
-                        maxLines = 2,
+                        detail.genres.take(6).joinToString("  ·  "),
+                        color = Color.White.copy(alpha = 0.74f),
+                        style = NuvioTheme.textStyles.metadata,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Spacer(Modifier.height(9.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        detail.year?.let { DetailBadge(it.toString()) }
-                        DetailBadge(if (detail.isSeries) "Series" else "Movie")
-                        detail.rating?.let { DetailBadge("★ $it") }
-                        detail.durationMinutes?.takeIf { it > 0 }?.let { DetailBadge("${it}m") }
-                        detail.status?.let { DetailBadge(it) }
-                        if (detail.isSeries && episodes.isNotEmpty()) {
-                            DetailBadge("${episodes.size} episodes")
-                        }
-                    }
-                    if (detail.genres.isNotEmpty()) {
-                        Spacer(Modifier.height(7.dp))
-                        Text(
-                            detail.genres.take(6).joinToString("  ·  "),
-                            color = Color.White.copy(alpha = 0.74f),
-                            style = NuvioTheme.textStyles.metadata,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (!detail.description.isNullOrBlank()) {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            detail.description,
-                            color = Color.White.copy(alpha = 0.86f),
-                            style = NuvioTheme.textStyles.body.copy(
-                                shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
-                            ),
-                            maxLines = 6,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CloudStreamPlayButton(
-                            text = if (detail.isSeries && episodes.isNotEmpty()) "Play first episode" else "Play",
-                            enabled = !loading,
-                            focusRequester = playFocus,
-                            onClick = {
-                                if (detail.isSeries && episodes.isNotEmpty()) {
-                                    onEpisode(episodes.first())
-                                } else {
-                                    onPlay()
-                                }
-                            },
-                        )
-                        if (!detail.trailerUrl.isNullOrBlank()) {
-                            CloudStreamTrailerButton {
-                                onTrailer(detail.trailerUrl, detail.name, detail.trailerHeaders)
+                }
+                if (!detail.description.isNullOrBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        detail.description,
+                        color = Color.White.copy(alpha = 0.86f),
+                        style = NuvioTheme.textStyles.body.copy(
+                            shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
+                        ),
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CloudStreamPlayButton(
+                        text = if (detail.isSeries && episodes.isNotEmpty()) "Play first episode" else "Play",
+                        enabled = !loading,
+                        focusRequester = playFocus,
+                        onClick = {
+                            if (detail.isSeries && episodes.isNotEmpty()) {
+                                onEpisode(episodes.first())
+                            } else {
+                                onPlay()
                             }
-                        }
-                        if (loading) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            Text("Resolving streams…", color = Color.White.copy(alpha = 0.8f))
+                        },
+                    )
+                    if (!detail.trailerUrl.isNullOrBlank()) {
+                        CloudStreamTrailerButton {
+                            onTrailer(detail.trailerUrl, detail.name, detail.trailerHeaders)
                         }
                     }
-                    if (error != null) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(error, color = NuvioTheme.colors.Error, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (loading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text("Resolving streams…", color = Color.White.copy(alpha = 0.8f))
                     }
+                }
+                if (error != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(error, color = NuvioTheme.colors.Error, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
 
             if (detail.actors.isNotEmpty()) {
-                item(key = "cast") {
-                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(
-                            "Cast",
-                            color = Color.White,
-                            style = NuvioTheme.textStyles.sectionTitle.copy(
-                                shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
-                            ),
-                        )
-                        CloudStreamCastRow(detail.actors)
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(
+                        "Cast",
+                        color = Color.White,
+                        style = NuvioTheme.textStyles.sectionTitle.copy(
+                            shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
+                        ),
+                    )
+                    CloudStreamCastRow(detail.actors, onActorClick = onCastSearch)
                 }
             }
 
             if (detail.isSeries && episodes.isNotEmpty()) {
-                item(key = "episodes") {
-                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(
-                            "Episodes",
-                            color = Color.White,
-                            style = NuvioTheme.textStyles.sectionTitle.copy(
-                                shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
-                            ),
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(end = 24.dp),
-                        ) {
-                            itemsIndexed(
-                                episodes,
-                                key = { _, it -> "${it.season}|${it.episode}|${it.url}" },
-                            ) { _, episode ->
-                                CloudStreamEpisodeCard(
-                                    episode = episode,
-                                    fallbackPoster = detail.poster,
-                                    onClick = { onEpisode(episode) },
-                                )
-                            }
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(
+                        "Episodes",
+                        color = Color.White,
+                        style = NuvioTheme.textStyles.sectionTitle.copy(
+                            shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
+                        ),
+                    )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(end = 24.dp),
+                    ) {
+                        itemsIndexed(
+                            episodes,
+                            key = { _, it -> "${it.season}|${it.episode}|${it.url}" },
+                        ) { _, episode ->
+                            CloudStreamEpisodeCard(
+                                episode = episode,
+                                fallbackPoster = detail.poster,
+                                onClick = { onEpisode(episode) },
+                            )
                         }
                     }
                 }
             }
 
             if (detail.recommendations.isNotEmpty()) {
-                item(key = "recommendations") {
-                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(
-                            "More like this",
-                            color = Color.White,
-                            style = NuvioTheme.textStyles.sectionTitle.copy(
-                                shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
-                            ),
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(end = 24.dp),
-                        ) {
-                            items(detail.recommendations, key = { it.url + it.name }) { item ->
-                                CloudStreamRecommendationCard(item, onClick = { onRecommendation(item) })
-                            }
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(
+                        "More like this",
+                        color = Color.White,
+                        style = NuvioTheme.textStyles.sectionTitle.copy(
+                            shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
+                        ),
+                    )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(end = 24.dp),
+                    ) {
+                        items(detail.recommendations, key = { it.url + it.name }) { item ->
+                            CloudStreamRecommendationCard(item, onClick = { onRecommendation(item) })
                         }
                     }
                 }
@@ -886,10 +884,22 @@ private fun CloudStreamTrailerButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun CloudStreamCastRow(actors: List<com.nuvio.tv.livetv.lucid.LucidPluginActor>) {
+private fun CloudStreamCastRow(
+    actors: List<com.nuvio.tv.livetv.lucid.LucidPluginActor>,
+    onActorClick: (String) -> Unit,
+) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(end = 24.dp)) {
         items(actors, key = { it.name + (it.image ?: "") }) { actor ->
-            Column(Modifier.width(92.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Card(
+                onClick = { onActorClick(actor.name) },
+                modifier = Modifier.width(100.dp).nuvioFocusRing(RoundedCornerShape(10.dp)),
+                shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+                colors = CardDefaults.colors(
+                    containerColor = Color.Transparent,
+                    focusedContainerColor = Color.Black.copy(alpha = 0.36f),
+                ),
+            ) {
+            Column(Modifier.fillMaxWidth().padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (!actor.image.isNullOrBlank()) {
                     AsyncImage(
                         model = actor.image,
@@ -913,6 +923,12 @@ private fun CloudStreamCastRow(actors: List<com.nuvio.tv.livetv.lucid.LucidPlugi
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(
+                    "Search",
+                    color = Color.White.copy(alpha = 0.52f),
+                    fontSize = 9.sp,
+                )
+            }
             }
         }
     }
