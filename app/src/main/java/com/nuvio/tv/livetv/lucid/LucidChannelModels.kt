@@ -88,6 +88,10 @@ data class LucidChannelSpec(
     /** CloudStream extension id/name for PLUGIN_ROTATE channels. */
     val pluginScraperId: String? = null,
     val pluginScraperName: String? = null,
+    val pluginTabApiIndex: Int? = null,
+    val pluginTabApiName: String? = null,
+    val pluginTabName: String? = null,
+    val pluginTabLabel: String? = null,
     val auto: Boolean = true,
 ) {
     val channelKey: String get() = "virtual:$id"
@@ -153,6 +157,10 @@ data class LucidStoredSpec(
     /** CloudStream extension id/name for a PLUGIN_ROTATE channel. */
     val pluginScraperId: String? = null,
     val pluginScraperName: String? = null,
+    val pluginTabApiIndex: Int? = null,
+    val pluginTabApiName: String? = null,
+    val pluginTabName: String? = null,
+    val pluginTabLabel: String? = null,
     val createdAtMs: Long = 0L,
     val updatedAtMs: Long = 0L,
 ) {

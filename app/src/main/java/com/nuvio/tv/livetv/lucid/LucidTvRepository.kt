@@ -280,11 +280,25 @@ class LucidTvRepository @Inject constructor(
      */
     private suspend fun loadPluginPool(spec: LucidChannelSpec): List<LucidItem> {
         val scraperId = spec.pluginScraperId ?: return emptyList()
+        val tab = spec.pluginTabName?.takeIf { it.isNotBlank() }?.let {
+            LucidPluginTab(
+                apiIndex = spec.pluginTabApiIndex ?: 0,
+                apiName = spec.pluginTabApiName.orEmpty(),
+                tabName = it,
+                label = spec.pluginTabLabel ?: it,
+            )
+        }
         val items = buildList {
             for (page in 1..3) {
-                val pageItems = withTimeoutOrNull(60_000L) {
-                    pluginBridge.latest(scraperId, page)
-                }.orEmpty()
+                val pageItems = if (tab != null) {
+                    withTimeoutOrNull(60_000L) {
+                        pluginBridge.browseLatest(scraperId, page, tab)
+                    }?.items.orEmpty()
+                } else {
+                    withTimeoutOrNull(60_000L) {
+                        pluginBridge.latest(scraperId, page)
+                    }.orEmpty()
+                }
                 if (pageItems.isEmpty()) break
                 addAll(pageItems)
                 if (pageItems.size < 20) break
@@ -483,6 +497,10 @@ class LucidTvRepository @Inject constructor(
         manualItems = manualItems,
         pluginScraperId = pluginScraperId,
         pluginScraperName = pluginScraperName,
+        pluginTabApiIndex = pluginTabApiIndex,
+        pluginTabApiName = pluginTabApiName,
+        pluginTabName = pluginTabName,
+        pluginTabLabel = pluginTabLabel,
         auto = false,
     )
 

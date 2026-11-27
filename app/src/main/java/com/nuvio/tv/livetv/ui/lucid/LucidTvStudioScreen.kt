@@ -62,6 +62,7 @@ import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
+import com.nuvio.tv.livetv.lucid.LucidPluginTab
 import com.nuvio.tv.livetv.lucid.LucidStoredSpec
 import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -84,6 +85,7 @@ private enum class StudioMode {
     LIVE_CATALOG,
     LIVE_ITEM,
     PLUGIN_EXTENSION,
+    PLUGIN_CATALOG,
     RELAY_GROUP,
     EDIT,
 }
@@ -123,6 +125,10 @@ fun LucidTvStudioScreen(
     var pluginExtensions by remember { mutableStateOf<List<LucidPluginExtension>>(emptyList()) }
     var pluginLoading by remember { mutableStateOf(false) }
     var pluginError by remember { mutableStateOf<String?>(null) }
+    var pluginPick by remember { mutableStateOf<LucidPluginExtension?>(null) }
+    var pluginTabs by remember { mutableStateOf<List<LucidPluginTab>>(emptyList()) }
+    var pluginTabsLoading by remember { mutableStateOf(false) }
+    var pluginTabsError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var shareOpen by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
@@ -145,6 +151,7 @@ fun LucidTvStudioScreen(
         mode, specs.size, addons.size, relayGroups.size, addonPick,
         seriesItems.size, seriesLoading, manualItems.size, manualLoading,
         liveItems.size, liveLoading, pluginExtensions.size, pluginLoading,
+        pluginPick, pluginTabs.size, pluginTabsLoading,
     ) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
@@ -157,6 +164,7 @@ fun LucidTvStudioScreen(
             StudioMode.MANUAL_ITEM -> { mode = StudioMode.CATALOG_CATALOG; manualItems = emptyList(); manualSelected = emptySet() }
             StudioMode.LIVE_ITEM -> { mode = StudioMode.LIVE_CATALOG; liveItems = emptyList() }
             StudioMode.LIVE_CATALOG -> mode = StudioMode.LIVE_ADDON
+            StudioMode.PLUGIN_CATALOG -> mode = StudioMode.PLUGIN_EXTENSION
             StudioMode.PLUGIN_EXTENSION -> mode = StudioMode.ADD_MENU
             StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> {
                 mode = if (mode == StudioMode.CATALOG_CATALOG) StudioMode.CATALOG_ADDON else StudioMode.SERIES_ADDON
@@ -175,6 +183,19 @@ fun LucidTvStudioScreen(
             pluginLoading = false
             if (pluginExtensions.isEmpty()) {
                 pluginError = "No enabled CloudStream extensions were found. Install and enable one in Settings → Plugins."
+            }
+        }
+    }
+
+    LaunchedEffect(mode, pluginPick) {
+        val extension = pluginPick
+        if (mode == StudioMode.PLUGIN_CATALOG && extension != null) {
+            pluginTabsLoading = true
+            pluginTabsError = null
+            pluginTabs = viewModel.pluginTabs(extension.id)
+            pluginTabsLoading = false
+            if (pluginTabs.isEmpty()) {
+                pluginTabsError = "This extension did not expose any catalogs. You can still create an all-latest channel."
             }
         }
     }
@@ -306,7 +327,20 @@ fun LucidTvStudioScreen(
                 error = pluginError,
                 firstFocus = firstFocus,
                 onPick = { extension ->
-                    draft = viewModel.newPluginSpec(extension)
+                    pluginPick = extension
+                    pluginTabs = emptyList()
+                    mode = StudioMode.PLUGIN_CATALOG
+                },
+            )
+            StudioMode.PLUGIN_CATALOG -> PluginCatalogList(
+                extension = pluginPick,
+                tabs = pluginTabs,
+                loading = pluginTabsLoading,
+                error = pluginTabsError,
+                firstFocus = firstFocus,
+                onPick = { tab ->
+                    val extension = pluginPick ?: return@PluginCatalogList
+                    draft = viewModel.newPluginSpec(extension, tab)
                     mode = StudioMode.EDIT
                 },
             )
@@ -541,7 +575,7 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
         Triple("Series marathon · 24/7", "One series, every episode in order, using the episode runtimes.", LucidChannelKind.SERIES_LOOP to StudioMode.SERIES_ADDON),
         Triple("Movie collection · 24/7", "Pick films from a catalog into a hand-made 24/7 marathon.", LucidChannelKind.MANUAL_LOOP to StudioMode.CATALOG_ADDON),
         Triple("Addon live channel", "One channel from an addon live, TV or sport catalog. Its stream is resolved when tuned.", LucidChannelKind.ADDON_LIVE to StudioMode.LIVE_ADDON),
-        Triple("CloudStream extension · 24/7", "Use an enabled CloudStream extension's latest movies as a continuous channel.", LucidChannelKind.PLUGIN_ROTATE to StudioMode.PLUGIN_EXTENSION),
+        Triple("CloudStream extension · catalog 24/7", "Pick an enabled CloudStream extension, then one of its catalogs, as a continuous channel.", LucidChannelKind.PLUGIN_ROTATE to StudioMode.PLUGIN_EXTENSION),
         Triple("Live channel relay · 24/7", "Relay an existing IPTV group as a Lucid TV channel and switch at segment boundaries.", LucidChannelKind.RELAY_LOOP to StudioMode.RELAY_GROUP),
     )
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -611,6 +645,67 @@ private fun PluginExtensionList(
                             color = NuvioTheme.colors.TextSecondary,
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginCatalogList(
+    extension: LucidPluginExtension?,
+    tabs: List<LucidPluginTab>,
+    loading: Boolean,
+    error: String?,
+    firstFocus: FocusRequester,
+    onPick: (LucidPluginTab?) -> Unit,
+) {
+    val choices = buildList<Pair<String, LucidPluginTab?>> {
+        add("All latest · all catalogs" to null)
+        tabs.forEach { add(it.label.ifBlank { it.tabName } to it) }
+    }
+    when {
+        loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text("Loading catalogs from ${extension?.name.orEmpty()}…", color = NuvioTheme.colors.TextSecondary)
+        }
+        else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "catalog-head") {
+                Column(Modifier.padding(bottom = 4.dp)) {
+                    Text(
+                        extension?.name.orEmpty(),
+                        style = NuvioTheme.textStyles.sectionTitle,
+                        color = NuvioTheme.colors.TextPrimary,
+                    )
+                    Text(
+                        if (error != null) error else "Pick the catalog this channel should rotate.",
+                        style = NuvioTheme.textStyles.metadata,
+                        color = NuvioTheme.colors.TextSecondary,
+                    )
+                }
+            }
+            itemsIndexed(choices, key = { index, pair -> pair.second?.let { "${it.apiIndex}|${it.tabName}" } ?: "all-$index" }) { index, pair ->
+                val (label, tab) = pair
+                Button(
+                    onClick = { onPick(tab) },
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    colors = ButtonDefaults.colors(
+                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),
+                        contentColor = NuvioTheme.colors.TextPrimary,
+                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                    ),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(label, fontSize = 14.sp)
+                        Text(
+                            if (tab == null) "The extension's default latest feed" else tab.apiName.ifBlank { "Catalog tab" },
+                            style = NuvioTheme.textStyles.metadata,
+                            color = NuvioTheme.colors.TextSecondary,
+                        )
+                    }
+                    if (tab == null) Text("Default", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
                 }
             }
         }

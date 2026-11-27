@@ -15,6 +15,7 @@ import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
 import com.nuvio.tv.livetv.lucid.LucidPluginBridge
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
+import com.nuvio.tv.livetv.lucid.LucidPluginTab
 import com.nuvio.tv.livetv.lucid.LucidSpecCodec
 import com.nuvio.tv.livetv.lucid.LucidStoredItem
 import com.nuvio.tv.livetv.lucid.LucidStoredSpec
@@ -148,19 +149,30 @@ class LucidTvStudioViewModel @Inject constructor(
         withContext(Dispatchers.IO) { runCatching { pluginBridge.extensions() }.getOrDefault(emptyList()) }
             .sortedBy { it.name.lowercase() }
 
-    fun newPluginSpec(extension: LucidPluginExtension): LucidStoredSpec {
+    suspend fun pluginTabs(extensionId: String): List<LucidPluginTab> =
+        withContext(Dispatchers.IO) { runCatching { pluginBridge.tabs(extensionId) }.getOrDefault(emptyList()) }
+
+    fun newPluginSpec(
+        extension: LucidPluginExtension,
+        tab: LucidPluginTab? = null,
+    ): LucidStoredSpec {
         val now = System.currentTimeMillis()
+        val catalog = tab?.label?.takeIf { it.isNotBlank() }
         return LucidStoredSpec(
             id = "vc_" + UUID.randomUUID().toString().replace("-", "").take(12),
-            name = extension.name,
+            name = listOfNotNull(extension.name, catalog).joinToString(" · "),
             kind = LucidChannelKind.PLUGIN_ROTATE,
             group = "CloudStream",
             addonName = "CloudStream",
             addonBaseUrl = "",
-            catalogName = "CloudStream",
+            catalogName = catalog ?: "CloudStream",
             contentType = "movie",
             poster = extension.logo,
-            description = "24/7 from the ${extension.name} CloudStream extension",
+            description = if (catalog != null) {
+                "24/7 from ${extension.name} · $catalog"
+            } else {
+                "24/7 from the ${extension.name} CloudStream extension"
+            },
             slotMinutes = 90,
             maxStartPercent = -1,
             jitter = true,
@@ -168,6 +180,10 @@ class LucidTvStudioViewModel @Inject constructor(
             anchorMs = now,
             pluginScraperId = extension.id,
             pluginScraperName = extension.name,
+            pluginTabApiIndex = tab?.apiIndex,
+            pluginTabApiName = tab?.apiName,
+            pluginTabName = tab?.tabName,
+            pluginTabLabel = tab?.label,
             createdAtMs = now,
             updatedAtMs = now,
         )
