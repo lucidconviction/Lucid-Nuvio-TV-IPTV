@@ -2451,10 +2451,39 @@ class WebViewActivity : ComponentActivity() {
         actions += "→   Forward" to { if (webView.canGoForward()) navigateHistory(true) }
         actions += "↻   Reload" to { webView.reload() }
         actions += "⌨   Enter address" to { showAddressDialog() }
+        actions += "❤️   Save this site" to { saveCurrentSite() }
+        if (mouseMode) {
+            actions += "✖   Mouse cursor off" to { toggleMouse() }
+        } else {
+            actions += "⌖   Mouse cursor on" to { toggleMouse() }
+        }
+        if (autoplayBest) {
+            actions += "▶   Autoplay best video: on" to {
+                autoplayBest = false
+                runCatching { BrowserStore.setWebviewAutoplayBest(false) }
+                Toast.makeText(this, "Autoplay best video off", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            actions += "▶   Autoplay best video: off" to {
+                autoplayBest = true
+                runCatching { BrowserStore.setWebviewAutoplayBest(true) }
+                Toast.makeText(this, "Autoplay best video on", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val menuHost = currentPageHost()?.trim()?.trimEnd('.').orEmpty()
+        if (menuHost.isNotBlank()) {
+            val siteOpen = AdBlocker.matches(menuHost, whitelistDomains)
+            actions += if (siteOpen) "✔   Allow ads on this site" to { toggleSiteAdblock() }
+            else "⊘   Block ads on this site" to { toggleSiteAdblock() }
+        }
+        actions += "⊘   Element blocker" to { enableElementBlocker() }
         actions += "▲   Scroll up" to { webView.scrollBy(0, -dp(320)) }
         actions += "▼   Scroll down" to { webView.scrollBy(0, dp(320)) }
         actions += "🗂   Tabs (${openTabs.size})" to { showTabGrid() }
         actions += "▶   Play video in player" to { playVideo() }
+        val actionsColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
         for ((label, run) in actions) {
             val button = TextView(this).apply {
                 text = label
@@ -2471,7 +2500,7 @@ class WebViewActivity : ComponentActivity() {
                     run()
                 }
             }
-            panel.addView(
+            actionsColumn.addView(
                 button,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2480,13 +2509,30 @@ class WebViewActivity : ComponentActivity() {
             )
             if (tvMenuFirst == null) tvMenuFirst = button
         }
+        val scroll = ScrollView(this).apply {
+            isFocusable = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            isVerticalScrollBarEnabled = true
+            addView(
+                actionsColumn,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        panel.addView(
+            scroll,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+        )
         val width = minOf(
             dp(430),
             (resources.displayMetrics.widthPixels - dp(48)).coerceAtLeast(dp(240)),
         )
+        val height = (resources.displayMetrics.heightPixels * 0.92f).toInt()
         root.addView(
             panel,
-            FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
+            FrameLayout.LayoutParams(width, height, Gravity.CENTER),
         )
         addContentView(
             root,
