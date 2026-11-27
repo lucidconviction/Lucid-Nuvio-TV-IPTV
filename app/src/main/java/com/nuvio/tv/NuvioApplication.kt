@@ -91,8 +91,18 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
         MemoryBudget.init(this)
         val processName = if (Build.VERSION.SDK_INT >= 28) getProcessName() else packageName
         mainProcess = processName.isNullOrBlank() || processName == packageName
+        // Android's WebView only allows one process at a time. The ported TV
+        // browser and the CloudStream host now share :streamhost, so extension
+        // WebViews and the browser no longer fight over the sandbox process.
+        // The suffix still keeps the host's WebView data separate from main.
+        if (!mainProcess) {
+            runCatching { android.webkit.WebView.setDataDirectorySuffix("streamhost") }
+        }
         super.onCreate()
         PluginRuntimeHooks.onApplicationCreate(this)
+        // The ported TV browser keeps its settings and element blocks in a small
+        // synchronous store; seed it before the first Activity can open a page.
+        runCatching { com.nuvio.tv.ui.screens.browser.hikari.BrowserHost.init(this) }
         // The CloudStream host runs in :streamhost. It must not start the app's sync,
         // Sentry, projection or image machinery a second time.
         if (mainProcess) {

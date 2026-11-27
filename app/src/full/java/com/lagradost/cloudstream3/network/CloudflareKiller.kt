@@ -48,17 +48,18 @@ class CloudflareKiller : Interceptor {
     }
 
     init {
-        try {
-            CookieManager.getInstance().removeAllCookies(null)
-        } catch (_: Exception) { }
+        // Deliberately do NOT touch CookieManager: getInstance() initializes
+        // Android's WebView, and the CloudStream host is a second process.
+        // WebView only allows one process at a time, which made the TV browser
+        // fail with "no usable WebView" and dropped the browser's own cookies.
     }
 
     val savedCookies: MutableMap<String, Map<String, String>> = mutableMapOf()
 
     fun getCookieHeaders(url: String): Headers {
-        val userAgentHeaders = WebViewResolver.webViewUserAgent?.let {
-            mapOf("user-agent" to it)
-        } ?: emptyMap()
+        // Never ask WebViewResolver: it constructs a WebView to read the UA,
+        // which would lock WebView away from the TV browser's process.
+        val userAgentHeaders = mapOf("user-agent" to USER_AGENT)
 
         return getHeaders(userAgentHeaders, savedCookies[URI(url).host] ?: emptyMap())
     }
@@ -88,27 +89,8 @@ class CloudflareKiller : Interceptor {
         return@runBlocking chain.proceed(request)
     }
 
-    private fun getWebViewCookie(url: String): String? {
-        return try {
-            CookieManager.getInstance()?.getCookie(url)
-        } catch (_: Exception) { null }
-    }
-
-    private fun trySolveWithSavedCookies(request: Request): Boolean {
-        return getWebViewCookie(request.url.toString())?.let { cookie ->
-            cookie.contains("cf_clearance").also { solved ->
-                if (solved) {
-                    Log.d(TAG, "Found cf_clearance cookie for ${request.url.host}")
-                    savedCookies[request.url.host] = parseCookieMap(cookie)
-                }
-            }
-        } ?: false
-    }
-
     private suspend fun proceed(request: Request, cookies: Map<String, String>): Response {
-        val userAgentMap = WebViewResolver.getWebViewUserAgent()?.let {
-            mapOf("user-agent" to it)
-        } ?: emptyMap()
+        val userAgentMap = mapOf("user-agent" to USER_AGENT)
 
         val requestCookies = request.header("Cookie")?.let { parseCookieMap(it) } ?: emptyMap()
         val headers = getHeaders(
@@ -123,31 +105,36 @@ class CloudflareKiller : Interceptor {
     }
 
     private suspend fun bypassCloudflare(request: Request): Response? {
-        val url = request.url.toString()
-
-        if (!trySolveWithSavedCookies(request)) {
-            Log.d(TAG, "Loading webview to solve cloudflare for ${request.url}")
-            try {
-                WebViewResolver(
-                    interceptUrl = Regex(".^"),
-                    userAgent = null,
-                    useOkhttp = false,
-                    additionalUrls = listOf(Regex("."))
-                ).resolveUsingWebView(url) {
-                    trySolveWithSavedCookies(request)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "WebView bypass failed: ${e.message}")
-                return null
+        // The TV browser and the CloudStream host now share :streamhost, so a
+        // clearance cookie earned in the visible browser is available here.
+        if (trySolveWithSavedCookies(request)) {
+            savedCookies[request.url.host]?.let { cookies ->
+                return proceed(request, cookies)
             }
         }
+        // No clearance yet. Do not spin up an invisible WebView: it cannot be
+        // completed by the user and used to burn CPU in a challenge loop.
+        Log.d(TAG, "No cf_clearance for ${request.url}; open the site in the TV browser once: ${request.url}")
+        return null
+    }
 
-        val cookies = savedCookies[request.url.host]
-        if (cookies == null) {
-            Log.w(TAG, "No cf_clearance obtained for ${request.url.host}")
-            return null
-        }
-        return proceed(request, cookies)
+    private fun getWebViewCookie(url: String): String? = try {
+        CookieManager.getInstance().getCookie(url)
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun trySolveWithSavedCookies(request: Request): Boolean = try {
+        getWebViewCookie(request.url.toString())?.let { cookie ->
+            cookie.contains("cf_clearance").also { solved ->
+                if (solved) {
+                    Log.d(TAG, "Found cf_clearance cookie for ${request.url.host}")
+                    savedCookies[request.url.host] = parseCookieMap(cookie)
+                }
+            }
+        } ?: false
+    } catch (_: Exception) {
+        false
     }
 
     private fun Headers.toMap(): Map<String, String> {

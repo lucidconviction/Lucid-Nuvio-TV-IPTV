@@ -1428,22 +1428,29 @@ private fun PlaybackNavHost(
         }
 
         composable(Screen.Browser.route) {
-            com.nuvio.tv.ui.screens.browser.TvBrowserScreen(
-                onBack = { navController.popBackStack() },
-                onPlayInPlayer = { url, title, headers ->
-                    navController.navigate(
-                        Screen.Player.createRoute(
-                            streamUrl = url,
-                            title = title,
-                            streamName = "Web video",
-                            headers = headers,
-                            contentType = "video",
-                            contentName = title,
-                            autoPlayNav = true,
-                        )
-                    )
-                },
-            )
+            val context = LocalContext.current
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                // The browser is a second process and a WebView is expensive.
+                // Release the app's decoded-image cache before handing the box
+                // over, so opening the browser does not push the main process
+                // into the low-memory killer.
+                runCatching {
+                    coil3.SingletonImageLoader.get(context.applicationContext).memoryCache?.clear()
+                    (context.applicationContext as? com.nuvio.tv.NuvioApplication)
+                        ?.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
+                }
+                val url = com.nuvio.tv.ui.screens.browser.BrowserLaunch.take()
+                    ?: "https://www.google.com"
+                com.nuvio.tv.ui.screens.browser.BrowserKeepAliveService.start(context)
+                context.startActivity(
+                    android.content.Intent(
+                        context,
+                        com.nuvio.tv.ui.screens.browser.hikari.WebViewActivity::class.java,
+                    ).putExtra("url", url)
+                )
+                navController.popBackStack()
+            }
+            Box(Modifier.fillMaxSize())
         }
 
         composable(Screen.CloudStream.route) {

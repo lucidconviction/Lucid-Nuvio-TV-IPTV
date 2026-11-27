@@ -114,6 +114,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Keeps the main process cached-but-alive while the browser runs in :streamhost. -->
+        <service
+            android:name=".ui.screens.browser.BrowserKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <service
             android:name=".core.player.ExternalPlaybackKeepAliveService"
             android:exported="false"
@@ -144,6 +150,23 @@
                 <data android:scheme="stremio" />
             </intent-filter>
         </activity>
+
+        <!-- Ported Hikari TV browser: tabs, ad blocking, media hand-off. -->
+        <activity
+            android:name=".ui.screens.browser.hikari.WebViewActivity"
+            android:exported="false"
+            android:process=":streamhost"
+            android:hardwareAccelerated="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|uiMode|layoutDirection|fontScale|locale"
+            android:theme="@style/Theme.MyApplication" />
+
+        <!-- Native player for a source the browser found. -->
+        <activity
+            android:name=".ui.screens.browser.hikari.BrowserPlayerActivity"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|uiMode"
+            android:theme="@style/Theme.MyApplication" />
 
         <activity
             android:name=".launcher.AppIconDefault"

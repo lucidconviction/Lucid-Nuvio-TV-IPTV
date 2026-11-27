@@ -499,6 +499,21 @@ open class MainActivity : ComponentActivity() {
 
         PluginRuntimeHooks.onActivityCreate(this)
 
+        // The ported browser runs in its own Activity. Bind its music strip to
+        // the app-wide session so the same transport follows the user into it.
+        if (::musicPlaybackController.isInitialized) {
+            com.nuvio.tv.ui.screens.browser.hikari.BrowserMusic.bind(
+                onToggle = { musicPlaybackController.toggle() },
+                onNext = { musicPlaybackController.next() },
+                onPrevious = { musicPlaybackController.previous() },
+            )
+            lifecycleScope.launch {
+                musicPlaybackController.session.collect { session ->
+                    com.nuvio.tv.ui.screens.browser.hikari.BrowserMusic.update(session)
+                }
+            }
+        }
+
         window?.decorView?.post {
             val snapshot = com.nuvio.tv.core.player.DisplayCapabilities.detect(this)
             com.nuvio.tv.core.player.DisplayCapabilities.logSummary(snapshot)
@@ -1576,6 +1591,8 @@ open class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The browser's separate process is gone once this resumes.
+        com.nuvio.tv.ui.screens.browser.BrowserKeepAliveService.stop(this)
         ambientIdleController.dismiss()
         if (::jankStats.isInitialized) jankStats.isTrackingEnabled = true
         memberAccessRepository.refreshIfStale()
