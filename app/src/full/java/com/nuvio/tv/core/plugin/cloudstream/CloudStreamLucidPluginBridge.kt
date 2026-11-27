@@ -8,8 +8,8 @@ import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
 import com.lagradost.cloudstream3.TvType
-import com.nuvio.tv.core.plugin.PluginManager
 import com.nuvio.tv.core.runtime.PluginRuntimeHooks
+import com.nuvio.tv.data.local.PluginDataStore
 import com.nuvio.tv.domain.model.RepositoryType
 import com.nuvio.tv.livetv.lucid.LucidPluginBridge
 import com.nuvio.tv.livetv.lucid.LucidPluginActor
@@ -36,15 +36,16 @@ private const val LINKS_TIMEOUT_MS = 60_000L
  */
 @Singleton
 class CloudStreamLucidPluginBridge @Inject constructor(
-    private val pluginManager: PluginManager,
+    private val dataStore: PluginDataStore,
     private val extensionLoader: ExternalExtensionLoader,
 ) : LucidPluginBridge {
 
     override suspend fun extensions(): List<LucidPluginExtension> = withContext(Dispatchers.IO) {
         runCatching {
             PluginRuntimeHooks.ensureCloudstreamInitialized()
-            pluginManager.enabledScrapers.first()
-                .filter { it.type == RepositoryType.EXTERNAL_DEX }
+            if (!dataStore.pluginsEnabled.first()) return@runCatching emptyList()
+            dataStore.scrapers.first()
+                .filter { it.enabled && it.type == RepositoryType.EXTERNAL_DEX }
                 .map { LucidPluginExtension(id = it.id, name = it.name, logo = it.logo) }
         }.getOrDefault(emptyList())
     }

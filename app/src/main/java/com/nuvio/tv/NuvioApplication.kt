@@ -33,6 +33,7 @@ import com.nuvio.tv.data.local.SentrySettingsDataStore
 import com.nuvio.tv.data.mediaserver.ServerUserStateProjection
 import com.nuvio.tv.data.simkl.SimklAnimeIdPreferenceHolder
 import com.nuvio.tv.ui.screens.settings.MemoryBudget
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -45,12 +46,14 @@ import javax.inject.Inject
 @HiltAndroidApp
 class NuvioApplication : Application(), SingletonImageLoader.Factory {
 
-    @Inject lateinit var startupSyncService: StartupSyncService
-    @Inject lateinit var androidTvChannelSyncService: AndroidTvChannelSyncService
-    @Inject lateinit var sentrySettingsDataStore: SentrySettingsDataStore
-    @Inject lateinit var imagePerformancePreferences: ImagePerformancePreferences
-    @Inject lateinit var simklAnimeIdPreferenceHolder: SimklAnimeIdPreferenceHolder
-    @Inject lateinit var serverUserStateProjection: ServerUserStateProjection
+    @Inject lateinit var startupSyncService: Lazy<StartupSyncService>
+    @Inject lateinit var androidTvChannelSyncService: Lazy<AndroidTvChannelSyncService>
+    @Inject lateinit var sentrySettingsDataStore: Lazy<SentrySettingsDataStore>
+    @Inject lateinit var imagePerformancePreferences: Lazy<ImagePerformancePreferences>
+    @Inject lateinit var simklAnimeIdPreferenceHolder: Lazy<SimklAnimeIdPreferenceHolder>
+    @Inject lateinit var serverUserStateProjection: Lazy<ServerUserStateProjection>
+
+    @Volatile private var mainProcess = true
 
     companion object {
         /**
@@ -86,14 +89,20 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         // Before super.onCreate(): Hilt creates injected services there, and the budget is read once.
         MemoryBudget.init(this)
+        val processName = if (Build.VERSION.SDK_INT >= 28) getProcessName() else packageName
+        mainProcess = processName.isNullOrBlank() || processName == packageName
         super.onCreate()
-        SentryInitializer.start(this, sentrySettingsDataStore)
         PluginRuntimeHooks.onApplicationCreate(this)
-        // Live TV fork: VPN progress lines go into the start-up report.
-        com.nuvio.vpn.android.VpnPlaybackProtection.diagnostics =
-            java.util.function.Consumer { line -> com.nuvio.tv.livetv.model.LiveTvLoadReport.add(line) }
-        androidTvChannelSyncService.start()
-        serverUserStateProjection.start()
+        // The CloudStream host runs in :streamhost. It must not start the app's sync,
+        // Sentry, projection or image machinery a second time.
+        if (mainProcess) {
+            SentryInitializer.start(this, sentrySettingsDataStore.get())
+            // Live TV fork: VPN progress lines go into the start-up report.
+            com.nuvio.vpn.android.VpnPlaybackProtection.diagnostics =
+                java.util.function.Consumer { line -> com.nuvio.tv.livetv.model.LiveTvLoadReport.add(line) }
+            androidTvChannelSyncService.get().start()
+            serverUserStateProjection.get().start()
+        }
         // Load locale synchronously so it's available before Activity.attachBaseContext.
         // SharedPreferences reads are fast (cached in memory after first access).
         val tag = getSharedPreferences("app_locale", Context.MODE_PRIVATE)
@@ -108,14 +117,16 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+        if (mainProcess && level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             runCatching { SingletonImageLoader.get(this).memoryCache?.clear() }
         }
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
-        runCatching { SingletonImageLoader.get(this).memoryCache?.clear() }
+        if (mainProcess) {
+            runCatching { SingletonImageLoader.get(this).memoryCache?.clear() }
+        }
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -206,7 +217,7 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
             .crossfade(false)
             .precision(coil3.size.Precision.INEXACT)
             .allowHardware(false)
-            .allowRgb565(imagePerformancePreferences.rgb565Enabled)
+            .allowRgb565(imagePerformancePreferences.get().rgb565Enabled)
             .bitmapFactoryMaxParallelism(4)
             .build()
     }

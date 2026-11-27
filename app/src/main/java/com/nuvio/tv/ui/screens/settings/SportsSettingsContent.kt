@@ -3,6 +3,7 @@ package com.nuvio.tv.ui.screens.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -352,6 +353,32 @@ private fun SportsProvidersDialog(
                 color = NuvioTheme.colors.TextSecondary, size = 13.sp, maxLines = 3
             )
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                item(key = "bulk-actions") {
+                    val allProviderIds = providers.mapTo(HashSet()) { it.id }
+                    val allAddonIds = addons.mapTo(HashSet()) { it.id }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                onUpdate { cur ->
+                                    cur.copy(
+                                        disabledSportsProviders = cur.disabledSportsProviders + allProviderIds,
+                                        disabledSportsAddons = cur.disabledSportsAddons + allAddonIds,
+                                    )
+                                }
+                            }
+                        ) { Text("Deselect all") }
+                        Button(
+                            onClick = {
+                                onUpdate { cur ->
+                                    cur.copy(
+                                        disabledSportsProviders = cur.disabledSportsProviders - allProviderIds,
+                                        disabledSportsAddons = cur.disabledSportsAddons - allAddonIds,
+                                    )
+                                }
+                            }
+                        ) { Text("Select all") }
+                    }
+                }
                 item(key = "cs-header") {
                     LiveText(
                         "CLOUDSTREAM EXTENSIONS",

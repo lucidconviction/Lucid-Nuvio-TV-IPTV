@@ -8,6 +8,11 @@
 
     <application>
         <service
+            android:name="com.nuvio.tv.livetv.lucid.CloudStreamHostService"
+            android:exported="false"
+            android:process=":streamhost" />
+
+        <service
             android:name=".updater.UpdateJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />

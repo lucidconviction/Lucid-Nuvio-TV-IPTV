@@ -1,10 +1,13 @@
 package com.nuvio.tv.livetv.lucid
 
+import kotlinx.serialization.Serializable
+
 /**
  * One installed CloudStream extension, as the Lucid TV source needs it.
  * Kept in the main source set so the Lucid guide can use extensions without linking the
  * CloudStream runtime (which only exists in the full distribution).
  */
+@Serializable
 data class LucidPluginExtension(
     val id: String,
     val name: String,
@@ -12,6 +15,7 @@ data class LucidPluginExtension(
 )
 
 /** A movie, series or live item returned by a CloudStream extension. */
+@Serializable
 data class LucidPluginItem(
     val name: String,
     val url: String,
@@ -25,6 +29,7 @@ data class LucidPluginItem(
 )
 
 /** One provider tab exposed by a CloudStream extension. */
+@Serializable
 data class LucidPluginTab(
     val apiIndex: Int,
     val apiName: String,
@@ -33,6 +38,7 @@ data class LucidPluginTab(
 )
 
 /** One page of a provider's own latest/home feed. */
+@Serializable
 data class LucidPluginPage(
     val items: List<LucidPluginItem>,
     val hasNext: Boolean,
@@ -41,6 +47,7 @@ data class LucidPluginPage(
 )
 
 /** A provider item's detail, with episodes when it is a series. */
+@Serializable
 data class LucidPluginDetail(
     val name: String,
     val poster: String?,
@@ -61,12 +68,14 @@ data class LucidPluginDetail(
     val recommendations: List<LucidPluginItem> = emptyList(),
 )
 
+@Serializable
 data class LucidPluginActor(
     val name: String,
     val image: String? = null,
 )
 
 /** A playable link resolved by a CloudStream extension. */
+@Serializable
 data class LucidPluginLink(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
