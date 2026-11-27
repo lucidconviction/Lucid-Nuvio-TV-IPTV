@@ -103,6 +103,8 @@ import com.nuvio.tv.domain.model.PluginRepository
 import com.nuvio.tv.domain.model.ScraperInfo
 import com.nuvio.tv.ui.components.LoadingIndicator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -139,6 +141,10 @@ fun PluginScreenContent(
     var repoUrl by remember { mutableStateOf("") }
     var repoPendingRemoval by remember { mutableStateOf<PluginRepository?>(null) }
     var showRepoIndex by remember { mutableStateOf(false) }
+    var repoIndexEntries by remember { mutableStateOf<List<PluginRepoIndexEntry>>(emptyList()) }
+    var repoIndexLoading by remember { mutableStateOf(false) }
+    var repoIndexError by remember { mutableStateOf<String?>(null) }
+    val repoIndexScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val manageFromPhoneFocusRequester = remember { FocusRequester() }
     var hasEnteredQrMode by remember { mutableStateOf(false) }
@@ -170,6 +176,29 @@ fun PluginScreenContent(
             delay(5000)
             viewModel.onEvent(PluginUiEvent.ClearError)
         }
+    }
+
+    fun toggleRepoIndex() {
+        if (showRepoIndex) {
+            showRepoIndex = false
+            return
+        }
+        showRepoIndex = true
+        if (repoIndexEntries.isNotEmpty() || repoIndexLoading) return
+        repoIndexLoading = true
+        repoIndexError = null
+        repoIndexScope.launch {
+            val entries = PluginRepoIndexRepository.fetch()
+            repoIndexEntries = entries
+            repoIndexLoading = false
+            if (entries.isEmpty()) {
+                repoIndexError = "Could not load the MegaRepo index. Check the connection."
+            }
+        }
+    }
+
+    BackHandler(enabled = showRepoIndex) {
+        showRepoIndex = false
     }
 
     Box(
@@ -225,7 +254,54 @@ fun PluginScreenContent(
                 }
 
                 item {
-                    RepoIndexCard(onClick = { showRepoIndex = true })
+                    RepoIndexCard(
+                        expanded = showRepoIndex,
+                        onClick = { toggleRepoIndex() },
+                    )
+                }
+
+                if (showRepoIndex) {
+                    when {
+                        repoIndexLoading -> item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                                androidx.compose.material3.CircularProgressIndicator(color = NuvioTheme.colors.TextPrimary)
+                            }
+                        }
+                        repoIndexError != null -> item {
+                            Text(
+                                repoIndexError.orEmpty(),
+                                color = NuvioTheme.colors.TextSecondary,
+                                modifier = Modifier.padding(vertical = 12.dp),
+                            )
+                        }
+                        else -> {
+                            val groups = listOf(true to "Verified", false to "Community")
+                            groups.forEach { (verified, label) ->
+                                val groupEntries = repoIndexEntries.filter { it.verified == verified }
+                                if (groupEntries.isNotEmpty()) {
+                                    item(key = "repo-header-$label") {
+                                        Text(
+                                            label,
+                                            color = NuvioTheme.colors.TextSecondary,
+                                            style = NuvioTheme.textStyles.sectionTitle,
+                                            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+                                        )
+                                    }
+                                    items(groupEntries, key = { "repo-${it.url}" }) { entry ->
+                                        val installed = uiState.repositories.any {
+                                            it.url.trimEnd('/') == entry.url.trimEnd('/')
+                                        }
+                                        RepoIndexRow(
+                                            entry = entry,
+                                            installed = installed,
+                                            adding = uiState.isAddingRepo,
+                                            onAdd = { url -> viewModel.onEvent(PluginUiEvent.AddRepository(url)) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Manage from phone card
@@ -346,15 +422,6 @@ fun PluginScreenContent(
         successMessage = uiState.successMessage,
         errorMessage = uiState.errorMessage
     )
-
-    if (showRepoIndex) {
-        RepoIndexOverlay(
-            installedRepos = uiState.repositories,
-            adding = uiState.isAddingRepo,
-            onAdd = { url -> viewModel.onEvent(PluginUiEvent.AddRepository(url)) },
-            onDismiss = { showRepoIndex = false },
-        )
-    }
 
     if (uiState.isQrModeActive || uiState.pendingRepoChange != null || uiState.pendingScraperEnable != null) {
         if (uiState.isQrModeActive) {

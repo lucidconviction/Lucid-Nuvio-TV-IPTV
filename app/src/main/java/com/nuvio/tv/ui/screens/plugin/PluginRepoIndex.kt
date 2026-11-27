@@ -62,7 +62,7 @@ data class PluginRepoIndexEntry(
 )
 
 /** The public MegaRepo (3737) repository database, parsed natively for the TV Plugins page. */
-private object PluginRepoIndexRepository {
+internal object PluginRepoIndexRepository {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -118,7 +118,10 @@ private object PluginRepoIndexRepository {
 }
 
 @Composable
-fun RepoIndexCard(onClick: () -> Unit) {
+fun RepoIndexCard(
+    expanded: Boolean = false,
+    onClick: () -> Unit,
+) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -146,12 +149,20 @@ fun RepoIndexCard(onClick: () -> Unit) {
                     style = NuvioTheme.textStyles.sectionTitle,
                 )
                 Text(
-                    "Browse the MegaRepo (3737) index and install individual repositories",
+                    if (expanded) {
+                        "The MegaRepo (3737) index is open below. Pick a repository to install."
+                    } else {
+                        "Browse the MegaRepo (3737) index and install individual repositories"
+                    },
                     color = NuvioTheme.colors.TextSecondary,
                     style = NuvioTheme.textStyles.metadata,
                 )
             }
-            Text("Browse", color = NuvioTheme.colors.TextPrimary, style = NuvioTheme.textStyles.metadata)
+            Text(
+                if (expanded) "Hide" else "Browse",
+                color = NuvioTheme.colors.TextPrimary,
+                style = NuvioTheme.textStyles.metadata,
+            )
         }
     }
 }
@@ -297,6 +308,61 @@ fun RepoIndexOverlay(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+
+/** One MegaRepo entry, rendered as a row of the Plugins list (no overlay/popup). */
+@Composable
+fun RepoIndexRow(
+    entry: PluginRepoIndexEntry,
+    installed: Boolean,
+    adding: Boolean,
+    onAdd: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.name,
+                color = NuvioTheme.colors.TextPrimary,
+                style = NuvioTheme.textStyles.body,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                entry.url,
+                color = NuvioTheme.colors.TextSecondary,
+                style = NuvioTheme.textStyles.metadata,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (installed) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = NuvioTheme.colors.TextPrimary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Installed", color = NuvioTheme.colors.TextSecondary)
+            }
+        } else {
+            Button(
+                onClick = { onAdd(entry.url) },
+                enabled = !adding,
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(if (adding) "Adding…" else "Add")
             }
         }
     }
