@@ -1449,6 +1449,24 @@ private fun PlaybackNavHost(
         composable(Screen.CloudStream.route) {
             com.nuvio.tv.ui.screens.cloudstream.CloudStreamScreen(
                 onBack = { navController.popBackStack() },
+                onTrailer = { url, title, headers ->
+                    val youtubeId = youTubeVideoId(url)
+                    if (youtubeId != null) {
+                        navController.navigate(Screen.YouTubeVideo.createRoute(youtubeId, title))
+                    } else {
+                        navController.navigate(
+                            Screen.Player.createRoute(
+                                streamUrl = url,
+                                title = title,
+                                streamName = "Trailer",
+                                headers = headers,
+                                contentType = "video",
+                                contentName = title,
+                                autoPlayNav = true,
+                            )
+                        )
+                    }
+                },
                 onPlay = { playback ->
                     navController.navigate(
                         Screen.Player.createRoute(
@@ -1651,9 +1669,10 @@ private fun PlaybackNavHost(
                     }
                 },
                 onOpenReplays = { navController.navigate(Screen.SportsReplays.route) { launchSingleTop = true } },
-                onSearchCloudStream = { event ->
+                onSearchCloudStream = { event, disabledProviders ->
                     com.nuvio.tv.ui.screens.cloudstream.CloudStreamLaunch.request(
                         listOfNotNull(event.title, event.subtitle).joinToString(" "),
+                        disabledProviders,
                     )
                     navController.navigate(Screen.CloudStream.route)
                 },
@@ -2063,4 +2082,22 @@ private fun PlaybackNavHost(
         )
     }
     }
+
+
 }
+
+/** YouTube links from CloudStream trailers play in the normal YouTube screen. */
+private fun youTubeVideoId(url: String): String? = runCatching {
+    val uri = java.net.URI(url)
+    val host = uri.host?.lowercase() ?: return@runCatching null
+    when {
+        host == "youtu.be" -> uri.path.trim('/').substringBefore('/')
+        host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com") -> {
+            Regex("(?:^|&)v=([^&]+)").find(uri.rawQuery.orEmpty())?.groupValues?.get(1)
+                ?: Regex("/embed/([^/?]+)").find(uri.path.orEmpty())?.groupValues?.get(1)
+                ?: Regex("/shorts/([^/?]+)").find(uri.path.orEmpty())?.groupValues?.get(1)
+                ?: Regex("/live/([^/?]+)").find(uri.path.orEmpty())?.groupValues?.get(1)
+        }
+        else -> null
+    }
+}.getOrNull()?.takeIf { it.isNotBlank() }

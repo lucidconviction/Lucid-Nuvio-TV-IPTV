@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Public
@@ -33,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.livetv.record.LiveTvNotice
@@ -64,6 +66,8 @@ fun SportsSettingsContent(
 ) {
     val s by viewModel.settings.collectAsStateWithLifecycle()
     val f by viewModel.follows.collectAsStateWithLifecycle()
+    val sportsAddons by viewModel.sportsAddons.collectAsStateWithLifecycle()
+    val cloudProviders by viewModel.cloudStreamProviders.collectAsStateWithLifecycle()
     var dialog by remember { mutableStateOf<String?>(null) }
     fun update(t: (SportsSettings) -> SportsSettings) = viewModel.repo.updateSettings(t)
     val region = SportsCatalog.regionOf(s)
@@ -118,6 +122,19 @@ fun SportsSettingsContent(
                         value = SportsCatalog.regionName(region) + if (s.region.isBlank()) " (this TV)" else "",
                         leadingIcon = Icons.Default.Public,
                         onClick = { dialog = "region" }
+                    )
+                }
+            }
+            item(key = "discovery") {
+                SettingsGroupCard(title = "Discovery") {
+                    val enabledAddons = sportsAddons.count { it.id !in s.disabledSportsAddons }
+                    val enabledProviders = cloudProviders.count { it.id !in s.disabledSportsProviders }
+                    SettingsActionRow(
+                        title = "Sports Providers",
+                        subtitle = "Choose which CloudStream extensions and Nuvio addons may find live games and replays for Sports",
+                        value = "${enabledAddons + enabledProviders}",
+                        leadingIcon = Icons.Default.Extension,
+                        onClick = { dialog = "providers" }
                     )
                 }
             }
@@ -295,6 +312,13 @@ fun SportsSettingsContent(
         )
         "leagues" -> LeaguesDialog(s, onToggle = { l -> update { cur -> SportsCatalog.toggleShown(l, cur) } }, onDismiss = close)
         "links" -> LinksDialog(s, viewModel, onForgetAll = { dialog = "clear" }, onDismiss = close)
+        "providers" -> SportsProvidersDialog(
+            settings = s,
+            addons = sportsAddons,
+            providers = cloudProviders,
+            onUpdate = { transform -> update(transform) },
+            onDismiss = close
+        )
         "clear" -> {
             val first = remember { FocusRequester() }
             LiveDialog(onDismiss = close, width = 480.dp) {
@@ -311,6 +335,75 @@ fun SportsSettingsContent(
         }
     }
 }
+
+@Composable
+private fun SportsProvidersDialog(
+    settings: SportsSettings,
+    addons: List<com.nuvio.tv.domain.model.Addon>,
+    providers: List<com.nuvio.tv.livetv.lucid.LucidPluginExtension>,
+    onUpdate: ((SportsSettings) -> SportsSettings) -> Unit,
+    onDismiss: () -> Unit
+) {
+    LiveDialog(onDismiss = onDismiss, width = 680.dp) {
+        Column(Modifier.heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LiveText("Sports Providers", size = 20.sp, weight = FontWeight.Bold)
+            LiveText(
+                "Sports uses these sources to find game streams and replays. CloudStream extensions are also used by Search CloudStream on a game page.",
+                color = NuvioTheme.colors.TextSecondary, size = 13.sp, maxLines = 3
+            )
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                item(key = "cs-header") {
+                    LiveText(
+                        "CLOUDSTREAM EXTENSIONS",
+                        color = NuvioTheme.colors.TextSecondary, size = 11.sp, weight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                    )
+                }
+                if (providers.isEmpty()) item(key = "cs-empty") {
+                    LiveText("No enabled CloudStream extensions.", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                }
+                items(providers, key = { "cs-${it.id}" }) { provider ->
+                    SettingsToggleRow(
+                        title = provider.name,
+                        subtitle = "Search this extension for game streams",
+                        checked = provider.id !in settings.disabledSportsProviders,
+                        onToggle = {
+                            onUpdate { cur ->
+                                cur.copy(disabledSportsProviders = toggleProvider(cur.disabledSportsProviders, provider.id))
+                            }
+                        }
+                    )
+                }
+                item(key = "addon-header") {
+                    LiveText(
+                        "NUVIO ADDONS",
+                        color = NuvioTheme.colors.TextSecondary, size = 11.sp, weight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                    )
+                }
+                if (addons.isEmpty()) item(key = "addon-empty") {
+                    LiveText("No enabled addons.", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                }
+                items(addons, key = { "addon-${it.id}" }) { addon ->
+                    SettingsToggleRow(
+                        title = addon.displayName,
+                        subtitle = "Live games, replays and highlights",
+                        checked = addon.id !in settings.disabledSportsAddons,
+                        onToggle = {
+                            onUpdate { cur ->
+                                cur.copy(disabledSportsAddons = toggleProvider(cur.disabledSportsAddons, addon.id))
+                            }
+                        }
+                    )
+                }
+            }
+            Button(onClick = onDismiss) { Text("Close") }
+        }
+    }
+}
+
+private fun toggleProvider(current: Set<String>, id: String): Set<String> =
+    if (id in current) current - id else current + id
 
 @Composable
 private fun LeaguesDialog(s: SportsSettings, onToggle: (League) -> Unit, onDismiss: () -> Unit) {

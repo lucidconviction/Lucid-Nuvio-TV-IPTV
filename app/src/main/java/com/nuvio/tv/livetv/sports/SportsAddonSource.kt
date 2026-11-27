@@ -60,8 +60,10 @@ class SportsAddonSource @Inject constructor(
 
     private val cache = ConcurrentHashMap<String, Cached>()
 
-    suspend fun find(ev: SportsEvent): Found = coroutineScope {
-        val installed = runCatching { addons.getInstalledAddons().first().enabledAddons() }.getOrDefault(emptyList())
+    suspend fun find(ev: SportsEvent, disabledAddons: Set<String> = emptySet()): Found = coroutineScope {
+        val installed = runCatching { addons.getInstalledAddons().first().enabledAddons() }
+            .getOrDefault(emptyList())
+            .filterNot { it.id in disabledAddons }
         val parts = installed.map { a -> async { runCatching { forAddon(a, ev) }.getOrDefault(NO_RESULT) } }.map { it.await() }
         val vodAddons = installed.filter { a -> a.catalogs.any { isVodCatalog(it) && usableForVod(it) } }
             .map { it.displayName }.distinct()

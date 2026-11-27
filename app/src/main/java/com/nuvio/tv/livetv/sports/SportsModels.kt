@@ -207,7 +207,11 @@ data class SportsSettings(
     /** "Channels from" on the game page ("" = all; see [ChannelRegions]). */
     val channelRegion: String = "",
     /** League Networks: a network's id (see [LeagueNetworks]) -> the channel you picked for it. */
-    val leagueNetworkChannels: Map<String, String> = emptyMap()
+    val leagueNetworkChannels: Map<String, String> = emptyMap(),
+    /** Nuvio addon ids Sports may not use for live games or replays. Empty = all enabled addons. */
+    val disabledSportsAddons: Set<String> = emptySet(),
+    /** CloudStream extension ids Sports may not search for game streams. Empty = all extensions. */
+    val disabledSportsProviders: Set<String> = emptySet(),
 ) {
     fun toJson(): String = JSONObject()
         .put("showInSidebar", showInSidebar)
@@ -232,6 +236,8 @@ data class SportsSettings(
         .put("preferredGroups", JSONArray(preferredGroups.toList()))
         .put("channelRegion", channelRegion)
         .put("leagueNetworkChannels", JSONObject(leagueNetworkChannels as Map<*, *>))
+        .put("disabledSportsAddons", JSONArray(disabledSportsAddons.toList()))
+        .put("disabledSportsProviders", JSONArray(disabledSportsProviders.toList()))
         .toString()
 
     companion object {
@@ -263,7 +269,9 @@ data class SportsSettings(
                     leagueChannels = o.optJSONObject("leagueChannels").stringMap(),
                     preferredGroups = o.optJSONArray("preferredGroups").strings().toSet(),
                     channelRegion = o.optString("channelRegion", ""),
-                    leagueNetworkChannels = o.optJSONObject("leagueNetworkChannels").stringMap()
+                    leagueNetworkChannels = o.optJSONObject("leagueNetworkChannels").stringMap(),
+                    disabledSportsAddons = o.optJSONArray("disabledSportsAddons").strings().toSet(),
+                    disabledSportsProviders = o.optJSONArray("disabledSportsProviders").strings().toSet()
                 )
             }.getOrDefault(SportsSettings())
         }

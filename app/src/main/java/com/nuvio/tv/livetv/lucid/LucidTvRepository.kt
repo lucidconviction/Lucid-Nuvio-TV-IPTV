@@ -481,6 +481,8 @@ class LucidTvRepository @Inject constructor(
         relayKeys = relayKeys,
         relaySegmentMinutes = relaySegmentMinutes.coerceAtLeast(1),
         manualItems = manualItems,
+        pluginScraperId = pluginScraperId,
+        pluginScraperName = pluginScraperName,
         auto = false,
     )
 

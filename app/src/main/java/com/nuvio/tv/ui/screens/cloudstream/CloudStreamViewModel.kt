@@ -173,7 +173,7 @@ class CloudStreamViewModel @Inject constructor(
     }
 
     /** Search every enabled extension (used by Sports and the global CloudStream search). */
-    fun searchAll(query: String) {
+    fun searchAll(query: String, disabledProviderIds: Set<String> = emptySet()) {
         val trimmed = query.trim()
         _state.value = _state.value.copy(
             globalQuery = trimmed,
@@ -185,6 +185,10 @@ class CloudStreamViewModel @Inject constructor(
         viewModelScope.launch {
             val providers = _state.value.providers.ifEmpty {
                 runCatching { bridge.extensions() }.getOrDefault(emptyList()).sortedBy { it.name.lowercase() }
+            }.filterNot { it.id in disabledProviderIds }
+            if (providers.isEmpty()) {
+                _state.value = _state.value.copy(globalSearching = false, globalResults = emptyList())
+                return@launch
             }
             val results = coroutineScope {
                 providers.map { provider ->

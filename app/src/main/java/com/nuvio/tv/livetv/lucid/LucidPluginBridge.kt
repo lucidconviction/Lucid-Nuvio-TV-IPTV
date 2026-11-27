@@ -50,6 +50,20 @@ data class LucidPluginDetail(
     val episodes: List<LucidPluginItem> = emptyList(),
     val year: Int? = null,
     val apiIndex: Int = 0,
+    val backdrop: String? = null,
+    val rating: String? = null,
+    val genres: List<String> = emptyList(),
+    val actors: List<LucidPluginActor> = emptyList(),
+    val trailerUrl: String? = null,
+    val trailerHeaders: Map<String, String> = emptyMap(),
+    val durationMinutes: Int? = null,
+    val status: String? = null,
+    val recommendations: List<LucidPluginItem> = emptyList(),
+)
+
+data class LucidPluginActor(
+    val name: String,
+    val image: String? = null,
 )
 
 /** A playable link resolved by a CloudStream extension. */

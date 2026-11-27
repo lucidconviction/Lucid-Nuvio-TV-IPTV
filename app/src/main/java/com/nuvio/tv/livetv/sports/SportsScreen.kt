@@ -166,7 +166,7 @@ fun SportsScreen(
     /** The YouTube replays and highlights page. */
     onOpenReplays: () -> Unit = {},
     /** Search the enabled CloudStream extensions for this game. */
-    onSearchCloudStream: (SportsEvent) -> Unit = {},
+    onSearchCloudStream: (SportsEvent, Set<String>) -> Unit = { _, _ -> },
     viewModel: SportsViewModel = hiltViewModel()
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -376,7 +376,9 @@ fun SportsScreen(
                 onTable = { tableReq = TableRequest(opened.leagueId, opened.sides.map { it.team.id }.toSet()) },
                 onOpenGame = { ev -> openId = ev.id },
                 onQuickWatch = ::quickWatch,
-                onSearchCloudStream = onSearchCloudStream,
+                onSearchCloudStream = { event ->
+                    onSearchCloudStream(event, settings.disabledSportsProviders)
+                },
                 backLabel = fromLabel ?: "Sports",
                 onClose = {
                     val back = fromRoute

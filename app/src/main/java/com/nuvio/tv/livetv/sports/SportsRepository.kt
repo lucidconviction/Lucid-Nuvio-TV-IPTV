@@ -383,7 +383,9 @@ class SportsRepository @Inject constructor(
         addonJobs[ev.id] = scope.launch {
             var round = 0
             while (kotlinx.coroutines.currentCoroutineContext().isActive) {
-                val found = runCatching { addonSource.find(ev) }.getOrNull()
+                val found = runCatching {
+                    addonSource.find(ev, settings.value.disabledSportsAddons)
+                }.getOrNull()
                 if (found != null) {
                     _addonLive.update { it + (ev.id to found.live) }
                     _addonVod.update { it + (ev.id to found.vod) }

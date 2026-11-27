@@ -61,6 +61,7 @@ import com.nuvio.tv.domain.model.CatalogDescriptor
 import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
+import com.nuvio.tv.livetv.lucid.LucidPluginExtension
 import com.nuvio.tv.livetv.lucid.LucidStoredSpec
 import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -82,6 +83,7 @@ private enum class StudioMode {
     LIVE_ADDON,
     LIVE_CATALOG,
     LIVE_ITEM,
+    PLUGIN_EXTENSION,
     RELAY_GROUP,
     EDIT,
 }
@@ -118,6 +120,9 @@ fun LucidTvStudioScreen(
     var liveItems by remember { mutableStateOf<List<MetaPreview>>(emptyList()) }
     var liveLoading by remember { mutableStateOf(false) }
     var liveError by remember { mutableStateOf<String?>(null) }
+    var pluginExtensions by remember { mutableStateOf<List<LucidPluginExtension>>(emptyList()) }
+    var pluginLoading by remember { mutableStateOf(false) }
+    var pluginError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var shareOpen by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
@@ -139,7 +144,7 @@ fun LucidTvStudioScreen(
     LaunchedEffect(
         mode, specs.size, addons.size, relayGroups.size, addonPick,
         seriesItems.size, seriesLoading, manualItems.size, manualLoading,
-        liveItems.size, liveLoading,
+        liveItems.size, liveLoading, pluginExtensions.size, pluginLoading,
     ) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
@@ -152,6 +157,7 @@ fun LucidTvStudioScreen(
             StudioMode.MANUAL_ITEM -> { mode = StudioMode.CATALOG_CATALOG; manualItems = emptyList(); manualSelected = emptySet() }
             StudioMode.LIVE_ITEM -> { mode = StudioMode.LIVE_CATALOG; liveItems = emptyList() }
             StudioMode.LIVE_CATALOG -> mode = StudioMode.LIVE_ADDON
+            StudioMode.PLUGIN_EXTENSION -> mode = StudioMode.ADD_MENU
             StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> {
                 mode = if (mode == StudioMode.CATALOG_CATALOG) StudioMode.CATALOG_ADDON else StudioMode.SERIES_ADDON
             }
@@ -159,6 +165,20 @@ fun LucidTvStudioScreen(
             else -> mode = StudioMode.LIST
         }
     }
+    LaunchedEffect(mode) {
+        if (mode == StudioMode.PLUGIN_EXTENSION &&
+            pluginExtensions.isEmpty() && !pluginLoading
+        ) {
+            pluginLoading = true
+            pluginError = null
+            pluginExtensions = viewModel.pluginExtensions()
+            pluginLoading = false
+            if (pluginExtensions.isEmpty()) {
+                pluginError = "No enabled CloudStream extensions were found. Install and enable one in Settings → Plugins."
+            }
+        }
+    }
+
     BackHandler { stepBack() }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 18.dp)) {
@@ -278,6 +298,16 @@ fun LucidTvStudioScreen(
                             .onFailure { liveError = it.message ?: "The catalog couldn't be loaded." }
                         liveLoading = false
                     }
+                },
+            )
+            StudioMode.PLUGIN_EXTENSION -> PluginExtensionList(
+                extensions = pluginExtensions,
+                loading = pluginLoading,
+                error = pluginError,
+                firstFocus = firstFocus,
+                onPick = { extension ->
+                    draft = viewModel.newPluginSpec(extension)
+                    mode = StudioMode.EDIT
                 },
             )
             StudioMode.LIVE_ITEM -> SeriesItemList(
@@ -511,6 +541,7 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
         Triple("Series marathon · 24/7", "One series, every episode in order, using the episode runtimes.", LucidChannelKind.SERIES_LOOP to StudioMode.SERIES_ADDON),
         Triple("Movie collection · 24/7", "Pick films from a catalog into a hand-made 24/7 marathon.", LucidChannelKind.MANUAL_LOOP to StudioMode.CATALOG_ADDON),
         Triple("Addon live channel", "One channel from an addon live, TV or sport catalog. Its stream is resolved when tuned.", LucidChannelKind.ADDON_LIVE to StudioMode.LIVE_ADDON),
+        Triple("CloudStream extension · 24/7", "Use an enabled CloudStream extension's latest movies as a continuous channel.", LucidChannelKind.PLUGIN_ROTATE to StudioMode.PLUGIN_EXTENSION),
         Triple("Live channel relay · 24/7", "Relay an existing IPTV group as a Lucid TV channel and switch at segment boundaries.", LucidChannelKind.RELAY_LOOP to StudioMode.RELAY_GROUP),
     )
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -530,6 +561,56 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
                 Column(Modifier.weight(1f)) {
                     Text(title, fontSize = 15.sp)
                     Text(subtitle, style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginExtensionList(
+    extensions: List<LucidPluginExtension>,
+    loading: Boolean,
+    error: String?,
+    firstFocus: FocusRequester,
+    onPick: (LucidPluginExtension) -> Unit,
+) {
+    when {
+        loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text("Loading CloudStream extensions…", color = NuvioTheme.colors.TextSecondary)
+        }
+        error != null -> Text(error, color = NuvioTheme.colors.TextSecondary)
+        extensions.isEmpty() -> Text("No CloudStream extensions are enabled.", color = NuvioTheme.colors.TextSecondary)
+        else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsIndexed(extensions, key = { _, it -> it.id }) { index, extension ->
+                Button(
+                    onClick = { onPick(extension) },
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    colors = ButtonDefaults.colors(
+                        containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),
+                        contentColor = NuvioTheme.colors.TextPrimary,
+                        focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                        focusedContentColor = NuvioTheme.colors.TextPrimary,
+                    ),
+                ) {
+                    if (!extension.logo.isNullOrBlank()) {
+                        AsyncImage(
+                            model = extension.logo,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.size(34.dp).padding(end = 10.dp),
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(extension.name, fontSize = 14.sp)
+                        Text(
+                            "CloudStream extension · latest movies, 24/7",
+                            style = NuvioTheme.textStyles.metadata,
+                            color = NuvioTheme.colors.TextSecondary,
+                        )
+                    }
                 }
             }
         }

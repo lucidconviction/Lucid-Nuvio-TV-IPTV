@@ -42,6 +42,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
@@ -141,6 +143,7 @@ fun PluginScreenContent(
     var repoUrl by remember { mutableStateOf("") }
     var repoPendingRemoval by remember { mutableStateOf<PluginRepository?>(null) }
     var showRepoIndex by remember { mutableStateOf(false) }
+    var expandedRepos by remember { mutableStateOf<Set<String>>(emptySet()) }
     var repoIndexEntries by remember { mutableStateOf<List<PluginRepoIndexEntry>>(emptyList()) }
     var repoIndexLoading by remember { mutableStateOf(false) }
     var repoIndexError by remember { mutableStateOf<String?>(null) }
@@ -360,60 +363,43 @@ fun PluginScreenContent(
                 }
             }
 
-            items(uiState.repositories, key = { it.id }) { repo ->
+            uiState.repositories.forEach { repo ->
                 val repoScrapers = uiState.scrapers.filter { it.repositoryId == repo.id }
-                RepositoryCard(
-                    repository = repo,
-                    repoScrapers = repoScrapers,
-                    onRefresh = { viewModel.onEvent(PluginUiEvent.RefreshRepository(repo.id)) },
-                    onRemove = { repoPendingRemoval = repo },
-                    onToggleAll = { enabled ->
-                        viewModel.onEvent(PluginUiEvent.ToggleAllScrapersForRepo(repo.id, enabled))
-                    },
-                    isLoading = uiState.isLoading,
-                    isReadOnly = viewModel.isReadOnly
-                )
-            }
-
-            // Scrapers section
-            if (uiState.scrapers.isNotEmpty()) {
-                item {
-                    Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
-                    Text(
-                        text = stringResource(R.string.plugin_providers_section, uiState.scrapers.size),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = NuvioTheme.colors.TextPrimary
-                    )
-                }
-
-                items(uiState.scrapers, key = { it.id }) { scraper ->
-                    val repo = uiState.repositories.find { it.id == scraper.repositoryId }
-                    val canConfigure = uiState.pluginsEnabled && !viewModel.isReadOnly && scraper.enabled &&
-                        scraper.type == com.nuvio.tv.domain.model.RepositoryType.EXTERNAL_DEX &&
-                        repo?.enabled == true
-                    val activity = androidx.activity.compose.LocalActivity.current
-                    var hasSettings by remember(scraper, repo?.lastUpdated, canConfigure) {
-                        mutableStateOf(false)
+                item(key = "repository-${repo.id}") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        RepositoryCard(
+                            repository = repo,
+                            repoScrapers = repoScrapers,
+                            expanded = repo.id in expandedRepos,
+                            onToggleExpand = {
+                                expandedRepos = if (repo.id in expandedRepos) {
+                                    expandedRepos - repo.id
+                                } else {
+                                    expandedRepos + repo.id
+                                }
+                            },
+                            onRefresh = { viewModel.onEvent(PluginUiEvent.RefreshRepository(repo.id)) },
+                            onRemove = { repoPendingRemoval = repo },
+                            onToggleAll = { enabled ->
+                                viewModel.onEvent(PluginUiEvent.ToggleAllScrapersForRepo(repo.id, enabled))
+                            },
+                            isLoading = uiState.isLoading,
+                            isReadOnly = viewModel.isReadOnly,
+                        )
+                        if (repo.id in expandedRepos) {
+                            repoScrapers.forEach { scraper ->
+                                PluginScraperItem(
+                                    scraper = scraper,
+                                    repo = repo,
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                )
+                            }
+                        }
                     }
-                    LaunchedEffect(scraper, repo?.lastUpdated, canConfigure) {
-                        if (canConfigure) hasSettings = viewModel.hasExtensionSettings(scraper.id)
-                    }
-                    ScraperCard(
-                        scraper = scraper,
-                        onSettings = if (hasSettings && activity != null) {
-                            { viewModel.openExtensionSettings(activity, scraper.id) }
-                        } else null,
-                        onToggle = { enabled ->
-                            viewModel.onEvent(PluginUiEvent.ToggleScraper(scraper.id, enabled))
-                        },
-                        onTest = { viewModel.onEvent(PluginUiEvent.TestScraper(scraper.id)) },
-                        isTesting = uiState.isTesting && uiState.testScraperId == scraper.id,
-                        testResults = if (uiState.testScraperId == scraper.id) uiState.testResults else null,
-                        testDiagnostics = if (uiState.testScraperId == scraper.id) uiState.testDiagnostics else null,
-                        isReadOnly = viewModel.isReadOnly
-                    )
                 }
             }
+
             }
         }
 
@@ -1321,9 +1307,42 @@ private fun ConfirmScraperEnableDialog(
 }
 
 @Composable
+private fun PluginScraperItem(
+    scraper: ScraperInfo,
+    repo: PluginRepository,
+    uiState: PluginUiState,
+    viewModel: PluginViewModel,
+) {
+    val canConfigure = uiState.pluginsEnabled && !viewModel.isReadOnly && scraper.enabled &&
+        scraper.type == com.nuvio.tv.domain.model.RepositoryType.EXTERNAL_DEX &&
+        repo.enabled == true
+    val activity = androidx.activity.compose.LocalActivity.current
+    var hasSettings by remember(scraper, repo.lastUpdated, canConfigure) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(scraper, repo.lastUpdated, canConfigure) {
+        if (canConfigure) hasSettings = viewModel.hasExtensionSettings(scraper.id)
+    }
+    ScraperCard(
+        scraper = scraper,
+        onSettings = if (hasSettings && activity != null) {
+            { viewModel.openExtensionSettings(activity, scraper.id) }
+        } else null,
+        onToggle = { enabled -> viewModel.onEvent(PluginUiEvent.ToggleScraper(scraper.id, enabled)) },
+        onTest = { viewModel.onEvent(PluginUiEvent.TestScraper(scraper.id)) },
+        isTesting = uiState.isTesting && uiState.testScraperId == scraper.id,
+        testResults = if (uiState.testScraperId == scraper.id) uiState.testResults else null,
+        testDiagnostics = if (uiState.testScraperId == scraper.id) uiState.testDiagnostics else null,
+        isReadOnly = viewModel.isReadOnly,
+    )
+}
+
+@Composable
 private fun RepositoryCard(
     repository: PluginRepository,
     repoScrapers: List<ScraperInfo>,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
     onToggleAll: (Boolean) -> Unit,
@@ -1393,6 +1412,26 @@ private fun RepositoryCard(
                 horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (repoScrapers.isNotEmpty()) {
+                    Button(
+                        onClick = onToggleExpand,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp),
+                        colors = ButtonDefaults.colors(
+                            containerColor = NuvioTheme.colors.Surface,
+                            contentColor = NuvioTheme.colors.TextPrimary,
+                            focusedContainerColor = NuvioTheme.colors.FocusBackground,
+                            focusedContentColor = NuvioTheme.colors.TextPrimary,
+                        ),
+                    ) {
+                        Icon(
+                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (expanded) "Hide" else "Extensions", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 if (repoScrapers.isNotEmpty()) {
                     Surface(
                         onClick = { onToggleAll(!anyEnabled) },

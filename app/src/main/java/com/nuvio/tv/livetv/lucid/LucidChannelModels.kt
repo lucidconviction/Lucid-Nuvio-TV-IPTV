@@ -150,6 +150,9 @@ data class LucidStoredSpec(
     val relayKeys: List<String> = emptyList(),
     val relaySegmentMinutes: Int = 30,
     val manualItems: List<LucidStoredItem> = emptyList(),
+    /** CloudStream extension id/name for a PLUGIN_ROTATE channel. */
+    val pluginScraperId: String? = null,
+    val pluginScraperName: String? = null,
     val createdAtMs: Long = 0L,
     val updatedAtMs: Long = 0L,
 ) {

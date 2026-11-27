@@ -7,6 +7,11 @@ import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.model.EpgProgram
 import com.nuvio.tv.livetv.model.LiveChannel
 import com.nuvio.tv.livetv.player.LiveTvPlaybackController
+import com.nuvio.tv.domain.model.Addon
+import com.nuvio.tv.domain.model.enabledAddons
+import com.nuvio.tv.domain.repository.AddonRepository
+import com.nuvio.tv.livetv.lucid.LucidPluginBridge
+import com.nuvio.tv.livetv.lucid.LucidPluginExtension
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -27,7 +32,9 @@ class SportsViewModel @Inject constructor(
     private val playback: LiveTvPlaybackController,
     private val livePrefs: LiveTvPreferences,
     liveRepo: LiveTvRepository,
-    private val recordings: com.nuvio.tv.livetv.record.LiveTvRecordingScheduler
+    private val recordings: com.nuvio.tv.livetv.record.LiveTvRecordingScheduler,
+    addonRepository: AddonRepository,
+    pluginBridge: LucidPluginBridge,
 ) : ViewModel() {
     val settings = repo.settings
     val follows = repo.follows
@@ -78,6 +85,20 @@ class SportsViewModel @Inject constructor(
     val recordPadding: StateFlow<Pair<Int, Int>> = livePrefs.settings.map { it.recordPreMinutes to it.recordPostMinutes }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, 2 to 5)
+
+    /** Enabled Nuvio addons that Sports may use for live games and replays. */
+    val sportsAddons: StateFlow<List<Addon>> = addonRepository.getInstalledAddons()
+        .map { it.enabledAddons() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _cloudStreamProviders = MutableStateFlow<List<LucidPluginExtension>>(emptyList())
+    val cloudStreamProviders: StateFlow<List<LucidPluginExtension>> = _cloudStreamProviders
+    init {
+        viewModelScope.launch {
+            _cloudStreamProviders.value = runCatching { pluginBridge.extensions() }.getOrDefault(emptyList())
+                .sortedBy { it.name.lowercase() }
+        }
+    }
 
     init {
         viewModelScope.launch { recordings.schedules.collect { SportsRecordings.update(it) } }

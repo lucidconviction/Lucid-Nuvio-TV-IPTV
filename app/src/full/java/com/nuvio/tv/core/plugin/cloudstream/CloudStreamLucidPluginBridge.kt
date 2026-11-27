@@ -12,6 +12,7 @@ import com.nuvio.tv.core.plugin.PluginManager
 import com.nuvio.tv.core.runtime.PluginRuntimeHooks
 import com.nuvio.tv.domain.model.RepositoryType
 import com.nuvio.tv.livetv.lucid.LucidPluginBridge
+import com.nuvio.tv.livetv.lucid.LucidPluginActor
 import com.nuvio.tv.livetv.lucid.LucidPluginDetail
 import com.nuvio.tv.livetv.lucid.LucidPluginExtension
 import com.nuvio.tv.livetv.lucid.LucidPluginItem
@@ -227,6 +228,15 @@ class CloudStreamLucidPluginBridge @Inject constructor(
                     episodes = loaded.episodes.map { it.toLucidItem(apiIndex) },
                     year = loaded.year,
                     apiIndex = apiIndex,
+                    backdrop = loaded.backgroundPosterUrl,
+                    rating = loaded.score?.toString()?.takeIf { it.isNotBlank() && it != "0.0" },
+                    genres = loaded.tags.orEmpty(),
+                    actors = loaded.actors.orEmpty().toLucidActors(),
+                    trailerUrl = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.extractorUrl,
+                    trailerHeaders = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.headers.orEmpty(),
+                    durationMinutes = loaded.duration,
+                    status = loaded.showStatus?.name,
+                    recommendations = loaded.recommendations.orEmpty().mapNotNull { it.toLucidItem(apiIndex) },
                 )
                 is AnimeLoadResponse -> LucidPluginDetail(
                     name = loaded.name,
@@ -237,6 +247,15 @@ class CloudStreamLucidPluginBridge @Inject constructor(
                     episodes = loaded.episodes.values.flatten().map { it.toLucidItem(apiIndex) },
                     year = loaded.year,
                     apiIndex = apiIndex,
+                    backdrop = loaded.backgroundPosterUrl,
+                    rating = loaded.score?.toString()?.takeIf { it.isNotBlank() && it != "0.0" },
+                    genres = loaded.tags.orEmpty(),
+                    actors = loaded.actors.orEmpty().toLucidActors(),
+                    trailerUrl = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.extractorUrl,
+                    trailerHeaders = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.headers.orEmpty(),
+                    durationMinutes = loaded.duration,
+                    status = loaded.showStatus?.name,
+                    recommendations = loaded.recommendations.orEmpty().mapNotNull { it.toLucidItem(apiIndex) },
                 )
                 is MovieLoadResponse -> LucidPluginDetail(
                     name = loaded.name,
@@ -246,6 +265,14 @@ class CloudStreamLucidPluginBridge @Inject constructor(
                     data = loaded.dataUrl,
                     year = loaded.year,
                     apiIndex = apiIndex,
+                    backdrop = loaded.backgroundPosterUrl,
+                    rating = loaded.score?.toString()?.takeIf { it.isNotBlank() && it != "0.0" },
+                    genres = loaded.tags.orEmpty(),
+                    actors = loaded.actors.orEmpty().toLucidActors(),
+                    trailerUrl = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.extractorUrl,
+                    trailerHeaders = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.headers.orEmpty(),
+                    durationMinutes = loaded.duration,
+                    recommendations = loaded.recommendations.orEmpty().mapNotNull { it.toLucidItem(apiIndex) },
                 )
                 else -> null
             }
@@ -317,6 +344,12 @@ class CloudStreamLucidPluginBridge @Inject constructor(
             apiIndex = apiIndex,
         )
     }
+
+    private fun List<com.lagradost.cloudstream3.ActorData>.toLucidActors(): List<LucidPluginActor> =
+        mapNotNull { data ->
+            val name = data.actor?.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            LucidPluginActor(name = name, image = data.actor?.image)
+        }
 
     private fun Episode.toLucidItem(apiIndex: Int): LucidPluginItem = LucidPluginItem(
         name = name.orEmpty().ifBlank { "Episode ${episode ?: ""}" },

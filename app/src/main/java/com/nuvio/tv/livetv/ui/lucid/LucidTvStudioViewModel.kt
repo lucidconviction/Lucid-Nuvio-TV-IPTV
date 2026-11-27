@@ -13,6 +13,8 @@ import com.nuvio.tv.livetv.data.LiveTvPreferences
 import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.lucid.LucidChannelKind
 import com.nuvio.tv.livetv.lucid.LucidOrder
+import com.nuvio.tv.livetv.lucid.LucidPluginBridge
+import com.nuvio.tv.livetv.lucid.LucidPluginExtension
 import com.nuvio.tv.livetv.lucid.LucidSpecCodec
 import com.nuvio.tv.livetv.lucid.LucidStoredItem
 import com.nuvio.tv.livetv.lucid.LucidStoredSpec
@@ -42,6 +44,7 @@ class LucidTvStudioViewModel @Inject constructor(
     private val prefs: LiveTvPreferences,
     private val addonRepository: AddonRepository,
     private val catalogRepository: CatalogRepository,
+    private val pluginBridge: LucidPluginBridge,
     liveTvRepository: LiveTvRepository,
     val lucid: LucidTvRepository,
 ) : ViewModel() {
@@ -136,6 +139,35 @@ class LucidTvStudioViewModel @Inject constructor(
             order = if (series) LucidOrder.AIR else LucidOrder.SHUFFLE,
             manualItems = manualItems,
             anchorMs = now,
+            createdAtMs = now,
+            updatedAtMs = now,
+        )
+    }
+
+    suspend fun pluginExtensions(): List<LucidPluginExtension> =
+        withContext(Dispatchers.IO) { runCatching { pluginBridge.extensions() }.getOrDefault(emptyList()) }
+            .sortedBy { it.name.lowercase() }
+
+    fun newPluginSpec(extension: LucidPluginExtension): LucidStoredSpec {
+        val now = System.currentTimeMillis()
+        return LucidStoredSpec(
+            id = "vc_" + UUID.randomUUID().toString().replace("-", "").take(12),
+            name = extension.name,
+            kind = LucidChannelKind.PLUGIN_ROTATE,
+            group = "CloudStream",
+            addonName = "CloudStream",
+            addonBaseUrl = "",
+            catalogName = "CloudStream",
+            contentType = "movie",
+            poster = extension.logo,
+            description = "24/7 from the ${extension.name} CloudStream extension",
+            slotMinutes = 90,
+            maxStartPercent = -1,
+            jitter = true,
+            order = LucidOrder.SHUFFLE,
+            anchorMs = now,
+            pluginScraperId = extension.id,
+            pluginScraperName = extension.name,
             createdAtMs = now,
             updatedAtMs = now,
         )
