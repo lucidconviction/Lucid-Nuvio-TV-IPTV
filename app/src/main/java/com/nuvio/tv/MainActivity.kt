@@ -1654,6 +1654,9 @@ open class MainActivity : ComponentActivity() {
             }
             return true
         }
+        // The TV browser needs the D-pad before Chromium does. The router is only
+        // installed while the browser screen is visible; every other screen is unaffected.
+        if (com.nuvio.tv.ui.screens.browser.TvBrowserKeyRouter.dispatch(event)) return true
         return super.dispatchKeyEvent(event)
     }
 

@@ -3,6 +3,9 @@ package com.nuvio.tv.ui.screens.browser
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.view.InputDevice
+import android.view.KeyEvent as AndroidKeyEvent
+import android.view.MotionEvent
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -68,6 +71,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +94,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -104,9 +109,12 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.tv.material3.Text
+import coil3.SingletonImageLoader
 import com.nuvio.tv.ui.components.nuvioFocusRing
 import com.nuvio.tv.ui.screens.webapps.TvMarketApp
 import com.nuvio.tv.ui.screens.webapps.TvSavedSite
@@ -214,7 +222,7 @@ private fun mediaScore(
 
 /** Held D-pad directions and the 60 fps pointer-movement coroutine. */
 private class BrowserPointerState {
-    val directions = LinkedHashSet<Key>()
+    val directions = LinkedHashSet<Int>()
     var job: Job? = null
     var startedAt: Long = 0L
     var lastFrameAt: Long = 0L
@@ -239,6 +247,7 @@ fun TvBrowserScreen(
     onPlayInPlayer: (url: String, title: String, headers: Map<String, String>) -> Unit,
 ) {
     val context = LocalContext.current
+    val viewHost = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -270,6 +279,8 @@ fun TvBrowserScreen(
     var centerHeld by remember { mutableStateOf(false) }
     var centerMoved by remember { mutableStateOf(false) }
     val pointerState = remember { BrowserPointerState() }
+    var edgeScrollStep by remember { mutableIntStateOf(0) }
+    var edgeScrollJob by remember { mutableStateOf<Job?>(null) }
     var pageLoadId by remember { mutableIntStateOf(0) }
     var autoPlayHandledLoadId by remember { mutableIntStateOf(-1) }
     var appResumed by remember { mutableStateOf(true) }
@@ -383,18 +394,84 @@ fun TvBrowserScreen(
         pointer = Offset(dpX.coerceIn(0f, maxX), dpY.coerceIn(0f, maxY))
     }
 
-    fun scrollPage(deltaPx: Int) {
+    fun dispatchWheel(up: Boolean, xDp: Float = pointer.x, yDp: Float = pointer.y) {
         val view = webView ?: return
-        view.evaluateJavascript(
-            """
-            (function(){
-              var d=$deltaPx;
-              try { window.scrollBy({top:d,left:0,behavior:'smooth'}); }
-              catch(err) { window.scrollBy(0,d); }
-            })()
-            """.trimIndent(),
-            null,
+        val now = SystemClock.uptimeMillis()
+        val properties = MotionEvent.PointerProperties().apply {
+            id = 0
+            toolType = MotionEvent.TOOL_TYPE_MOUSE
+        }
+        val coords = MotionEvent.PointerCoords().apply {
+            x = (xDp * density.density).coerceIn(0f, view.width.toFloat())
+            y = (yDp * density.density).coerceIn(0f, view.height.toFloat())
+            setAxisValue(MotionEvent.AXIS_VSCROLL, if (up) 1f else -1f)
+        }
+        val event = MotionEvent.obtain(
+            now,
+            now,
+            MotionEvent.ACTION_SCROLL,
+            1,
+            arrayOf(properties),
+            arrayOf(coords),
+            0,
+            0,
+            1f,
+            1f,
+            0,
+            0,
+            InputDevice.SOURCE_MOUSE,
+            0,
         )
+        runCatching { view.dispatchGenericMotionEvent(event) }
+        event.recycle()
+    }
+
+    fun scrollByWheel(up: Boolean, ticks: Int = 6) {
+        if (webView == null) return
+        scope.launch {
+            repeat(ticks.coerceIn(1, 12)) {
+                dispatchWheel(up)
+                delay(28)
+            }
+        }
+    }
+
+    fun scrollPage(deltaPx: Int) {
+        if (deltaPx == 0) return
+        // WebView.scrollBy() is a no-op in current Chromium; real wheel events scroll
+        // the page and any inner scroll containers under the pointer.
+        val ticks = ((if (deltaPx < 0) -deltaPx else deltaPx) / 90).coerceIn(3, 10)
+        scrollByWheel(up = deltaPx < 0, ticks = ticks)
+    }
+
+    fun stopEdgeScroll() {
+        edgeScrollStep = 0
+        edgeScrollJob?.cancel()
+        edgeScrollJob = null
+    }
+
+    fun updateEdgeScroll() {
+        val height = configuration.screenHeightDp.toFloat()
+        val step = when {
+            pointer.y <= 80f -> -1
+            pointer.y >= height - 100f && pointer.y <= height - 56f -> 1
+            else -> 0
+        }
+        if (step == edgeScrollStep) return
+        edgeScrollStep = step
+        edgeScrollJob?.cancel()
+        edgeScrollJob = null
+        if (step != 0) {
+            edgeScrollJob = scope.launch {
+                while (true) {
+                    if (overlayOpen || centerHeld || pointerState.directions.isNotEmpty()) break
+                    dispatchWheel(up = step < 0)
+                    delay(70)
+                }
+                edgeScrollStep = 0
+                edgeScrollJob = null
+            }
+        }
     }
 
     fun clickAtPointer() {
@@ -461,10 +538,10 @@ fun TvBrowserScreen(
                 val speed = 300f + 1_100f * held
                 var dx = 0f
                 var dy = 0f
-                if (Key.DirectionLeft in pointerState.directions) dx -= 1f
-                if (Key.DirectionRight in pointerState.directions) dx += 1f
-                if (Key.DirectionUp in pointerState.directions) dy -= 1f
-                if (Key.DirectionDown in pointerState.directions) dy += 1f
+                if (AndroidKeyEvent.KEYCODE_DPAD_LEFT in pointerState.directions) dx -= 1f
+                if (AndroidKeyEvent.KEYCODE_DPAD_RIGHT in pointerState.directions) dx += 1f
+                if (AndroidKeyEvent.KEYCODE_DPAD_UP in pointerState.directions) dy -= 1f
+                if (AndroidKeyEvent.KEYCODE_DPAD_DOWN in pointerState.directions) dy += 1f
                 if (dx != 0f && dy != 0f) {
                     dx *= 0.7071f
                     dy *= 0.7071f
@@ -478,6 +555,7 @@ fun TvBrowserScreen(
                         lastHoverAt[0] = now
                         highlightAtPointer()
                     }
+                    updateEdgeScroll()
                 }
                 kotlinx.coroutines.delay(16)
             }
@@ -773,6 +851,7 @@ fun TvBrowserScreen(
     }
 
     fun openMenu() {
+        stopEdgeScroll()
         stopPointerMovement()
         menuOpen = true
         scope.launch { delay(100); runCatching { menuFocus.requestFocus() } }
@@ -789,8 +868,104 @@ fun TvBrowserScreen(
         redirectPrompt = null
         centerHeld = false
         centerMoved = false
+        stopEdgeScroll()
         stopPointerMovement()
         scope.launch { delay(100); runCatching { rootFocus.requestFocus() } }
+    }
+
+    fun isImeVisible(): Boolean {
+        val insets = ViewCompat.getRootWindowInsets(viewHost) ?: return false
+        return insets.isVisible(WindowInsetsCompat.Type.ime())
+    }
+
+    /**
+     * One key path for both MainActivity.dispatchKeyEvent (before Chromium sees the key)
+     * and the Compose fallback. Directions move the virtual mouse with acceleration;
+     * OK is click/long-press menu; MENU opens the menu. Menus get the D-pad untouched.
+     */
+    fun handleBrowserKey(event: AndroidKeyEvent): Boolean {
+        val down = event.action == AndroidKeyEvent.ACTION_DOWN
+        val centerKey = event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+            event.keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
+            event.keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+        val directionKey = event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT ||
+            event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT ||
+            event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP ||
+            event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN
+
+        // A long press owns the whole OK cycle. Repeats and the final key-up are consumed
+        // so the menu cannot activate from the same hold.
+        if (centerHeld && centerKey) {
+            if (!down) {
+                centerHeld = false
+                longPressJob?.cancel()
+                longPressJob = null
+                if (!longPressFired && !centerMoved) clickAtPointer()
+                longPressFired = false
+                centerMoved = false
+                updateEdgeScroll()
+            }
+            return true
+        }
+        if (overlayOpen) return false
+        if ((directionKey || centerKey) && isImeVisible()) return false
+
+        if (event.keyCode == AndroidKeyEvent.KEYCODE_MENU) {
+            if (down) openMenu()
+            return true
+        }
+        if (directionKey) {
+            if (down) {
+                if (centerHeld) {
+                    longPressJob?.cancel()
+                    longPressJob = null
+                    centerMoved = true
+                }
+                if (pointerState.directions.isEmpty()) {
+                    pointerState.startedAt = SystemClock.uptimeMillis()
+                }
+                pointerState.directions += event.keyCode
+                startPointerMovement()
+            } else {
+                pointerState.directions -= event.keyCode
+                if (pointerState.directions.isEmpty()) {
+                    pointerState.job?.cancel()
+                    pointerState.job = null
+                    updateEdgeScroll()
+                }
+            }
+            return true
+        }
+        if (centerKey) {
+            if (down) {
+                centerHeld = true
+                centerMoved = false
+                longPressJob?.cancel()
+                longPressFired = false
+                longPressJob = scope.launch {
+                    delay(LONG_PRESS_MS)
+                    longPressFired = true
+                    openMenu()
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    val latestKeyHandler = rememberUpdatedState<(AndroidKeyEvent) -> Boolean>(
+        { event -> handleBrowserKey(event) },
+    )
+    val routerHandler = remember {
+        { event: AndroidKeyEvent -> latestKeyHandler.value(event) }
+    }
+    DisposableEffect(Unit) {
+        TvBrowserKeyRouter.handler = routerHandler
+        onDispose {
+            if (TvBrowserKeyRouter.handler === routerHandler) {
+                TvBrowserKeyRouter.handler = null
+            }
+        }
     }
 
     BackHandler {
@@ -814,6 +989,9 @@ fun TvBrowserScreen(
 
     LaunchedEffect(Unit) {
         liveSettings.set(browserSettings)
+        // Posters from Home are not used while browsing. On a 2 GB TV freeing the
+        // bitmap cache here leaves crucial headroom for WebView and the codecs.
+        runCatching { SingletonImageLoader.get(context).memoryCache?.clear() }
         TvWebShield.load(context)
         delay(120)
         runCatching { rootFocus.requestFocus() }
@@ -900,69 +1078,8 @@ fun TvBrowserScreen(
             .focusRequester(rootFocus)
             .focusable()
             .onPreviewKeyEvent { event ->
-                val down = event.type == KeyEventType.KeyDown
-                val centerKey = event.key == Key.DirectionCenter || event.key == Key.Enter
-                // A long press owns the whole OK cycle. The repeats while holding and the
-                // final key-up are consumed here so the freshly focused menu button cannot
-                // activate from the same hold and close the menu straight away.
-                if (centerHeld && centerKey) {
-                    if (!down) {
-                        centerHeld = false
-                        longPressJob?.cancel()
-                        longPressJob = null
-                        if (!longPressFired && !centerMoved) clickAtPointer()
-                        longPressFired = false
-                        centerMoved = false
-                    }
-                    return@onPreviewKeyEvent true
-                }
-                if (overlayOpen) return@onPreviewKeyEvent false
-                val directionKey = event.key in listOf(
-                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown,
-                )
-                when {
-                    directionKey -> {
-                        if (down) {
-                            if (centerHeld) {
-                                // Moving while OK is held cancels the menu timer: hold + move
-                                // is a drag gesture, not a request for the menu.
-                                longPressJob?.cancel()
-                                longPressJob = null
-                                centerMoved = true
-                            }
-                            if (pointerState.directions.isEmpty()) {
-                                pointerState.startedAt = SystemClock.uptimeMillis()
-                            }
-                            pointerState.directions += event.key
-                            startPointerMovement()
-                        } else {
-                            pointerState.directions -= event.key
-                            if (pointerState.directions.isEmpty()) {
-                                pointerState.job?.cancel()
-                                pointerState.job = null
-                            }
-                        }
-                        true
-                    }
-                    down && centerKey -> {
-                        centerHeld = true
-                        centerMoved = false
-                        if (longPressJob?.isActive != true) {
-                            longPressFired = false
-                            longPressJob = scope.launch {
-                                delay(LONG_PRESS_MS)
-                                longPressFired = true
-                                openMenu()
-                            }
-                        }
-                        true
-                    }
-                    down && event.key == Key.Menu -> {
-                        openMenu()
-                        true
-                    }
-                    else -> false
-                }
+                // Fallback for the frames before the Activity router is installed.
+                handleBrowserKey(event.nativeKeyEvent)
             },
     ) {
         AndroidView(
@@ -1119,8 +1236,15 @@ fun TvBrowserScreen(
                 if (webView !== view) webView = view
             },
             onRelease = { view ->
-                view.stopLoading()
-                view.destroy()
+                // Free the page, back/forward snapshots and WebView caches before the
+                // next visit. On a 2 GB TV, repeated browser entries otherwise leave
+                // hundreds of MB behind and the OS kills the app with LOW_MEMORY.
+                runCatching { view.stopLoading() }
+                runCatching { view.loadUrl("about:blank") }
+                runCatching { view.clearHistory() }
+                runCatching { view.clearCache(true) }
+                runCatching { view.freeMemory() }
+                runCatching { view.destroy() }
                 if (webView === view) webView = null
             },
             modifier = Modifier.fillMaxSize(),
@@ -1159,7 +1283,7 @@ fun TvBrowserScreen(
                 if (browserSettings.adBlockEnabled && blockedCount > 0) {
                     "Shield $blockedCount"
                 } else {
-                    "Hold OK for menu"
+                    "Hold OK: menu · edges scroll"
                 },
                 color = tokens.TextTertiary,
                 fontSize = 10.sp,
@@ -1191,6 +1315,7 @@ fun TvBrowserScreen(
                                     PointerEventType.Move -> {
                                         val position = event.changes.firstOrNull()?.position ?: continue
                                         movePointerToPixels(position.x, position.y)
+                                        updateEdgeScroll()
                                         val now = SystemClock.uptimeMillis()
                                         if (now - lastHoverAt[0] >= 60L) {
                                             lastHoverAt[0] = now
@@ -1205,7 +1330,7 @@ fun TvBrowserScreen(
                                     PointerEventType.Scroll -> {
                                         val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                                         if (delta != 0f) {
-                                            scrollPage((delta * 120f).roundToInt())
+                                            dispatchWheel(up = delta < 0f)
                                         }
                                     }
                                 }
