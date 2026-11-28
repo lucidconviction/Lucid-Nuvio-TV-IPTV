@@ -727,7 +727,13 @@ private fun DetailOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     detail.year?.let { DetailBadge(it.toString()) }
-                    DetailBadge(if (detail.isSeries) "Series" else "Movie")
+                    DetailBadge(
+                        when {
+                            detail.isLive -> "Live"
+                            detail.isSeries -> "Series"
+                            else -> "Movie"
+                        },
+                    )
                     detail.rating?.let { DetailBadge("★ $it") }
                     detail.durationMinutes?.takeIf { it > 0 }?.let { DetailBadge("${it}m") }
                     detail.status?.let { DetailBadge(it) }
@@ -760,10 +766,10 @@ private fun DetailOverlay(
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     CloudStreamPlayButton(
-                        text = if (detail.isSeries && seasonEpisodes.isNotEmpty()) {
-                            "Play first episode"
-                        } else {
-                            "Play"
+                        text = when {
+                            detail.isLive -> "Watch live"
+                            detail.isSeries && seasonEpisodes.isNotEmpty() -> "Play first episode"
+                            else -> "Play"
                         },
                         enabled = !loading,
                         focusRequester = playFocus,

@@ -58,6 +58,8 @@ enum class LucidChannelKind {
     PLUGIN_ROTATE,
     /** One CloudStream series, every episode in order. */
     PLUGIN_SERIES,
+    /** One live channel from a CloudStream IPTV extension. */
+    PLUGIN_LIVE,
 }
 
 @Serializable
@@ -106,7 +108,8 @@ data class LucidChannelSpec(
      * Every kind except a single live addon channel is a continuous queue with real media
      * runtimes. This is what keeps the synthetic guide and the actual stream on the same clock.
      */
-    val usesQueue: Boolean get() = kind != LucidChannelKind.ADDON_LIVE
+    val usesQueue: Boolean get() = kind != LucidChannelKind.ADDON_LIVE &&
+        kind != LucidChannelKind.PLUGIN_LIVE
 
     val groupId: String get() = if (group.equals("Lucid TV", ignoreCase = true)) {
         "virtual:lucid"
@@ -248,6 +251,7 @@ fun LucidItem.toProgram(spec: LucidChannelSpec, startMs: Long, stopMs: Long): Ep
         category = "Lucid TV · " + when (spec.kind) {
             LucidChannelKind.RELAY_LOOP -> "Relay"
             LucidChannelKind.SERIES_LOOP -> "Series"
+            LucidChannelKind.PLUGIN_LIVE -> "Live"
             else -> spec.catalogName
         },
         episode = episodeTag,

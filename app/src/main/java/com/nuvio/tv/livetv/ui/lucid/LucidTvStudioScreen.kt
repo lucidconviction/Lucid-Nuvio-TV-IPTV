@@ -89,6 +89,7 @@ private enum class StudioMode {
     PLUGIN_EXTENSION,
     PLUGIN_CATALOG,
     PLUGIN_SERIES_ITEM,
+    PLUGIN_LIVE_ITEM,
     RELAY_GROUP,
     EDIT,
 }
@@ -136,6 +137,9 @@ fun LucidTvStudioScreen(
     var pluginSeriesTab by remember { mutableStateOf<LucidPluginTab?>(null) }
     var pluginSeriesLoading by remember { mutableStateOf(false) }
     var pluginSeriesError by remember { mutableStateOf<String?>(null) }
+    var pluginLiveItems by remember { mutableStateOf<List<LucidPluginItem>>(emptyList()) }
+    var pluginLiveLoading by remember { mutableStateOf(false) }
+    var pluginLiveError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var shareOpen by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
@@ -159,6 +163,7 @@ fun LucidTvStudioScreen(
         seriesItems.size, seriesLoading, manualItems.size, manualLoading,
         liveItems.size, liveLoading, pluginExtensions.size, pluginLoading,
         pluginPick, pluginTabs.size, pluginTabsLoading, pluginSeriesItems.size, pluginSeriesLoading,
+        pluginLiveItems.size, pluginLiveLoading,
     ) {
         delay(80)
         runCatching { firstFocus.requestFocus() }
@@ -172,6 +177,7 @@ fun LucidTvStudioScreen(
             StudioMode.LIVE_ITEM -> { mode = StudioMode.LIVE_CATALOG; liveItems = emptyList() }
             StudioMode.LIVE_CATALOG -> mode = StudioMode.LIVE_ADDON
             StudioMode.PLUGIN_SERIES_ITEM -> mode = StudioMode.PLUGIN_CATALOG
+            StudioMode.PLUGIN_LIVE_ITEM -> mode = StudioMode.PLUGIN_CATALOG
             StudioMode.PLUGIN_CATALOG -> mode = StudioMode.PLUGIN_EXTENSION
             StudioMode.PLUGIN_EXTENSION -> mode = StudioMode.ADD_MENU
             StudioMode.CATALOG_CATALOG, StudioMode.SERIES_CATALOG -> {
@@ -348,22 +354,39 @@ fun LucidTvStudioScreen(
                 firstFocus = firstFocus,
                 onPick = { tab ->
                     val extension = pluginPick ?: return@PluginCatalogList
-                    if (pendingKind == LucidChannelKind.PLUGIN_SERIES) {
-                        pluginSeriesTab = tab
-                        pluginSeriesItems = emptyList()
-                        pluginSeriesError = null
-                        pluginSeriesLoading = true
-                        mode = StudioMode.PLUGIN_SERIES_ITEM
-                        scope.launch {
-                            pluginSeriesItems = viewModel.pluginSeriesItems(extension.id, tab)
-                            pluginSeriesLoading = false
-                            if (pluginSeriesItems.isEmpty()) {
-                                pluginSeriesError = "No series were found in this catalog."
+                    when (pendingKind) {
+                        LucidChannelKind.PLUGIN_SERIES -> {
+                            pluginSeriesTab = tab
+                            pluginSeriesItems = emptyList()
+                            pluginSeriesError = null
+                            pluginSeriesLoading = true
+                            mode = StudioMode.PLUGIN_SERIES_ITEM
+                            scope.launch {
+                                pluginSeriesItems = viewModel.pluginSeriesItems(extension.id, tab)
+                                pluginSeriesLoading = false
+                                if (pluginSeriesItems.isEmpty()) {
+                                    pluginSeriesError = "No series were found in this catalog."
+                                }
                             }
                         }
-                    } else {
-                        draft = viewModel.newPluginSpec(extension, tab)
-                        mode = StudioMode.EDIT
+                        LucidChannelKind.PLUGIN_LIVE -> {
+                            pluginSeriesTab = tab
+                            pluginLiveItems = emptyList()
+                            pluginLiveError = null
+                            pluginLiveLoading = true
+                            mode = StudioMode.PLUGIN_LIVE_ITEM
+                            scope.launch {
+                                pluginLiveItems = viewModel.pluginLiveItems(extension.id, tab)
+                                pluginLiveLoading = false
+                                if (pluginLiveItems.isEmpty()) {
+                                    pluginLiveError = "No live channels were found in this catalog."
+                                }
+                            }
+                        }
+                        else -> {
+                            draft = viewModel.newPluginSpec(extension, tab)
+                            mode = StudioMode.EDIT
+                        }
                     }
                 },
             )
@@ -377,6 +400,20 @@ fun LucidTvStudioScreen(
                 onPick = { item ->
                     val extension = pluginPick ?: return@PluginSeriesList
                     draft = viewModel.newPluginSeriesSpec(extension, pluginSeriesTab, item)
+                    mode = StudioMode.EDIT
+                },
+            )
+            StudioMode.PLUGIN_LIVE_ITEM -> PluginSeriesList(
+                extension = pluginPick,
+                tab = pluginSeriesTab,
+                items = pluginLiveItems,
+                loading = pluginLiveLoading,
+                error = pluginLiveError,
+                firstFocus = firstFocus,
+                live = true,
+                onPick = { item ->
+                    val extension = pluginPick ?: return@PluginSeriesList
+                    draft = viewModel.newPluginLiveSpec(extension, pluginSeriesTab, item)
                     mode = StudioMode.EDIT
                 },
             )
@@ -613,6 +650,7 @@ private fun AddMenu(firstFocus: FocusRequester, onPick: (LucidChannelKind, Studi
         Triple("Addon live channel", "One channel from an addon live, TV or sport catalog. Its stream is resolved when tuned.", LucidChannelKind.ADDON_LIVE to StudioMode.LIVE_ADDON),
         Triple("CloudStream extension · catalog 24/7", "Pick an enabled CloudStream extension, then one of its catalogs, as a continuous channel.", LucidChannelKind.PLUGIN_ROTATE to StudioMode.PLUGIN_EXTENSION),
         Triple("CloudStream series · 24/7", "Pick an extension, a catalog and one series. Every episode plays in order.", LucidChannelKind.PLUGIN_SERIES to StudioMode.PLUGIN_EXTENSION),
+        Triple("CloudStream live channel", "Pick an extension, a catalog and one of its live IPTV channels.", LucidChannelKind.PLUGIN_LIVE to StudioMode.PLUGIN_EXTENSION),
         Triple("Live channel relay · 24/7", "Relay an existing IPTV group as a Lucid TV channel and switch at segment boundaries.", LucidChannelKind.RELAY_LOOP to StudioMode.RELAY_GROUP),
     )
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -757,14 +795,16 @@ private fun PluginSeriesList(
     loading: Boolean,
     error: String?,
     firstFocus: FocusRequester,
+    live: Boolean = false,
     onPick: (LucidPluginItem) -> Unit,
 ) {
+    val noun = if (live) "live channels" else "series"
     when {
         loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Loading series from ${extension?.name.orEmpty()}…", color = NuvioTheme.colors.TextSecondary)
+            Text("Loading $noun from ${extension?.name.orEmpty()}…", color = NuvioTheme.colors.TextSecondary)
         }
         error != null -> Text(error, color = NuvioTheme.colors.TextSecondary)
-        items.isEmpty() -> Text("No series are available in this catalog.", color = NuvioTheme.colors.TextSecondary)
+        items.isEmpty() -> Text("No $noun are available in this catalog.", color = NuvioTheme.colors.TextSecondary)
         else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item(key = "series-head") {
                 Text(
@@ -797,7 +837,11 @@ private fun PluginSeriesList(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(item.name, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text("Series · episodes in air order", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+                        Text(
+                            if (live) "Live · resolves when tuned" else "Series · episodes in air order",
+                            style = NuvioTheme.textStyles.metadata,
+                            color = NuvioTheme.colors.TextSecondary,
+                        )
                     }
                 }
             }
@@ -1268,6 +1312,7 @@ private fun kindLabel(kind: LucidChannelKind): String = when (kind) {
     LucidChannelKind.MANUAL_LOOP -> "Movie collection · 24/7"
     LucidChannelKind.PLUGIN_ROTATE -> "CloudStream extension · 24/7"
     LucidChannelKind.PLUGIN_SERIES -> "CloudStream series · 24/7"
+    LucidChannelKind.PLUGIN_LIVE -> "CloudStream live channel"
 }
 
 private fun orderLabel(order: LucidOrder): String = when (order) {

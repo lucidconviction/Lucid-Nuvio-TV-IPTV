@@ -2,6 +2,7 @@ package com.nuvio.tv.core.plugin.cloudstream
 
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.MainPageData
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
@@ -267,6 +268,24 @@ class CloudStreamLucidPluginBridge @Inject constructor(
                     poster = loaded.posterUrl,
                     description = loaded.plot,
                     isSeries = false,
+                    data = loaded.dataUrl,
+                    year = loaded.year,
+                    apiIndex = apiIndex,
+                    backdrop = loaded.backgroundPosterUrl,
+                    rating = loaded.score?.toString()?.takeIf { it.isNotBlank() && it != "0.0" },
+                    genres = loaded.tags.orEmpty(),
+                    actors = loaded.actors.orEmpty().toLucidActors(),
+                    trailerUrl = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.extractorUrl,
+                    trailerHeaders = loaded.trailers.orEmpty().firstOrNull { !it.extractorUrl.isNullOrBlank() }?.headers.orEmpty(),
+                    durationMinutes = loaded.duration,
+                    recommendations = loaded.recommendations.orEmpty().mapNotNull { it.toLucidItem(apiIndex) },
+                )
+                is LiveStreamLoadResponse -> LucidPluginDetail(
+                    name = loaded.name,
+                    poster = loaded.posterUrl,
+                    description = loaded.plot,
+                    isSeries = false,
+                    isLive = true,
                     data = loaded.dataUrl,
                     year = loaded.year,
                     apiIndex = apiIndex,

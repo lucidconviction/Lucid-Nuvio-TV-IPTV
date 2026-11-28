@@ -145,7 +145,7 @@ class LucidTvRepository @Inject constructor(
         val spec = specs.firstOrNull { it.channelKey == channelKey } ?: return null
         val pool = availablePool(spec, pools[spec.id].orEmpty())
         if (pool.isEmpty()) return null
-        if (spec.kind == LucidChannelKind.ADDON_LIVE) {
+        if (spec.kind == LucidChannelKind.ADDON_LIVE || spec.kind == LucidChannelKind.PLUGIN_LIVE) {
             val item = pool.firstOrNull() ?: return null
             return LucidTune(
                 channelKey = spec.channelKey,
@@ -241,6 +241,7 @@ class LucidTvRepository @Inject constructor(
                                 LucidChannelKind.ADDON_LIVE -> buildManualPool(spec)
                                 LucidChannelKind.PLUGIN_ROTATE -> loadPluginPool(spec)
                                 LucidChannelKind.PLUGIN_SERIES -> loadPluginSeriesPool(spec)
+                                LucidChannelKind.PLUGIN_LIVE -> loadPluginLivePool(spec)
                             }
                         }.onFailure {
                             Log.w(TAG, "pool load failed for ${spec.name} (${spec.kind})", it)
@@ -358,17 +359,21 @@ class LucidTvRepository @Inject constructor(
             ?.let { if (it.links.isNotEmpty()) return it.links }
 
         val isEpisode = item.type == "series" || item.season != null || item.episode != null
+        val isLiveItem = item.type == "live"
         // Keep the whole tune inside one budget: a dead provider must not hold
         // the guide on "Loading..." for a minute and a half.
         val resolved = withTimeoutOrNull(55_000L) {
+            var detailIsLive = false
             val dataUrl = if (isEpisode) {
                 url
             } else {
-                runCatching {
+                val detail = runCatching {
                     withTimeoutOrNull(12_000L) {
-                        pluginBridge.detail(scraperId, apiIndex, url)?.data
+                        pluginBridge.detail(scraperId, apiIndex, url)
                     }
-                }.getOrNull()?.takeIf { it.isNotBlank() } ?: url
+                }.getOrNull()
+                detailIsLive = detail?.isLive == true
+                detail?.data?.takeIf { it.isNotBlank() } ?: url
             }
 
             var links = runCatching {
@@ -394,6 +399,25 @@ class LucidTvRepository @Inject constructor(
                 }.getOrNull().orEmpty()
             }
 
+            // IPTV extensions answer load() with a LiveStreamLoadResponse whose
+            // dataUrl is the final HLS/TS URL; most do not implement loadLinks().
+            // Use that URL directly instead of reporting "no source".
+            if (links.isEmpty() && (isLiveItem || detailIsLive) &&
+                dataUrl.startsWith("http", ignoreCase = true)
+            ) {
+                val lower = dataUrl.substringBefore('?').lowercase()
+                links = listOf(
+                    LucidPluginLink(
+                        url = dataUrl,
+                        type = when {
+                            lower.endsWith(".m3u8") || lower.contains("m3u8") -> "M3U8"
+                            lower.endsWith(".mpd") -> "DASH"
+                            else -> "VIDEO"
+                        },
+                    ),
+                )
+            }
+
             links
                 .filter { it.url.isNotBlank() }
                 .filterNot { it.type.equals("TORRENT", true) || it.type.equals("MAGNET", true) }
@@ -413,6 +437,30 @@ class LucidTvRepository @Inject constructor(
         Log.d(TAG, "resolve $scraperId api=$apiIndex ${if (isEpisode) "episode" else "movie"} " +
             "url=${url.take(70)} -> ${resolved.size} link(s)")
         return resolved
+    }
+
+    private fun loadPluginLivePool(spec: LucidChannelSpec): List<LucidItem> {
+        val scraperId = spec.pluginScraperId ?: return emptyList()
+        val url = spec.pluginItemUrl ?: return emptyList()
+        return listOf(
+            LucidItem(
+                id = "plugin-live:$scraperId:$url",
+                streamId = url,
+                type = "live",
+                title = spec.pluginItemTitle ?: spec.name,
+                poster = spec.poster,
+                backdrop = null,
+                description = null,
+                year = null,
+                runtimeMs = null,
+                addonId = scraperId,
+                addonName = spec.pluginScraperName ?: spec.name,
+                addonBaseUrl = "",
+                pluginScraperId = scraperId,
+                pluginUrl = url,
+                pluginApiIndex = spec.pluginTabApiIndex ?: 0,
+            ),
+        )
     }
 
     private suspend fun loadPluginSeriesPool(spec: LucidChannelSpec): List<LucidItem> {
@@ -452,6 +500,7 @@ class LucidTvRepository @Inject constructor(
         LucidChannelKind.ADDON_LIVE -> "This live addon channel is no longer available."
         LucidChannelKind.PLUGIN_ROTATE -> "The CloudStream extension returned no playable movies."
         LucidChannelKind.PLUGIN_SERIES -> "The CloudStream series returned no episodes."
+        LucidChannelKind.PLUGIN_LIVE -> "The CloudStream extension did not return that live channel."
         LucidChannelKind.MANUAL_LOOP -> "This channel has no items."
         LucidChannelKind.SERIES_LOOP -> "The series returned no episodes."
         LucidChannelKind.CATALOG_ROTATE, LucidChannelKind.CATALOG_LOOP -> when {
@@ -472,6 +521,7 @@ class LucidTvRepository @Inject constructor(
             "live|${spec.manualItems.firstOrNull()?.id}|${spec.manualItems.firstOrNull()?.type}"
         LucidChannelKind.PLUGIN_ROTATE -> "plugin|${spec.pluginScraperId}|${spec.pluginTabName.orEmpty()}"
         LucidChannelKind.PLUGIN_SERIES -> "plugin-series|${spec.pluginScraperId}|${spec.pluginItemUrl}"
+        LucidChannelKind.PLUGIN_LIVE -> "plugin-live|${spec.pluginScraperId}|${spec.pluginItemUrl}"
     }
 
     private fun restorePoolCache() {
@@ -994,7 +1044,7 @@ class LucidTvRepository @Inject constructor(
         currentSpecs.forEach { spec ->
             val pool = availablePool(spec, pools[spec.id].orEmpty())
             if (pool.isEmpty()) return@forEach
-            if (spec.kind == LucidChannelKind.ADDON_LIVE) {
+            if (spec.kind == LucidChannelKind.ADDON_LIVE || spec.kind == LucidChannelKind.PLUGIN_LIVE) {
                 val item = pool.firstOrNull() ?: return@forEach
                 out[spec.channelKey] = listOf(
                     EpgProgram(
@@ -1002,7 +1052,11 @@ class LucidTvRepository @Inject constructor(
                         stopMs = to,
                         title = item.title,
                         description = item.description,
-                        category = "Lucid TV · Live addon",
+                        category = if (spec.kind == LucidChannelKind.PLUGIN_LIVE) {
+                            "Lucid TV · Live extension"
+                        } else {
+                            "Lucid TV · Live addon"
+                        },
                         icon = item.poster,
                         year = item.year,
                     ),

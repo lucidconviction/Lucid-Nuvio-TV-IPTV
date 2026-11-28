@@ -53,6 +53,8 @@ data class LucidPluginDetail(
     val poster: String?,
     val description: String?,
     val isSeries: Boolean,
+    /** A LiveStreamLoadResponse: data is already the live stream URL. */
+    val isLive: Boolean = false,
     val data: String?,
     val episodes: List<LucidPluginItem> = emptyList(),
     val year: Int? = null,

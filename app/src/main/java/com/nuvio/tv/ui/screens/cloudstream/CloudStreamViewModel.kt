@@ -293,7 +293,16 @@ class CloudStreamViewModel @Inject constructor(
             _state.value = _state.value.copy(error = "This provider returned no playable data for the movie.")
             return
         }
-        play(provider, detail.apiIndex, data, detail.name, detail.poster, null, null)
+        play(
+            provider = provider,
+            apiIndex = detail.apiIndex,
+            data = data,
+            title = detail.name,
+            poster = detail.poster,
+            season = null,
+            episode = null,
+            isLive = detail.isLive,
+        )
     }
 
     fun playEpisode(episode: LucidPluginItem) {
@@ -318,6 +327,7 @@ class CloudStreamViewModel @Inject constructor(
         poster: String?,
         season: Int?,
         episode: Int?,
+        isLive: Boolean = false,
     ) {
         _state.value = _state.value.copy(detailLoading = true, error = null)
         viewModelScope.launch {
@@ -327,21 +337,29 @@ class CloudStreamViewModel @Inject constructor(
             if (_state.value.provider?.id != provider.id) return@launch
             val link = links.firstOrNull { it.url.startsWith("http", ignoreCase = true) }
                 ?: links.firstOrNull()
-            if (link == null) {
+            // LiveStreamLoadResponse.dataUrl is often the final HLS/TS URL and
+            // live extensions do not implement loadLinks(). Play it directly
+            // when extraction returns nothing.
+            val directLive = isLive && data.startsWith("http", ignoreCase = true)
+            if (link == null && !directLive) {
                 _state.value = _state.value.copy(
                     detailLoading = false,
-                    error = "No playable link was returned for this item.",
+                    error = if (isLive) {
+                        "This live channel did not return a stream URL."
+                    } else {
+                        "No playable link was returned for this item."
+                    },
                 )
                 return@launch
             }
             _state.value = _state.value.copy(detailLoading = false)
             _playback.tryEmit(
                 CloudStreamPlayback(
-                    url = link.url,
-                    headers = link.headers,
+                    url = link?.url ?: data,
+                    headers = link?.headers.orEmpty(),
                     title = title,
                     poster = poster,
-                    contentType = if (season != null || episode != null) "tv" else "movie",
+                    contentType = if (isLive) "live" else if (season != null || episode != null) "tv" else "movie",
                     season = season,
                     episode = episode,
                     providerName = provider.name,
