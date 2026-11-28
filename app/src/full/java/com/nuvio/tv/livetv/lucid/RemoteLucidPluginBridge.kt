@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.RemoteException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -79,14 +80,27 @@ class RemoteLucidPluginBridge @Inject constructor(
         args: JSONObject = JSONObject(),
     ): T {
         val raw = withContext(Dispatchers.IO) {
-            var api = host()
-            try {
-                api.call(method, args.toString())
-            } catch (_: RemoteException) {
-                host = null
-                api = host()
-                api.call(method, args.toString())
+            var last: Throwable? = null
+            var attempt = 0
+            while (attempt < 3) {
+                try {
+                    val api = host()
+                    return@withContext api.call(method, args.toString())
+                } catch (t: Throwable) {
+                    val remote = t is RemoteException ||
+                        t is android.os.DeadObjectException
+                    if (!remote) throw t
+                    host = null
+                    last = t
+                    android.util.Log.w(
+                        "RemoteLucidPluginBridge",
+                        "host died during $method (try ${attempt + 1}); rebinding",
+                    )
+                    delay(350L * (attempt + 1))
+                }
+                attempt++
             }
+            throw last ?: IllegalStateException("CloudStream host did not answer $method")
         }
         if (raw.startsWith("ERR:")) {
             throw IllegalStateException(raw.removePrefix("ERR:"))

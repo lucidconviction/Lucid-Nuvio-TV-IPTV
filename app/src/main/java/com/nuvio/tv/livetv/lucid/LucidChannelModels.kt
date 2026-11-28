@@ -35,6 +35,8 @@ data class LucidItem(
     /** CloudStream extension items resolve through the full-flavor plugin bridge. */
     val pluginScraperId: String? = null,
     val pluginUrl: String? = null,
+    /** Which MainAPI inside the extension produced this item. */
+    val pluginApiIndex: Int = 0,
     @Transient val drm: DrmInfo? = null,
 )
 

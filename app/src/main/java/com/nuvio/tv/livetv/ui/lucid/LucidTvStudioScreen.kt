@@ -133,6 +133,7 @@ fun LucidTvStudioScreen(
     var pluginTabsLoading by remember { mutableStateOf(false) }
     var pluginTabsError by remember { mutableStateOf<String?>(null) }
     var pluginSeriesItems by remember { mutableStateOf<List<LucidPluginItem>>(emptyList()) }
+    var pluginSeriesTab by remember { mutableStateOf<LucidPluginTab?>(null) }
     var pluginSeriesLoading by remember { mutableStateOf(false) }
     var pluginSeriesError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -348,6 +349,7 @@ fun LucidTvStudioScreen(
                 onPick = { tab ->
                     val extension = pluginPick ?: return@PluginCatalogList
                     if (pendingKind == LucidChannelKind.PLUGIN_SERIES) {
+                        pluginSeriesTab = tab
                         pluginSeriesItems = emptyList()
                         pluginSeriesError = null
                         pluginSeriesLoading = true
@@ -367,14 +369,14 @@ fun LucidTvStudioScreen(
             )
             StudioMode.PLUGIN_SERIES_ITEM -> PluginSeriesList(
                 extension = pluginPick,
-                tab = null,
+                tab = pluginSeriesTab,
                 items = pluginSeriesItems,
                 loading = pluginSeriesLoading,
                 error = pluginSeriesError,
                 firstFocus = firstFocus,
                 onPick = { item ->
                     val extension = pluginPick ?: return@PluginSeriesList
-                    draft = viewModel.newPluginSeriesSpec(extension, null, item)
+                    draft = viewModel.newPluginSeriesSpec(extension, pluginSeriesTab, item)
                     mode = StudioMode.EDIT
                 },
             )

@@ -636,14 +636,35 @@ private fun DetailOverlay(
     onCastSearch: (String) -> Unit,
 ) {
     val playFocus = remember { FocusRequester() }
+    // Extensions frequently return the same episode twice (dub/sub lists, mirrored
+    // APIs, or a season both as "null" and "1"). One card per season+episode.
     val episodes = remember(detail) {
-        detail.episodes.sortedWith(
-            compareBy(
-                { it.season ?: Int.MAX_VALUE },
-                { it.episode ?: Int.MAX_VALUE },
-                { it.name },
-            ),
-        )
+        detail.episodes
+            .groupBy { episode ->
+                val season = episode.season ?: 1
+                val number = episode.episode
+                if (number != null) "s${season}e$number" else "u:${episode.url}"
+            }
+            .map { (_, group) ->
+                group.firstOrNull { !it.poster.isNullOrBlank() } ?: group.first()
+            }
+            // An extension can return the same URL under two numbering schemes.
+            .distinctBy { it.url.ifBlank { "${it.season}:${it.episode}:${it.name}" } }
+            .sortedWith(
+                compareBy(
+                    { it.season ?: 1 },
+                    { it.episode ?: Int.MAX_VALUE },
+                    { it.name },
+                ),
+            )
+    }
+    val seasons = remember(episodes) {
+        episodes.map { it.season ?: 1 }.distinct().sorted()
+    }
+    var selectedSeason by remember(detail) { mutableStateOf<Int?>(null) }
+    val activeSeason = selectedSeason ?: seasons.firstOrNull()
+    val seasonEpisodes = remember(episodes, activeSeason) {
+        episodes.filter { (it.season ?: 1) == activeSeason }
     }
     LaunchedEffect(detail.name, detail.isSeries, episodes.size) {
         delay(180)
@@ -739,12 +760,17 @@ private fun DetailOverlay(
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     CloudStreamPlayButton(
-                        text = if (detail.isSeries && episodes.isNotEmpty()) "Play first episode" else "Play",
+                        text = if (detail.isSeries && seasonEpisodes.isNotEmpty()) {
+                            "Play first episode"
+                        } else {
+                            "Play"
+                        },
                         enabled = !loading,
                         focusRequester = playFocus,
                         onClick = {
-                            if (detail.isSeries && episodes.isNotEmpty()) {
-                                onEpisode(episodes.first())
+                            val first = seasonEpisodes.firstOrNull() ?: episodes.firstOrNull()
+                            if (detail.isSeries && first != null) {
+                                onEpisode(first)
                             } else {
                                 onPlay()
                             }
@@ -792,13 +818,40 @@ private fun DetailOverlay(
                             shadow = Shadow(Color.Black, Offset(0f, 1f), 6f),
                         ),
                     )
+                    if (seasons.size > 1) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(end = 24.dp),
+                        ) {
+                            items(seasons, key = { it }) { season ->
+                                val selected = season == activeSeason
+                                Button(
+                                    onClick = { selectedSeason = season },
+                                    modifier = Modifier.nuvioFocusRing(RoundedCornerShape(50)),
+                                    shape = ButtonDefaults.shape(RoundedCornerShape(50)),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = if (selected) Color.White else Color.Black.copy(alpha = 0.46f),
+                                        contentColor = if (selected) Color.Black else Color.White,
+                                        focusedContainerColor = Color.White,
+                                        focusedContentColor = Color.Black,
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 9.dp),
+                                ) {
+                                    Text(
+                                        if (season <= 0) "Specials" else "Season $season",
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
+                    }
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(end = 24.dp),
                     ) {
                         itemsIndexed(
-                            episodes,
-                            key = { _, it -> "${it.season}|${it.episode}|${it.url}" },
+                            seasonEpisodes,
+                            key = { _, it -> "${it.season ?: 1}|${it.episode}|${it.url}" },
                         ) { _, episode ->
                             CloudStreamEpisodeCard(
                                 episode = episode,

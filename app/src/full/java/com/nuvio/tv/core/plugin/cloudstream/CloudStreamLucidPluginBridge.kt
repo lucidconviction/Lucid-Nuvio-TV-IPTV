@@ -99,8 +99,12 @@ class CloudStreamLucidPluginBridge @Inject constructor(
                             if (link.url.isNotBlank()) {
                                 links += LucidPluginLink(
                                     url = link.url,
-                                    headers = link.headers.orEmpty(),
+                                    headers = buildMap {
+                                        putAll(link.headers.orEmpty())
+                                        link.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+                                    },
                                     quality = link.quality.toString(),
+                                    type = link.type?.name,
                                 )
                             }
                         },

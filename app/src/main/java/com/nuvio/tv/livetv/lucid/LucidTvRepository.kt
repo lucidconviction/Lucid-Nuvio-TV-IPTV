@@ -193,24 +193,12 @@ class LucidTvRepository @Inject constructor(
             spec.addonBaseUrl?.let { base -> catalogSourceKey(base, spec.catalogId.orEmpty(), spec.contentType) }
         }.toSet()
         val discovered = discover(input.addons, customCatalogSources, input.autoSeries)
-        val pluginChannels = runCatching {
-            withTimeoutOrNull(12_000L) { pluginBridge.extensions() }.orEmpty()
-        }.getOrDefault(emptyList()).map { extension ->
-            LucidChannelSpec(
-                id = "plugin-${extension.id}",
-                name = extension.name,
-                catalogName = "CloudStream",
-                addonName = "CloudStream",
-                addonBaseUrl = "",
-                addonId = extension.id,
-                kind = LucidChannelKind.PLUGIN_ROTATE,
-                group = "CloudStream",
-                pluginScraperId = extension.id,
-                pluginScraperName = extension.name,
-                auto = true,
-            )
-        }
-        val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() } + pluginChannels
+        // CloudStream extensions are never added to the guide on their own.
+        // The user creates every CloudStream channel explicitly in Lucid TV
+        // Studio (extension -> catalog -> optional series), and those manual
+        // specs arrive in `custom` below. Auto-discovered Nuvio addon
+        // catalogs keep their existing behaviour.
+        val allSpecs = discovered.map { it.spec } + custom.map { it.toRuntime() }
         specs = allSpecs
         Log.d(TAG, "load: ${allSpecs.size} channel(s), ${allSpecs.count { it.auto }} automatic, autoSeries=${input.autoSeries}")
         val liveIds = allSpecs.mapTo(HashSet()) { it.id }
@@ -273,6 +261,21 @@ class LucidTvRepository @Inject constructor(
         _errors.value = allSpecs
             .filter { pools[it.id].isNullOrEmpty() }
             .associate { it.channelKey to emptyPoolMessage(it) }
+
+        // Warm the first manual CloudStream channel's current guide item. The
+        // link extraction then happens while the guide is on screen instead of
+        // during the first tune, which is where the 15s player start window
+        // used to expire. resolvePluginLinks() caches the result, so a repeat
+        // load costs nothing.
+        scope.launch {
+            delay(2_500L)
+            val spec = allSpecs.firstOrNull {
+                it.kind == LucidChannelKind.PLUGIN_ROTATE ||
+                    it.kind == LucidChannelKind.PLUGIN_SERIES
+            } ?: return@launch
+            val item = tune(spec.channelKey, System.currentTimeMillis())?.item ?: return@launch
+            runCatching { resolvePluginLinks(item) }
+        }
     }
 
     /**
@@ -325,24 +328,101 @@ class LucidTvRepository @Inject constructor(
                     addonBaseUrl = "",
                     pluginScraperId = scraperId,
                     pluginUrl = item.url,
+                    pluginApiIndex = item.apiIndex,
                 )
             }
     }
 
-    /** Resolve one CloudStream item when its Lucid slot is tuned. */
+    private data class CachedPluginLinks(
+        val links: List<LucidPluginLink>,
+        val atMs: Long,
+    )
+    private val pluginLinkCache = ConcurrentHashMap<String, CachedPluginLinks>()
+
+    /**
+     * Resolve one CloudStream item when its Lucid slot is tuned.
+     *
+     * A movie's catalog URL is a page URL, not the data URL loadLinks() expects.
+     * Load the detail first (that is what the extension's own player would do),
+     * then resolve against the returned data. Episodes already arrive as their
+     * data URL from the episode list. Try the selected MainAPI, not just the
+     * first one, and cache the answer briefly so replaying the same guide slot
+     * does not time out twice.
+     */
     suspend fun resolvePluginLinks(item: LucidItem): List<LucidPluginLink> {
         val scraperId = item.pluginScraperId ?: return emptyList()
         val url = item.pluginUrl ?: return emptyList()
-        return runCatching {
-            withTimeoutOrNull(65_000L) { pluginBridge.links(scraperId, url) }.orEmpty()
-        }.getOrDefault(emptyList())
+        val apiIndex = item.pluginApiIndex.coerceAtLeast(0)
+        val key = "$scraperId|$apiIndex|${item.season}|${item.episode}|$url"
+        pluginLinkCache[key]?.takeIf { System.currentTimeMillis() - it.atMs < 5 * 60_000L }
+            ?.let { if (it.links.isNotEmpty()) return it.links }
+
+        val isEpisode = item.type == "series" || item.season != null || item.episode != null
+        // Keep the whole tune inside one budget: a dead provider must not hold
+        // the guide on "Loading..." for a minute and a half.
+        val resolved = withTimeoutOrNull(55_000L) {
+            val dataUrl = if (isEpisode) {
+                url
+            } else {
+                runCatching {
+                    withTimeoutOrNull(12_000L) {
+                        pluginBridge.detail(scraperId, apiIndex, url)?.data
+                    }
+                }.getOrNull()?.takeIf { it.isNotBlank() } ?: url
+            }
+
+            var links = runCatching {
+                withTimeoutOrNull(30_000L) {
+                    pluginBridge.streams(
+                        scraperId = scraperId,
+                        apiIndex = apiIndex,
+                        data = dataUrl,
+                        season = item.season,
+                        episode = item.episode,
+                    )
+                }
+            }.getOrNull().orEmpty()
+
+            if (links.isEmpty() && dataUrl != url) {
+                links = runCatching {
+                    withTimeoutOrNull(12_000L) { pluginBridge.links(scraperId, dataUrl) }
+                }.getOrNull().orEmpty()
+            }
+            if (links.isEmpty()) {
+                links = runCatching {
+                    withTimeoutOrNull(12_000L) { pluginBridge.links(scraperId, url) }
+                }.getOrNull().orEmpty()
+            }
+
+            links
+                .filter { it.url.isNotBlank() }
+                .filterNot { it.type.equals("TORRENT", true) || it.type.equals("MAGNET", true) }
+                .distinctBy { it.url }
+                .sortedByDescending {
+                    when (it.type?.uppercase()) {
+                        "M3U8", "DASH" -> 2
+                        "VIDEO" -> 1
+                        else -> 0
+                    }
+                }
+        }.orEmpty()
+
+        if (resolved.isNotEmpty()) {
+            pluginLinkCache[key] = CachedPluginLinks(resolved, System.currentTimeMillis())
+        }
+        Log.d(TAG, "resolve $scraperId api=$apiIndex ${if (isEpisode) "episode" else "movie"} " +
+            "url=${url.take(70)} -> ${resolved.size} link(s)")
+        return resolved
     }
 
     private suspend fun loadPluginSeriesPool(spec: LucidChannelSpec): List<LucidItem> {
         val scraperId = spec.pluginScraperId ?: return emptyList()
         val url = spec.pluginItemUrl ?: return emptyList()
+        val apiIndex = spec.pluginTabApiIndex ?: 0
+        // detail() uses the selected MainAPI, while episodes() always used the
+        // first one. Multi-API extensions returned an empty episode list here.
         val episodes = withTimeoutOrNull(75_000L) {
-            pluginBridge.episodes(scraperId, url)
+            pluginBridge.detail(scraperId, apiIndex, url)?.episodes
         }.orEmpty()
         return episodes.map { episode ->
             LucidItem(
@@ -362,6 +442,7 @@ class LucidTvRepository @Inject constructor(
                 episode = episode.episode,
                 pluginScraperId = scraperId,
                 pluginUrl = episode.url,
+                pluginApiIndex = episode.apiIndex,
             )
         }
     }

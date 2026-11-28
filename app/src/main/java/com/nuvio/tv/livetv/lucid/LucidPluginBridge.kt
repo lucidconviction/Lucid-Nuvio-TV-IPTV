@@ -80,6 +80,8 @@ data class LucidPluginLink(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
     val quality: String? = null,
+    /** ExtractorLinkType name: VIDEO, M3U8, DASH, TORRENT or MAGNET. */
+    val type: String? = null,
 )
 
 /**

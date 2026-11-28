@@ -10,7 +10,8 @@
         <service
             android:name="com.nuvio.tv.livetv.lucid.CloudStreamHostService"
             android:exported="false"
-            android:process=":streamhost" />
+            android:process=":streamhost"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".updater.UpdateJobService"

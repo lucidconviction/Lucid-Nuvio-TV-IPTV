@@ -721,6 +721,8 @@ class LiveTvPlaybackController @Inject constructor(
     )
     /** Recent Lucid item sources, so replaying/returning to a channel starts immediately. */
     private val lucidSourceCache = ConcurrentHashMap<String, CachedLucidSources>()
+    /** CloudStream ExtractorLinkType -> MIME, for links whose URL has no extension. */
+    private val pluginMimeByUrl = ConcurrentHashMap<String, String>()
     /** The Lucid TV slot currently playing, so the next one can start when this film ends. */
     @Volatile private var activeVirtual: LucidTune? = null
     /** Where to seek once the virtual film is ready (join-in-progress). */
@@ -996,6 +998,13 @@ class LiveTvPlaybackController @Inject constructor(
                         val links = lucid.resolvePluginLinks(item)
                         val playable = links.firstOrNull()
                         if (playable != null) {
+                            if (pluginMimeByUrl.size > 64) pluginMimeByUrl.clear()
+                            links.forEach { link ->
+                                when (link.type?.uppercase()) {
+                                    "M3U8" -> pluginMimeByUrl[link.url] = androidx.media3.common.MimeTypes.APPLICATION_M3U8
+                                    "DASH" -> pluginMimeByUrl[link.url] = androidx.media3.common.MimeTypes.APPLICATION_MPD
+                                }
+                            }
                             lucid.clearError(channel.key)
                             play(
                                 channel = channel.copy(headers = playable.headers),
@@ -1666,7 +1675,8 @@ class LiveTvPlaybackController @Inject constructor(
             }
             return
         }
-        if (now - lastProgressAt < STALL_MS || !autoReconnect) return
+        val stallLimit = if (activeVirtual?.live == false) STALL_VOD_MS else STALL_MS
+        if (now - lastProgressAt < stallLimit || !autoReconnect) return
         lastProgressAt = now
         val archive = _state.value.catchupTitle != null
         // A catch-up that never started (stuck on "Loading…" with no error): some panels answer
@@ -1767,7 +1777,7 @@ class LiveTvPlaybackController @Inject constructor(
             return
         }
         com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
-            "Channel ${ch.name} " + (if (awaitingFrame) "never started (nothing came in for ${STALL_MS / 1000}s)" else "stalled") +
+            "Channel ${ch.name} " + (if (awaitingFrame) "never started (nothing came in for ${stallLimit / 1000}s)" else "stalled") +
                 "; reloading · ${redact(currentUrl ?: ch.url)}"
         )
         val url = currentUrl ?: ch.url
@@ -2276,9 +2286,9 @@ class LiveTvPlaybackController @Inject constructor(
             // live and the quickest channel changes, but any hiccup in the stream shows as a pause.
             "none" -> listOf(1_500, 4_000, 250, 500)
             "small" -> listOf(10_000, 30_000, 1_000, 2_000)
-            "large" -> listOf(40_000, 90_000, 3_000, 6_000)
-            "xlarge" -> listOf(60_000, 150_000, 5_000, 10_000)
-            else -> listOf(25_000, 60_000, 2_000, 4_000)
+            "large" -> listOf(60_000, 150_000, 8_000, 12_000)
+            "xlarge" -> listOf(90_000, 180_000, 12_000, 16_000)
+            else -> listOf(40_000, 90_000, 6_000, 10_000)
         }
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
@@ -2925,8 +2935,8 @@ class LiveTvPlaybackController @Inject constructor(
             .setUserAgent(headers["User-Agent"] ?: LiveTvRepository.DEFAULT_UA)
             .setDefaultRequestProperties(headers.filterKeys { it != "User-Agent" })
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000), headers, headers["User-Agent"] ?: LiveTvRepository.DEFAULT_UA)
+            .setConnectTimeoutMs(if (isLive) 15_000 else 30_000)
+            .setReadTimeoutMs(if (isLive) 20_000 else 35_000), headers, headers["User-Agent"] ?: LiveTvRepository.DEFAULT_UA)
         val item = buildMediaItem(url, isLive)
         // Closed captions: TV channels usually carry them inside the video (CEA-608/708) without
         // announcing them, so the player never offered them and Subtitles only showed "Off".
@@ -3042,8 +3052,10 @@ class LiveTvPlaybackController @Inject constructor(
     private fun buildMediaItem(url: String, isLive: Boolean): MediaItem {
         val builder = MediaItem.Builder().setUri(Uri.parse(url))
         val lower = url.lowercase().substringBefore('?')
+        val pluginMime = pluginMimeByUrl[url]
         when {
             forcedMime != null -> builder.setMimeType(forcedMime)
+            pluginMime != null -> builder.setMimeType(pluginMime)
             lower.endsWith(".m3u8") || lower.contains("/hls/") || lower.contains("m3u8") ||
                 com.nuvio.tv.livetv.model.PlaylistSource.asksForHls(url) -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
             lower.endsWith(".mpd") -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
@@ -3143,6 +3155,8 @@ class LiveTvPlaybackController @Inject constructor(
         private const val MAX_RECONNECTS = 8
         /** No progress for this long while it should be playing = stalled. */
         private const val STALL_MS = 15_000L
+        /** A CloudStream VOD link can take longer to open than a live channel. */
+        private const val STALL_VOD_MS = 30_000L
         /** How far a replay's own clock may be from the time asked for before it counts as a different show. */
         private const val WRONG_SHOW_SLACK_MS = 10 * 60_000L
         /** Two freezes within this long: the channel counts as failing (live games only). */
