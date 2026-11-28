@@ -309,21 +309,28 @@ class LucidTvRepository @Inject constructor(
                 if (pageItems.size < 20) break
             }
         }
-        return items
-            .filter { it.type == "movie" }
-            .distinctBy { it.url }
+        val distinct = items.distinctBy { it.url }
+        val movies = distinct.filter { it.type == "movie" }
+        // An IPTV extension catalog contains live items instead of films. Let an
+        // existing "catalog 24/7" channel keep working by rotating those live
+        // entries; the new CloudStream live channel type can still pin one.
+        val selected = if (movies.isNotEmpty()) movies else distinct.filter { it.type == "live" }
+        return selected
             .take(60)
             .map { item ->
+                val live = item.type == "live"
                 LucidItem(
                     id = "plugin:$scraperId:${item.url}",
                     streamId = item.url,
-                    type = "movie",
+                    type = item.type,
                     title = item.name,
                     poster = item.poster,
                     backdrop = null,
                     description = null,
                     year = item.year,
-                    runtimeMs = item.runtimeMs?.takeIf { it > 0L } ?: DEFAULT_PLUGIN_RUNTIME_MS,
+                    runtimeMs = if (live) null else {
+                        item.runtimeMs?.takeIf { it > 0L } ?: DEFAULT_PLUGIN_RUNTIME_MS
+                    },
                     addonId = scraperId,
                     addonName = spec.pluginScraperName ?: spec.name,
                     addonBaseUrl = "",
