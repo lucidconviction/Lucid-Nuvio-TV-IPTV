@@ -137,6 +137,7 @@ class WebViewActivity : ComponentActivity() {
     // any other target can be pressed from the sofa.
     private var mouseMode = false
     private var cursorView: View? = null
+    private var cursorLayer: FrameLayout? = null
     private var cursorX = 0f
     private var cursorY = 0f
     private val detectedVideos = LinkedHashSet<String>()
@@ -438,6 +439,8 @@ class WebViewActivity : ComponentActivity() {
      *  focused button inside it. */
     private var tvMenu: View? = null
     private var tvMenuFirst: View? = null
+    private val tvMenuButtons = mutableListOf<View>()
+    private var tvMenuIndex = 0
     private val tvHoldHandler = Handler(Looper.getMainLooper())
     private var tvHoldRunnable: Runnable? = null
     private var tvHoldFired = false
@@ -1191,6 +1194,22 @@ class WebViewActivity : ComponentActivity() {
             )
         }
         setContentView(rootView)
+        // A full-window pointer layer: unlike the page-only ring, this can
+        // reach the address bar, the toolbar buttons and the bookmark strip.
+        cursorLayer = FrameLayout(this).apply {
+            isClickable = false
+            isFocusable = false
+            isFocusableInTouchMode = false
+            descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        }
+        addContentView(
+            cursorLayer,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        installScrollOverlay()
         // When the system bars are showing (the user swiped them back, or the
         // device ignores the immersive request), reserve their height so the
         // status bar does not draw over the page and the navigation bar does not
@@ -1214,10 +1233,11 @@ class WebViewActivity : ComponentActivity() {
         }
         androidx.core.view.ViewCompat.requestApplyInsets(rootView)
         contentFrame = rootView.getChildAt(1) as? FrameLayout
-        mouseMode = BrowserTv.MouseMode.enabled
+        mouseMode = BrowserStore.mouseMode()
+        BrowserTv.MouseMode.enabled = mouseMode
         desktopMode = getSharedPreferences("webview_prefs", MODE_PRIVATE)
             .getBoolean("desktop", false)
-        if (mouseMode) showCursor(center = true)
+        if (mouseMode) cursorLayer?.post { showCursor(center = true) }
 
         // Load the user's ad-blocking config (hosts lists are cached on disk;
         // lists the user never downloaded get fetched lazily here). Blocking
@@ -2399,8 +2419,16 @@ class WebViewActivity : ComponentActivity() {
      * hand-off to Hikari's player — because the browser's ordinary ⋯ menu is a
      * native PopupMenu that a D-pad cannot reliably reach.
      */
+    private fun moveTvMenuFocus(delta: Int) {
+        if (tvMenuButtons.isEmpty()) return
+        tvMenuIndex = (tvMenuIndex + delta).coerceIn(0, tvMenuButtons.lastIndex)
+        tvMenuButtons.getOrNull(tvMenuIndex)?.requestFocus()
+    }
+
     private fun showTvBrowserMenu() {
         if (tvMenu != null || isFinishing) return
+        tvMenuButtons.clear()
+        tvMenuIndex = 0
         val accent = accentColor()
         val root = FrameLayout(this).apply {
             setBackgroundColor(0xB3000000.toInt())
@@ -2441,7 +2469,11 @@ class WebViewActivity : ComponentActivity() {
         })
         panel.addView(titleRow)
         panel.addView(TextView(this).apply {
-            text = "Hold OK or long-press the page to open · Back closes"
+            text = if (mouseMode) {
+                "Arrows move the red ring · OK clicks · MENU opens this sheet"
+            } else {
+                "Arrows scroll · OK taps the page centre · MENU opens this sheet"
+            }
             setTextColor(0x73FFFFFF)
             textSize = 11f
             setPadding(0, dp(2), 0, dp(10))
@@ -2451,6 +2483,11 @@ class WebViewActivity : ComponentActivity() {
         actions += "→   Forward" to { if (webView.canGoForward()) navigateHistory(true) }
         actions += "↻   Reload" to { webView.reload() }
         actions += "⌨   Enter address" to { showAddressDialog() }
+        if (desktopMode) {
+            actions += "📱   Mobile site" to { toggleDesktopSite() }
+        } else {
+            actions += "🖥   Desktop site" to { toggleDesktopSite() }
+        }
         actions += "❤️   Save this site" to { saveCurrentSite() }
         if (mouseMode) {
             actions += "✖   Mouse cursor off" to { toggleMouse() }
@@ -2508,6 +2545,7 @@ class WebViewActivity : ComponentActivity() {
                 ).apply { bottomMargin = dp(7) },
             )
             if (tvMenuFirst == null) tvMenuFirst = button
+            tvMenuButtons += button
         }
         val scroll = ScrollView(this).apply {
             isFocusable = false
@@ -2548,16 +2586,27 @@ class WebViewActivity : ComponentActivity() {
     /** A D-pad-friendly URL entry, since the bottom bar's EditText is hard to
      *  reach without the mouse cursor. */
     private fun showAddressDialog() {
+        var dialog: android.app.AlertDialog? = null
         val field = EditText(this).apply {
             setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
             setText(webView.url ?: "")
             selectAll()
             setTextColor(Color.WHITE)
             setHintTextColor(0x88FFFFFF.toInt())
             hint = "Search or enter address"
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO) {
+                    loadFromAddressBar(text.toString())
+                    dialog?.dismiss()
+                    true
+                } else {
+                    false
+                }
+            }
         }
-        val dialog = AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this)
             .setTitle("Open address")
             .setView(field)
             .setPositiveButton("Go") { _, _ -> loadFromAddressBar(field.text.toString()) }
@@ -2578,6 +2627,8 @@ class WebViewActivity : ComponentActivity() {
         val root = tvMenu ?: return
         tvMenu = null
         tvMenuFirst = null
+        tvMenuButtons.clear()
+        tvMenuIndex = 0
         (root.parent as? ViewGroup)?.removeView(root)
         if (BrowserTv.isTv) webView.requestFocus()
     }
@@ -2669,21 +2720,7 @@ class WebViewActivity : ComponentActivity() {
                 6 -> runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pageUrl ?: webView.url)))
                 }
-                15 -> {
-                    desktopMode = !desktopMode
-                    getSharedPreferences("webview_prefs", MODE_PRIVATE).edit()
-                        .putBoolean("desktop", desktopMode).apply()
-                    webView.settings.userAgentString =
-                        if (desktopMode) DESKTOP_UA
-                        else BrowserHost.effectiveWebViewUa(applicationContext)
-                    webView.reload()
-                    Toast.makeText(
-                        this,
-                        if (desktopMode) BrowserI18n.t("Desktop site requested")
-                        else BrowserI18n.t("Mobile site requested"),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }
+                15 -> toggleDesktopSite()
                 7 -> enableElementBlocker()
                 8 -> undoLastBlock()
                 9 -> clearAllBlocks()
@@ -2875,8 +2912,25 @@ class WebViewActivity : ComponentActivity() {
      * navigation — and any a page makes while it loads — already sees the entry
      * (see RedirectAllow for why that ordering matters).
      */
+    private fun toggleDesktopSite() {
+        desktopMode = !desktopMode
+        getSharedPreferences("webview_prefs", MODE_PRIVATE).edit()
+            .putBoolean("desktop", desktopMode).apply()
+        webView.settings.userAgentString =
+            if (desktopMode) DESKTOP_UA
+            else BrowserHost.effectiveWebViewUa(applicationContext)
+        webView.reload()
+        Toast.makeText(
+            this,
+            if (desktopMode) BrowserI18n.t("Desktop site requested")
+            else BrowserI18n.t("Mobile site requested"),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     private fun toggleMouse() {
         mouseMode = !mouseMode
+        BrowserStore.setMouseMode(mouseMode)
         BrowserTv.MouseMode.enabled = mouseMode
         if (mouseMode) {
             showCursor(center = true)
@@ -2888,16 +2942,66 @@ class WebViewActivity : ComponentActivity() {
 
     private fun cursorStep(): Int = dp(44)
 
+    /** 30% smaller than the old 52dp ring. */
+    private fun cursorDiameter(): Int = dp(37)
+
+    /** Opaque up/down page-scroll buttons floating at the right edge. */
+    private fun installScrollOverlay() {
+        val layer = cursorLayer ?: return
+        if (layer.tag != null) return
+        layer.tag = "scroll-overlay-installed"
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        fun scrollButton(glyph: String, description: String, dy: Int): TextView =
+            TextView(this).apply {
+                text = glyph
+                textSize = 22f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                contentDescription = description
+                isClickable = true
+                isFocusable = false
+                background = GradientDrawable().apply {
+                    setColor(0xFF0E1624.toInt())
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(1), 0x66FFFFFF)
+                }
+                setOnClickListener { webView.scrollBy(0, dy) }
+            }
+        column.addView(
+            scrollButton("▲", "Scroll up", -dp(320)),
+            LinearLayout.LayoutParams(dp(58), dp(58)),
+        )
+        column.addView(
+            scrollButton("▼", "Scroll down", dp(320)),
+            LinearLayout.LayoutParams(dp(58), dp(58)).apply { topMargin = dp(8) },
+        )
+        layer.addView(
+            column,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL,
+            ).apply { rightMargin = dp(12) },
+        )
+    }
+
     private fun showCursor(center: Boolean) {
-        val frame = contentFrame ?: return
+        val frame = cursorLayer ?: contentFrame ?: return
         hideCursor()
         val ring = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
             setStroke(dp(3), 0xFFFF5252.toInt())
             setColor(android.graphics.Color.TRANSPARENT)
         }
-        val size = dp(52)
-        val v = View(this).apply { background = ring }
+        val size = cursorDiameter()
+        val v = View(this).apply {
+            background = ring
+            isClickable = false
+            isFocusable = false
+            isEnabled = false
+        }
         if (center) {
             cursorX = (frame.width / 2f).takeIf { it > 0 } ?: dp(400).toFloat()
             cursorY = (frame.height / 3f).takeIf { it > 0 } ?: dp(400).toFloat()
@@ -2912,14 +3016,14 @@ class WebViewActivity : ComponentActivity() {
     }
 
     private fun hideCursor() {
-        cursorView?.let { runCatching { contentFrame?.removeView(it) } }
+        cursorView?.let { runCatching { (it.parent as? ViewGroup)?.removeView(it) } }
         cursorView = null
     }
 
     private fun moveCursor(dx: Int, dy: Int) {
-        val frame = contentFrame ?: return
+        val frame = cursorLayer ?: contentFrame ?: return
         val v = cursorView ?: run { showCursor(center = true); return }
-        val size = dp(52)
+        val size = cursorDiameter()
         cursorX = (cursorX + dx * cursorStep()).coerceIn(0f, (frame.width - size).coerceAtLeast(0).toFloat())
         cursorY = (cursorY + dy * cursorStep()).coerceIn(0f, (frame.height - size).coerceAtLeast(0).toFloat())
         (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
@@ -2930,15 +3034,48 @@ class WebViewActivity : ComponentActivity() {
     }
 
     private fun tapCursor() {
-        val v = cursorView ?: return
-        val size = dp(52) / 2f
-        val x = cursorX + size
-        val y = cursorY + size
+        val frame = cursorLayer ?: return
+        val size = cursorDiameter() / 2f
+        val frameLoc = IntArray(2)
+        frame.getLocationOnScreen(frameLoc)
+        val screenX = frameLoc[0] + cursorX + size
+        val screenY = frameLoc[1] + cursorY + size
+
+        // Clicking the URL field opens the D-pad-friendly address dialog rather
+        // than relying on the TV IME's focus behaviour.
+        runCatching {
+            val fieldLoc = IntArray(2)
+            urlField.getLocationOnScreen(fieldLoc)
+            if (screenX >= fieldLoc[0] && screenX <= fieldLoc[0] + urlField.width &&
+                screenY >= fieldLoc[1] && screenY <= fieldLoc[1] + urlField.height
+            ) {
+                showAddressDialog()
+                return
+            }
+        }
+
+        // The floating scroll buttons live in the pointer layer and must win
+        // before the page/toolbar below them.
         val down = android.os.SystemClock.uptimeMillis()
-        val downEv = android.view.MotionEvent.obtain(down, down, android.view.MotionEvent.ACTION_DOWN, x, y, 0)
-        val upEv = android.view.MotionEvent.obtain(down, down + 90, android.view.MotionEvent.ACTION_UP, x, y, 0)
-        runCatching { webView.dispatchTouchEvent(downEv) }
-        runCatching { webView.dispatchTouchEvent(upEv) }
+        val downEv = android.view.MotionEvent.obtain(down, down, android.view.MotionEvent.ACTION_DOWN, screenX - frameLoc[0], screenY - frameLoc[1], 0)
+        val upEv = android.view.MotionEvent.obtain(down, down + 90, android.view.MotionEvent.ACTION_UP, screenX - frameLoc[0], screenY - frameLoc[1], 0)
+        val overlayHandled = runCatching { frame.dispatchTouchEvent(downEv) || frame.dispatchTouchEvent(upEv) }.getOrDefault(false)
+        if (overlayHandled) {
+            downEv.recycle()
+            upEv.recycle()
+            return
+        }
+
+        // Dispatch to the whole browser root, so the pointer reaches the page,
+        // back/forward/reload, the address field and the bookmark strip.
+        val rootLoc = IntArray(2)
+        rootView.getLocationOnScreen(rootLoc)
+        val x = screenX - rootLoc[0]
+        val y = screenY - rootLoc[1]
+        downEv.setLocation(x, y)
+        upEv.setLocation(x, y)
+        runCatching { rootView.dispatchTouchEvent(downEv) }
+        runCatching { rootView.dispatchTouchEvent(upEv) }
         downEv.recycle()
         upEv.recycle()
     }
@@ -2955,6 +3092,39 @@ class WebViewActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         BrowserTv.Input.noteKey(event)
+        // While the long-press/MENU sheet is up, the D-pad belongs to it. This
+        // is what stops the pointer handler from eating arrow presses and
+        // leaving the user unable to select a menu row.
+        if (tvMenu != null) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                when (event.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> { moveTvMenuFocus(-1); return true }
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> { moveTvMenuFocus(1); return true }
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        tvMenuButtons.getOrNull(tvMenuIndex)?.performClick()
+                        return true
+                    }
+                    android.view.KeyEvent.KEYCODE_BACK,
+                    android.view.KeyEvent.KEYCODE_MENU,
+                    android.view.KeyEvent.KEYCODE_INFO -> {
+                        hideTvBrowserMenu(); return true
+                    }
+                }
+            } else if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+            ) {
+                return true
+            }
+        }
         // A TV remote's MENU key is the reliable way into the browser sheet.
         if (event.action == android.view.KeyEvent.ACTION_DOWN &&
             (event.keyCode == android.view.KeyEvent.KEYCODE_MENU ||
@@ -2963,18 +3133,45 @@ class WebViewActivity : ComponentActivity() {
             showTvBrowserMenu()
             return true
         }
-        if (BrowserTv.isTv && webView.hasFocus() && handleTvRemote(event)) return true
-        if (mouseMode && event.action == android.view.KeyEvent.ACTION_DOWN) {
+        // Channel/page keys scroll the page in either mode; the pointer keeps
+        // the arrows for element selection.
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
-                android.view.KeyEvent.KEYCODE_DPAD_UP -> { moveCursor(0, -1); return true }
-                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> { moveCursor(0, 1); return true }
-                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> { moveCursor(-1, 0); return true }
-                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> { moveCursor(1, 0); return true }
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                android.view.KeyEvent.KEYCODE_ENTER,
-                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> { tapCursor(); return true }
+                android.view.KeyEvent.KEYCODE_CHANNEL_UP,
+                android.view.KeyEvent.KEYCODE_PAGE_UP -> {
+                    webView.scrollBy(0, -dp(300)); return true
+                }
+                android.view.KeyEvent.KEYCODE_CHANNEL_DOWN,
+                android.view.KeyEvent.KEYCODE_PAGE_DOWN -> {
+                    webView.scrollBy(0, dp(300)); return true
+                }
             }
         }
+        if (mouseMode) {
+            if (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+            ) {
+                // Keep the hold-for-menu behaviour and tap the pointer, not the
+                // page centre, on a short press.
+                if (handleTvRemote(event)) return true
+            } else if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                when (event.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> { moveCursor(0, -1); return true }
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> { moveCursor(0, 1); return true }
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> { moveCursor(-1, 0); return true }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> { moveCursor(1, 0); return true }
+                }
+            } else if (event.action == android.view.KeyEvent.ACTION_UP &&
+                (event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP ||
+                    event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN ||
+                    event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT ||
+                    event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+            ) {
+                return true
+            }
+        }
+        if (BrowserTv.isTv && webView.hasFocus() && handleTvRemote(event)) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -4051,6 +4248,10 @@ class WebViewActivity : ComponentActivity() {
     }
 
     private fun remoteTap() {
+        if (mouseMode) {
+            tapCursor()
+            return
+        }
         val w = webView.width
         val h = webView.height
         if (w <= 0 || h <= 0) return

@@ -192,16 +192,17 @@ class BrowserPlayerActivity : ComponentActivity() {
     }
 
     private fun buildPlayer(): ExoPlayer {
+        val source = currentSource()
         val dataSource = DefaultHttpDataSource.Factory()
-            .setUserAgent(BrowserHttp.UA)
+            .setUserAgent(source.headers["User-Agent"] ?: BrowserHttp.UA)
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(20_000)
             .setReadTimeoutMs(30_000)
-            .setDefaultRequestProperties(currentSource().headers)
+            .setDefaultRequestProperties(source.headers)
 
         val loadControl = DefaultLoadControl.Builder()
-            .setTargetBufferBytes(128 * 1024 * 1024)
-            .setBufferDurationsMs(60_000, 120_000, 5_000, 10_000)
+            .setTargetBufferBytes(160 * 1024 * 1024)
+            .setBufferDurationsMs(90_000, 180_000, 15_000, 20_000)
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
@@ -231,7 +232,7 @@ class BrowserPlayerActivity : ComponentActivity() {
         // Referer/Cookie headers are the ones the player sends.
         exo.setMediaSource(DefaultMediaSourceFactory(
             DefaultHttpDataSource.Factory()
-                .setUserAgent(BrowserHttp.UA)
+                .setUserAgent(source.headers["User-Agent"] ?: BrowserHttp.UA)
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(20_000)
                 .setReadTimeoutMs(30_000)

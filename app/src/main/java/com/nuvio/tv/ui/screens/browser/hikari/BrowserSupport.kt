@@ -44,6 +44,7 @@ object BrowserStore {
     private const val AD_WHITE = "ad_white"
     private const val ELEMENT_BLOCKS = "element_blocks"
     private const val DESKTOP = "desktop"
+    private const val MOUSE = "mouse_mode"
     private const val USERS = "userscripts"
 
     private var prefs: SharedPreferences? = null
@@ -78,6 +79,14 @@ object BrowserStore {
 
     fun setDesktopMode(enabled: Boolean) {
         prefs().edit().putBoolean(DESKTOP, enabled).apply()
+    }
+
+    /** TV remotes get the pointer by default: it can reach page elements and
+     *  the whole browser toolbar. Turning it off restores D-pad page scrolling. */
+    fun mouseMode(): Boolean = prefs().getBoolean(MOUSE, true)
+
+    fun setMouseMode(enabled: Boolean) {
+        prefs().edit().putBoolean(MOUSE, enabled).apply()
     }
 
     fun webviewRedirectAllow(): List<String> = readList(prefs(), REDIRECT_ALLOW)
