@@ -99,6 +99,7 @@ import com.nuvio.tv.music.MusicStream
 import com.nuvio.tv.music.MusicTrack
 import com.nuvio.tv.music.MusicViewModel
 import com.nuvio.tv.ui.components.glassSurface
+import com.nuvio.tv.ui.components.nuvioFocusRing
 import com.nuvio.tv.ui.theme.NuvioTheme
 import com.nuvio.tv.ui.util.LocalPictureInPicture
 import kotlinx.coroutines.coroutineScope
@@ -305,7 +306,9 @@ fun MusicPlayerScreen(
                 Spacer(Modifier.height(12.dp))
             }
             if (showControls) {
-                ProgressBar(positionMs, durationMs)
+                ProgressBar(positionMs, durationMs) { target ->
+                    viewModel.playback.seekTo(target)
+                }
                 Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(horizontal = 20.dp, vertical = 10.dp),
@@ -386,11 +389,31 @@ private fun MusicPlayerButton(
 }
 
 @Composable
-private fun ProgressBar(positionMs: Long, durationMs: Long) {
+private fun ProgressBar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit) {
     val fraction = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-    Column(Modifier.fillMaxWidth()) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .nuvioFocusRing(RoundedCornerShape(12.dp))
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> {
+                        onSeek((positionMs - 10_000L).coerceAtLeast(0L)); true
+                    }
+                    Key.DirectionRight -> {
+                        onSeek(durationMs.takeIf { it > 0L }
+                            ?.let { (positionMs + 10_000L).coerceAtMost(it) }
+                            ?: (positionMs + 10_000L)); true
+                    }
+                    else -> false
+                }
+            }
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+    ) {
         Box(
-            Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)).background(NuvioTheme.colors.BackgroundCard),
+            Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(50)).background(NuvioTheme.colors.BackgroundCard),
         ) {
             Box(
                 Modifier.fillMaxWidth(fraction).fillMaxHeight().clip(RoundedCornerShape(50)).background(NuvioTheme.colors.TextPrimary),
@@ -399,6 +422,7 @@ private fun ProgressBar(positionMs: Long, durationMs: Long) {
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatMs(positionMs), style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
+            Text("◀ ▶ seek 10 s", style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextTertiary)
             Text(formatMs(durationMs), style = NuvioTheme.textStyles.metadata, color = NuvioTheme.colors.TextSecondary)
         }
     }
@@ -427,11 +451,11 @@ private fun LyricsPanel(
         if (activeLine >= 0) runCatching { listState.animateScrollToItem(activeLine) }
     }
     Card(
-        modifier = Modifier.fillMaxWidth().height(220.dp),
+        modifier = Modifier.fillMaxWidth().height(220.dp).nuvioFocusRing(RoundedCornerShape(16.dp)),
         shape = CardDefaults.shape(RoundedCornerShape(16.dp)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.94f),
-            focusedContainerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.94f),
+            focusedContainerColor = NuvioTheme.colors.FocusBackground,
         ),
         onClick = onClose,
     ) {
@@ -467,11 +491,11 @@ private fun LyricsPanel(
 @Composable
 private fun QueuePanel(queue: List<MusicTrack>, viewModel: MusicViewModel, onClose: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().height(220.dp),
+        modifier = Modifier.fillMaxWidth().height(220.dp).nuvioFocusRing(RoundedCornerShape(16.dp)),
         shape = CardDefaults.shape(RoundedCornerShape(16.dp)),
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.94f),
-            focusedContainerColor = NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.94f),
+            focusedContainerColor = NuvioTheme.colors.FocusBackground,
         ),
         onClick = onClose,
     ) {

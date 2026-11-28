@@ -34,6 +34,7 @@ import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioCapabilities
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider
 import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
@@ -95,7 +96,10 @@ private const val MPV_AFR_SETTLE_DELAY_MS = 2_000L
 private const val AUDIO_DELAY_REFRESH_DEBOUNCE_MS = 120L
 private const val PLAYER_RELEASE_TIMEOUT_MS = 3000L
 private const val PLAYER_REBUILD_SETTLE_DELAY_MS = 120L
-private const val ADAPTIVE_QUALITY_INCREASE_MIN_DURATION_MS = 2_000
+// Wait far longer before stepping a stream back UP. Oscillating between two
+// renditions tears down and rebuilds the decoder, which is audible as the
+// split-second pause/click the buffer changes alone cannot remove.
+private const val ADAPTIVE_QUALITY_INCREASE_MIN_DURATION_MS = 20_000
 private const val ADAPTIVE_INITIAL_BITRATE_ESTIMATE_BPS = 25_000_000L
 
 internal data class StartupSubtitlePreparation(
@@ -552,12 +556,12 @@ internal fun PlayerRuntimeController.initializePlayer(
                 // Managed (default) caps the buffer at the device budget; off uses Target Buffer Size.
                 // Stay full here even on a DV display; first frame tightens only for confirmed DV7.
                 val budgetManaged = playerSettings.bufferBudgetManaged
-                val budgetMbEffective = if (budgetManaged) {
+                val budgetMbEffective = (if (budgetManaged) {
                     (MemoryBudget.budgetMb - parallelOverheadMb).coerceAtLeast(MemoryBudget.MIN_BUFFER_MB)
                 } else {
                     (MemoryBudget.effectiveBufferMb(bufferSettings.targetBufferSizeMb) - parallelOverheadMb)
                         .coerceAtLeast(MemoryBudget.MIN_BUFFER_MB)
-                }
+                }).coerceAtLeast(128)
                 val budgetBytes = budgetMbEffective.toLong() * 1024L * 1024L
                 // Build with the user's back buffer so seek-back works immediately, except on a heap
                 // bound device, where the load control would hold it for the whole session.
@@ -587,11 +591,15 @@ internal fun PlayerRuntimeController.initializePlayer(
                 )
                 // Both engines report through the same sampler, so whichever built last owns it.
                 NuvioExoPlayerPerformanceHelper.liveAllocator = allocator
+                val minBuffer = bufferSettings.minBufferMs.coerceAtLeast(60_000)
+                val maxBuffer = bufferSettings.maxBufferMs.coerceAtLeast(120_000)
+                    .coerceAtLeast(minBuffer)
                 BitrateAwareLoadControl(
-                    minBufferMs = bufferSettings.minBufferMs,
-                    maxBufferMs = bufferSettings.maxBufferMs,
-                    bufferForPlaybackMs = bufferSettings.bufferForPlaybackMs,
-                    bufferForPlaybackAfterRebufferMs = bufferSettings.bufferForPlaybackAfterRebufferMs,
+                    minBufferMs = minBuffer,
+                    maxBufferMs = maxBuffer,
+                    bufferForPlaybackMs = bufferSettings.bufferForPlaybackMs.coerceAtLeast(10_000),
+                    bufferForPlaybackAfterRebufferMs =
+                        bufferSettings.bufferForPlaybackAfterRebufferMs.coerceAtLeast(15_000),
                     // Allow buffering past the byte budget until the minimum time threshold is
                     // met. Without this, high-bitrate remux files (e.g. 100+ Mbps UHD MKV with
                     // multiple audio tracks) exhaust the 500MB byte cap in <5s of content before
@@ -612,6 +620,14 @@ internal fun PlayerRuntimeController.initializePlayer(
                             "(1.5s back buffer, no VOD cache) host=${url.safeHost()}"
                 )
                 DefaultLoadControl.Builder()
+                    .setTargetBufferBytes(160 * 1024 * 1024)
+                    .setBufferDurationsMs(
+                        90_000,
+                        180_000,
+                        15_000,
+                        20_000,
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(false)
                     .setBackBuffer(1_500, /* retainBackBufferFromKeyframe = */ true)
                     .build()
             }
@@ -860,7 +876,12 @@ internal fun PlayerRuntimeController.initializePlayer(
                     setParameters(
                         buildUponParameters()
                             .setMaxVideoSize(1_920, 1_080)
-                            .setMaxVideoBitrate(12_000_000),
+                            .setMaxVideoBitrate(12_000_000)
+                            // Only adapt inside one seamless ladder. A switch
+                            // that changes codec/SPS reinitialises the decoder
+                            // and produces an audio/video gap.
+                            .setAllowVideoMixedMimeTypeAdaptiveness(false)
+                            .setAllowVideoNonSeamlessAdaptiveness(false),
                     )
                 }
             }
@@ -2291,6 +2312,17 @@ private class SubtitleOffsetRenderersFactory(
             }
             else -> DefaultAudioSink.Builder(context)
         }
+            // A larger AudioTrack cushion absorbs a short source stall without
+            // the sink underrunning (the click/clip at the resume).
+            .setAudioTrackBufferSizeProvider(
+                DefaultAudioTrackBufferSizeProvider.Builder()
+                    .setMinPcmBufferDurationUs(400_000)
+                    .setMaxPcmBufferDurationUs(1_500_000)
+                    .setPcmBufferMultiplicationFactor(4)
+                    .setPassthroughBufferDurationUs(1_500_000)
+                    .setOffloadBufferDurationUs(2_000_000)
+                    .build(),
+            )
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessors(arrayOf(gainAudioProcessor, nightModeAudioProcessor))

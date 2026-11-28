@@ -140,11 +140,15 @@ object NuvioExoPlayerPerformanceHelper {
         )
     }
 
-    private const val CACHE_FLOOR_MB = 128
-    private const val CACHE_MIN_BUFFER_MS = 60_000
-    private const val CACHE_MAX_BUFFER_MS = 120_000
-    private const val CACHE_BUFFER_FOR_PLAYBACK_MS = 5_000
-    private const val CACHE_BUFFER_AFTER_REBUFFER_MS = 10_000
+    // A stream is held well ahead of the playhead in every engine path. The
+    // playback start thresholds are deliberately high too: starting with a
+    // couple of seconds is what turns a marginal CDN into the "clip, pause,
+    // resume" loop, while waiting for a real cushion only delays the start.
+    private const val CACHE_FLOOR_MB = 160
+    private const val CACHE_MIN_BUFFER_MS = 90_000
+    private const val CACHE_MAX_BUFFER_MS = 180_000
+    private const val CACHE_BUFFER_FOR_PLAYBACK_MS = 15_000
+    private const val CACHE_BUFFER_AFTER_REBUFFER_MS = 20_000
 
     private const val SEEK_BACK_BUFFER_THRESHOLD_MS = 10_000L
     private const val SEEK_BACKWARD_TOLERANCE_MS = 2_000L
@@ -325,6 +329,9 @@ object NuvioExoPlayerPerformanceHelper {
                 .setBackBuffer(effectiveBackBufferMs(), true)
                 .build()
         } else {
+            // Stock engine: still keep the large forward cushion. The old
+            // stock defaults (a few seconds) are exactly what produced the
+            // split-second dropouts on a TV stick with a slow source.
             DefaultLoadControl.Builder()
                 .setTargetBufferBytes(CACHE_FLOOR_MB * 1024 * 1024)
                 .setBufferDurationsMs(
@@ -333,6 +340,7 @@ object NuvioExoPlayerPerformanceHelper {
                     CACHE_BUFFER_FOR_PLAYBACK_MS,
                     CACHE_BUFFER_AFTER_REBUFFER_MS
                 )
+                .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
         }
     }
