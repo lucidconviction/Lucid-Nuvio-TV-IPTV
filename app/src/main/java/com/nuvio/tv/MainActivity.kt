@@ -1137,6 +1137,14 @@ open class MainActivity : ComponentActivity() {
                     LaunchedEffect(navController, layoutChosen, pendingDeepLink) {
                         val url = pendingDeepLink ?: return@LaunchedEffect
                         if (!layoutChosen) return@LaunchedEffect
+                        // Live TV fork: open the Lucid TV channel studio.
+                        if (url.startsWith("nuvio://lucidstudio")) {
+                            pendingDeepLinkUrl.value = null
+                            navController.navigate(Screen.LucidTvStudio.route) {
+                                launchSingleTop = true
+                            }
+                            return@LaunchedEffect
+                        }
                         // Live TV fork: a launcher row's channel or game.
                         if (url.startsWith("nuvio://livetv")) {
                             pendingDeepLinkUrl.value = null

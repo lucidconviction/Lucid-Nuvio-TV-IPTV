@@ -311,10 +311,17 @@ class LucidTvRepository @Inject constructor(
         }
         val distinct = items.distinctBy { it.url }
         val movies = distinct.filter { it.type == "movie" }
-        // An IPTV extension catalog contains live items instead of films. Let an
-        // existing "catalog 24/7" channel keep working by rotating those live
-        // entries; the new CloudStream live channel type can still pin one.
-        val selected = if (movies.isNotEmpty()) movies else distinct.filter { it.type == "live" }
+        // An IPTV extension catalog contains live items instead of films. Pin
+        // one live entry so an existing "catalog 24/7" channel behaves like a
+        // single live channel instead of cycling through every IPTV channel.
+        val selected = if (movies.isNotEmpty()) {
+            movies
+        } else {
+            // A catalog channel is one guide entry: do not turn an IPTV
+            // catalog into a 60-channel queue. Pin the first live item; the
+            // dedicated "CloudStream live channel" type picks a specific one.
+            distinct.filter { it.type == "live" }.take(1)
+        }
         return selected
             .take(60)
             .map { item ->
@@ -425,24 +432,44 @@ class LucidTvRepository @Inject constructor(
                 )
             }
 
-            links
-                .filter { it.url.isNotBlank() }
+            var playableLinks = links
+                .filter {
+                    it.url.startsWith("http://", true) ||
+                        it.url.startsWith("https://", true) ||
+                        it.url.startsWith("file://", true)
+                }
                 .filterNot { it.type.equals("TORRENT", true) || it.type.equals("MAGNET", true) }
                 .distinctBy { it.url }
-                .sortedByDescending {
-                    when (it.type?.uppercase()) {
-                        "M3U8", "DASH" -> 2
-                        "VIDEO" -> 1
-                        else -> 0
-                    }
+            if (playableLinks.isEmpty() && (isLiveItem || detailIsLive) &&
+                dataUrl.startsWith("http", ignoreCase = true)
+            ) {
+                val lower = dataUrl.substringBefore('?').lowercase()
+                playableLinks = listOf(
+                    LucidPluginLink(
+                        url = dataUrl,
+                        type = when {
+                            lower.endsWith(".m3u8") || lower.contains("m3u8") -> "M3U8"
+                            lower.endsWith(".mpd") -> "DASH"
+                            else -> "VIDEO"
+                        },
+                    ),
+                )
+            }
+            playableLinks.sortedByDescending {
+                when (it.type?.uppercase()) {
+                    "M3U8", "DASH" -> 2
+                    "VIDEO" -> 1
+                    else -> 0
                 }
+            }
         }.orEmpty()
 
         if (resolved.isNotEmpty()) {
             pluginLinkCache[key] = CachedPluginLinks(resolved, System.currentTimeMillis())
         }
         Log.d(TAG, "resolve $scraperId api=$apiIndex ${if (isEpisode) "episode" else "movie"} " +
-            "url=${url.take(70)} -> ${resolved.size} link(s)")
+            "url=${url.take(70)} -> ${resolved.size} link(s)" +
+            resolved.firstOrNull()?.let { " first=${it.url.take(100)} type=${it.type}" }.orEmpty())
         return resolved
     }
 
@@ -1146,7 +1173,7 @@ class LucidTvRepository @Inject constructor(
         const val EPG_FUTURE_MS = 3 * 24 * 60 * 60_000L
         const val MAX_PROGRAMS_PER_CHANNEL = 2000
         const val POOL_CACHE_TTL_MS = 6 * 60 * 60_000L
-        const val CACHE_VERSION = 2
+        const val CACHE_VERSION = 3
         const val LIVE_BLOCK_MS = 12 * 60 * 60_000L
         const val MAX_CATALOG_PAGES = 6
         const val MAX_SERIES_TO_EXPAND = 8
